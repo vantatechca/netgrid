@@ -1,0 +1,133 @@
+services:
+  - type: web
+    name: netgrid
+    runtime: node
+    plan: starter
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: NODE_ENV
+        value: production
+      - key: CRAWL_DELAY_MS
+        value: "2000"
+      - key: MAX_CONCURRENT_CRAWLS
+        value: "5"
+      - key: CRAWL_WINDOW_START
+        value: "02:00"
+      - key: CRAWL_WINDOW_END
+        value: "06:00"
+      - key: POST_CHECK_INTERVAL_HOURS
+        value: "6"
+      - key: REMINDER_SCHEDULE_DAYS
+        value: "1,7,14,30"
+      - key: DATABASE_URL
+        sync: false
+      - key: NEXTAUTH_URL
+        sync: false
+      - key: NEXTAUTH_SECRET
+        sync: false
+      - key: NEXT_PUBLIC_APP_URL
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM_EMAIL
+        sync: false
+      - key: AHREFS_API_KEY
+        sync: false
+      - key: SEMRUSH_API_KEY
+        sync: false
+      - key: CRON_SECRET
+        sync: false
+
+  - type: cron
+    name: netgrid-cron-seo-scan
+    runtime: docker
+    schedule: "0 2 * * *"
+    dockerfilePath: ./cron/Dockerfile
+    dockerContext: ./cron
+    envVars:
+      - key: CRON_PATH
+        value: /api/cron/seo-scan
+      - key: APP_URL
+        fromService:
+          type: web
+          name: netgrid
+          property: host
+      - key: CRON_SECRET
+        sync: false
+
+  - type: cron
+    name: netgrid-cron-renewal-check
+    runtime: docker
+    schedule: "0 3 * * *"
+    dockerfilePath: ./cron/Dockerfile
+    dockerContext: ./cron
+    envVars:
+      - key: CRON_PATH
+        value: /api/cron/renewal-check
+      - key: APP_URL
+        fromService:
+          type: web
+          name: netgrid
+          property: host
+      - key: CRON_SECRET
+        sync: false
+
+  - type: cron
+    name: netgrid-cron-post-verification
+    runtime: docker
+    schedule: "0 */6 * * *"
+    dockerfilePath: ./cron/Dockerfile
+    dockerContext: ./cron
+    envVars:
+      - key: CRON_PATH
+        value: /api/cron/post-verification
+      - key: APP_URL
+        fromService:
+          type: web
+          name: netgrid
+          property: host
+      - key: CRON_SECRET
+        sync: false
+
+  - type: cron
+    name: netgrid-cron-invoice-reminders
+    runtime: docker
+    schedule: "0 8 * * *"
+    dockerfilePath: ./cron/Dockerfile
+    dockerContext: ./cron
+    envVars:
+      - key: CRON_PATH
+        value: /api/cron/invoice-reminders
+      - key: APP_URL
+        fromService:
+          type: web
+          name: netgrid
+          property: host
+      - key: CRON_SECRET
+        sync: false
+
+  - type: cron
+    name: netgrid-cron-monthly-reports
+    runtime: docker
+    schedule: "0 1 1 * *"
+    dockerfilePath: ./cron/Dockerfile
+    dockerContext: ./cron
+    envVars:
+      - key: CRON_PATH
+        value: /api/cron/monthly-reports
+      - key: APP_URL
+        fromService:
+          type: web
+          name: netgrid
+          property: host
+      - key: CRON_SECRET
+        sync: false
