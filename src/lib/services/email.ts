@@ -1,6 +1,19 @@
 import { Resend } from "resend";
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+let _resend: Resend | undefined;
+function resendClient(): Resend {
+  if (!_resend) {
+    const key = process.env.RESEND_API_KEY;
+    if (!key) throw new Error("RESEND_API_KEY is not set");
+    _resend = new Resend(key);
+  }
+  return _resend;
+}
+const resend = new Proxy({} as Resend, {
+  get(_t, prop, receiver) {
+    return Reflect.get(resendClient() as object, prop, receiver);
+  },
+});
 
 const FROM_EMAIL = process.env.EMAIL_FROM || "NETGRID <noreply@netgrid.io>";
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
