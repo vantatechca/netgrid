@@ -55,6 +55,15 @@ function formatDate(value: string | Date | null): string {
   });
 }
 
+const WEEKDAY_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+function formatPostingDays(days: number[] | null | undefined): string | null {
+  if (!days || days.length === 0) return null;
+  return days
+    .map((d) => (d >= 1 && d <= 7 ? WEEKDAY_SHORT[d - 1] : `?${d}`))
+    .join(", ");
+}
+
 function InfoRow({ label, value }: { label: string; value: string | null | undefined }) {
   return (
     <div className="space-y-0.5">
@@ -288,8 +297,8 @@ export default async function BlogDetailPage({
           <CardContent className="grid gap-4 sm:grid-cols-2">
             <InfoRow label="Frequency" value={blog.postingFrequency} />
             <InfoRow
-              label="Frequency (days)"
-              value={blog.postingFrequencyDays?.toString() ?? null}
+              label="Posting days"
+              value={formatPostingDays(blog.postingFrequencyDays)}
             />
             <InfoRow
               label="Last Post Verified"

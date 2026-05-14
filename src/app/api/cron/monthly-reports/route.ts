@@ -6,7 +6,10 @@ import { clients } from "@/lib/db/schema";
 import { sql } from "drizzle-orm";
 import { sendSystemMessage } from "@/lib/actions/message-actions";
 
-export const maxDuration = 120; // Claude calls take 5-15s × N clients
+// Claude calls take 5-15s × N clients × serial. At 10+ clients the
+// previous 120s ceiling could time out mid-loop and leave half the
+// network with unreported months. Match auto-publish at 300s.
+export const maxDuration = 300;
 
 export async function GET(request: Request) {
   if (!verifyCronSecret(request)) {

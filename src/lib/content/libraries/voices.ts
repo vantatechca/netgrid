@@ -9,7 +9,12 @@ import type {
 } from "../types";
 
 /**
- * 77 voices across 12 archetypes. Each voice is a complete persona spec with:
+ * 92 voices total:
+ *   V1–V77   — peptide-specific, across 12 archetypes (the original architecture)
+ *   V78–V92  — cross-niche generic personas (used by gambling, web_dev,
+ *              payment_processing, the universal-niche fallback, etc.)
+ *
+ * Each voice is a complete persona spec with:
  *   - persona  — first-line identity ("a PhD biochemist who left bench work for …")
  *   - registerSignature — vocabulary tendencies, sentence shape
  *   - defaultQuirkPool — 4-6 quirks the assignment algorithm picks 2-3 from
@@ -17,10 +22,10 @@ import type {
  *   - compatibleCitationStyles — which citation styles fit
  *   - subNicheAffinity — sub-niches this voice can serve
  *
- * Voice numbering matches the archetype partition declared in archetypes.ts.
- * Per-voice example paragraphs (for S6 in-context skeleton) are not included
- * here — they're populated as a separate operational task and the composer
- * falls back to S2 when they're missing.
+ * Voice numbering for V1–V77 matches the archetype partition declared in
+ * archetypes.ts. Per-voice example paragraphs (for S6 in-context skeleton)
+ * are not included here — they're populated as a separate operational task
+ * and the composer falls back to S2 when they're missing.
  */
 
 // ── Helper builders for tighter source ──────────────────────────────────────

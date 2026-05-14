@@ -20,6 +20,15 @@ import {
 } from "@/components/ui/table";
 import Link from "next/link";
 
+const WEEKDAY_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+function formatPostingDays(days: number[] | null | undefined): string | null {
+  if (!days || days.length === 0) return null;
+  return days
+    .map((d) => (d >= 1 && d <= 7 ? WEEKDAY_SHORT[d - 1] : `?${d}`))
+    .join(", ");
+}
+
 function formatDateTime(value: Date | string | null): string {
   if (!value) return "—";
   return new Date(value).toLocaleString("en-US", {
@@ -175,9 +184,7 @@ export default async function PostsPage() {
                       <TableCell className="text-xs text-muted-foreground">
                         {postingFrequency
                           ? postingFrequency
-                          : postingFrequencyDays
-                            ? `every ${postingFrequencyDays}d`
-                            : "—"}
+                          : formatPostingDays(postingFrequencyDays) ?? "—"}
                       </TableCell>
                       <TableCell className="max-w-[240px] truncate">
                         {verification.latestPostTitle || "—"}
