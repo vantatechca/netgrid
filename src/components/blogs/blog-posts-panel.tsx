@@ -94,9 +94,11 @@ const LIVE_STATUS_VARIANTS: Record<
   trash: "destructive",
 };
 
-function formatDateTime(value: string | null | undefined): string {
+function formatDateTime(
+  value: string | Date | null | undefined,
+): string {
   if (!value) return "—";
-  const d = new Date(value);
+  const d = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(d.getTime())) return "—";
   return d.toLocaleString(undefined, {
     year: "numeric",
