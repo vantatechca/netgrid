@@ -1301,7 +1301,7 @@ export async function getBlogPosts(
           blog.shopifyBlogId ?? undefined,
         );
 
-        const storeHost = blog.shopifyStoreUrl
+          const storeHost = (blog.shopifyStoreUrl ?? "")
           .trim()
           .replace(/^https?:\/\//i, "")
           .replace(/\/+$/, "");
