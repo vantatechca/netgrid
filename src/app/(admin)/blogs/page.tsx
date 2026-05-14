@@ -24,6 +24,13 @@ export default async function BlogsPage({ searchParams }: BlogsPageProps) {
     pageSize,
   });
 
+  const blogs = result.blogs.map((blog) => ({
+    ...blog,
+    postingFrequencyDays: Array.isArray(blog.postingFrequencyDays)
+      ? (blog.postingFrequencyDays[0] ?? null)
+      : blog.postingFrequencyDays,
+  }));
+
   return (
     <div className="space-y-6">
       <div>
@@ -34,7 +41,7 @@ export default async function BlogsPage({ searchParams }: BlogsPageProps) {
       </div>
 
       <BlogTable
-        blogs={result.blogs}
+        blogs={blogs}
         totalCount={result.totalCount}
         page={result.page}
         pageSize={result.pageSize}
