@@ -288,11 +288,13 @@ export function buildImagePrompt(input: GenerateImageInput): string {
   if (input.customScene && input.customScene.trim().length >= 20) {
     scene = input.customScene.trim();
   } else {
-    const override = topicSceneOverride(input);
+        const override = topicSceneOverride(input);
+    const subNicheVisual =
+      input.subNicheId !== undefined ? SUB_NICHE_VISUALS[input.subNicheId] : undefined;
     if (override) {
       scene = override;
-    } else if (input.subNicheId !== undefined && SUB_NICHE_VISUALS[input.subNicheId]) {
-      scene = SUB_NICHE_VISUALS[input.subNicheId];
+    } else if (subNicheVisual) {
+      scene = subNicheVisual;
     } else {
       const key = normalizeNicheKey(input.niche);
       scene = (key && FREE_NICHE_VISUALS[key]) || DEFAULT_VISUAL;
