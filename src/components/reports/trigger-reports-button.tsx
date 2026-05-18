@@ -45,9 +45,27 @@ export function TriggerReportsButton() {
         const result = await triggerMonthlyReportsManual({ period });
 
         if (result.generated > 0) {
+          const emailedLine =
+            result.emailed > 0
+              ? ` · emailed ${result.emailed} client${result.emailed === 1 ? "" : "s"}`
+              : "";
           toast.success(
-            `Generated ${result.generated} report${result.generated === 1 ? "" : "s"} for ${result.period.start} → ${result.period.end}`,
+            `Generated ${result.generated} report${
+              result.generated === 1 ? "" : "s"
+            } for ${result.period.start} → ${result.period.end}${emailedLine}`,
           );
+        }
+        if (result.emailFailed > 0) {
+          toast.warning(
+            `${result.emailFailed} email${
+              result.emailFailed === 1 ? "" : "s"
+            } didn't send — check console for per-client reasons (often missing clients.contact_email or RESEND_API_KEY)`,
+          );
+          for (const r of result.results.filter(
+            (x) => x.email && !x.email.success,
+          )) {
+            console.warn(`[${r.clientName}] email:`, r.email?.message);
+          }
         }
         if (result.failed > 0) {
           toast.error(

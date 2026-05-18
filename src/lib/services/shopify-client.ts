@@ -5,6 +5,7 @@ import type {
   PublishPostResult,
 } from "@/lib/types";
 import { getClientCredentialsToken } from "./shopify-token-cache";
+import { compressImageDataUri } from "./image-compress";
 
 const DEFAULT_API_VERSION = "2024-07";
 const DEFAULT_TIMEOUT_MS = 15000;
@@ -362,6 +363,377 @@ export interface CreateArticleOptions {
   apiVersion?: string;
 }
 
+// ── Shopify Files (GraphQL) — for body-image hosting ─────────────────────────
+//
+// Article body_html is capped at 1 MB by Shopify. A single base64-encoded
+// Nano Banana image (~700KB-1.5MB) embedded inline blows past that. To
+// keep the 2-images-per-post feature, we upload body images to Shopify
+// Files via the GraphQL Admin API and replace the data: URI with the
+// returned cdn.shopify.com URL before sending the article.
+//
+// The flow is a three-leg dance per file:
+//   1. stagedUploadsCreate    → returns presigned URL + form params
+//   2. PUT multipart to that URL → uploads the actual bytes
+//   3. fileCreate              → registers the file, returns CDN url
+// Then we poll fileCreate's status until it's READY.
+
+interface ShopifyFileUploadResult {
+  cdnUrl: string;
+}
+
+/** Decode a `data:image/...;base64,...` URI into bytes + meta. */
+function decodeDataUri(
+  dataUri: string,
+): { mime: string; buffer: Buffer; ext: string } | null {
+  const match = dataUri.match(/^data:([^;,]+)(;base64)?,(.+)$/);
+  if (!match) return null;
+  const mime = match[1].toLowerCase();
+  const isBase64 = Boolean(match[2]);
+  if (!mime.startsWith("image/")) return null;
+  const buffer = isBase64
+    ? Buffer.from(match[3], "base64")
+    : Buffer.from(decodeURIComponent(match[3]), "binary");
+  const extMap: Record<string, string> = {
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/png": "png",
+    "image/gif": "gif",
+    "image/webp": "webp",
+  };
+  return { mime, buffer, ext: extMap[mime] ?? "jpg" };
+}
+
+/**
+ * Upload a single data: URI image to Shopify Files. Returns the CDN URL
+ * on success, or null on any failure — caller decides whether to fall
+ * back to stripping the image.
+ *
+ * Uses the GraphQL Admin API (REST has no Files endpoint).
+ */
+async function uploadDataUriToShopifyFiles(
+  creds: ShopifyCreds,
+  dataUri: string,
+  apiVersion: string = DEFAULT_API_VERSION,
+): Promise<ShopifyFileUploadResult | null> {
+  const decoded = decodeDataUri(dataUri);
+  if (!decoded) {
+    console.warn("[shopify-files] Could not decode data URI");
+    return null;
+  }
+  const filename = `post-body-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${decoded.ext}`;
+
+  let host: string;
+  let token: string;
+  try {
+    host = normalizeStoreUrl(creds.storeUrl);
+    token = await resolveAccessToken(creds);
+  } catch (err) {
+    console.warn("[shopify-files] Token resolve failed:", err);
+    return null;
+  }
+
+  const graphqlUrl = `https://${host}/admin/api/${apiVersion}/graphql.json`;
+
+  // 1. stagedUploadsCreate — get a presigned upload target.
+  const stagedQuery = `
+    mutation stagedUploadsCreate($input: [StagedUploadInput!]!) {
+      stagedUploadsCreate(input: $input) {
+        stagedTargets {
+          url
+          resourceUrl
+          parameters { name value }
+        }
+        userErrors { field message }
+      }
+    }
+  `;
+  const stagedInput = [
+    {
+      resource: "FILE",
+      filename,
+      mimeType: decoded.mime,
+      fileSize: String(decoded.buffer.length),
+      httpMethod: "POST",
+    },
+  ];
+
+  let stagedRes: Response;
+  try {
+    stagedRes = await fetch(graphqlUrl, {
+      method: "POST",
+      headers: {
+        "X-Shopify-Access-Token": token,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ query: stagedQuery, variables: { input: stagedInput } }),
+    });
+  } catch (err) {
+    console.warn("[shopify-files] stagedUploadsCreate request failed:", err);
+    return null;
+  }
+
+  if (!stagedRes.ok) {
+    console.warn(`[shopify-files] stagedUploadsCreate HTTP ${stagedRes.status}`);
+    return null;
+  }
+
+  type StagedTarget = {
+    url: string;
+    resourceUrl: string;
+    parameters: { name: string; value: string }[];
+  };
+  type StagedResp = {
+    data?: {
+      stagedUploadsCreate?: {
+        stagedTargets?: StagedTarget[];
+        userErrors?: { field: string[]; message: string }[];
+      };
+    };
+    errors?: { message: string }[];
+  };
+  const stagedJson = (await stagedRes.json()) as StagedResp;
+  if (stagedJson.errors && stagedJson.errors.length > 0) {
+    const accessDenied = stagedJson.errors.some(
+      (e) => e.message && /access denied|ACCESS_DENIED/i.test(e.message),
+    );
+    if (accessDenied) {
+      console.warn(
+        "[shopify-files] ACCESS_DENIED on stagedUploadsCreate.\n" +
+          "  → Body images cannot be uploaded to Shopify Files because the\n" +
+          "    access token lacks the 'write_files' scope.\n" +
+          "  → To enable: Shopify admin → Settings → Apps and sales channels →\n" +
+          "    Develop apps → [your app] → Configuration → Admin API access scopes,\n" +
+          "    enable 'write_files' (also enable 'read_files' if not already),\n" +
+          "    then click 'Install app' (or 'Update') to generate a new token.\n" +
+          "  → Update the new token in NetGrid: Blogs → [blog] → Connection.\n" +
+          "  → Until then, body images will be stripped at publish time so\n" +
+          "    body_html stays under Shopify's 1 MB cap. The hero (featured)\n" +
+          "    image is unaffected — it uses a different field.",
+      );
+    } else {
+      console.warn(
+        "[shopify-files] stagedUploadsCreate GraphQL errors:",
+        stagedJson.errors,
+      );
+    }
+    return null;
+  }
+  const target = stagedJson.data?.stagedUploadsCreate?.stagedTargets?.[0];
+  const userErrors = stagedJson.data?.stagedUploadsCreate?.userErrors ?? [];
+  if (!target || userErrors.length > 0) {
+    console.warn(
+      "[shopify-files] stagedUploadsCreate userErrors:",
+      userErrors,
+    );
+    return null;
+  }
+
+  // 2. POST multipart to the staged URL. Parameters MUST come before
+  //    the file field per S3 presigned-POST contract.
+  const form = new FormData();
+  for (const p of target.parameters) {
+    form.append(p.name, p.value);
+  }
+  const blob = new Blob([new Uint8Array(decoded.buffer)], { type: decoded.mime });
+  form.append("file", blob, filename);
+
+  let uploadRes: Response;
+  try {
+    uploadRes = await fetch(target.url, { method: "POST", body: form });
+  } catch (err) {
+    console.warn("[shopify-files] staged upload PUT failed:", err);
+    return null;
+  }
+  if (!uploadRes.ok) {
+    console.warn(`[shopify-files] staged upload HTTP ${uploadRes.status}`);
+    return null;
+  }
+
+  // 3. fileCreate — register the uploaded resource as a Shopify file.
+  const fileCreateQuery = `
+    mutation fileCreate($files: [FileCreateInput!]!) {
+      fileCreate(files: $files) {
+        files {
+          id
+          fileStatus
+          ... on MediaImage {
+            image { url }
+          }
+        }
+        userErrors { field message }
+      }
+    }
+  `;
+  const fileCreateInput = [
+    {
+      contentType: "IMAGE",
+      originalSource: target.resourceUrl,
+      alt: "post body image",
+    },
+  ];
+
+  let createRes: Response;
+  try {
+    createRes = await fetch(graphqlUrl, {
+      method: "POST",
+      headers: {
+        "X-Shopify-Access-Token": token,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ query: fileCreateQuery, variables: { files: fileCreateInput } }),
+    });
+  } catch (err) {
+    console.warn("[shopify-files] fileCreate request failed:", err);
+    return null;
+  }
+  if (!createRes.ok) {
+    console.warn(`[shopify-files] fileCreate HTTP ${createRes.status}`);
+    return null;
+  }
+  type FileCreateResp = {
+    data?: {
+      fileCreate?: {
+        files?: {
+          id: string;
+          fileStatus: string;
+          image?: { url?: string };
+        }[];
+        userErrors?: { field: string[]; message: string }[];
+      };
+    };
+    errors?: { message: string }[];
+  };
+  const createJson = (await createRes.json()) as FileCreateResp;
+  if (createJson.errors && createJson.errors.length > 0) {
+    console.warn("[shopify-files] fileCreate GraphQL errors:", createJson.errors);
+    return null;
+  }
+  const file = createJson.data?.fileCreate?.files?.[0];
+  const ferrs = createJson.data?.fileCreate?.userErrors ?? [];
+  if (!file || ferrs.length > 0) {
+    console.warn("[shopify-files] fileCreate userErrors:", ferrs);
+    return null;
+  }
+
+  // 4. Poll for READY — fileCreate returns immediately, but Shopify
+  //    processes the image asynchronously. Poll the file by id until
+  //    image.url is populated. Bail after ~10s — caller falls back.
+  const fileId = file.id;
+  if (file.image?.url) {
+    return { cdnUrl: file.image.url };
+  }
+
+  const pollQuery = `
+    query fileById($id: ID!) {
+      node(id: $id) {
+        ... on MediaImage {
+          fileStatus
+          image { url }
+        }
+      }
+    }
+  `;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    try {
+      const pollRes = await fetch(graphqlUrl, {
+        method: "POST",
+        headers: {
+          "X-Shopify-Access-Token": token,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ query: pollQuery, variables: { id: fileId } }),
+      });
+      if (!pollRes.ok) continue;
+      type PollResp = {
+        data?: {
+          node?: { fileStatus?: string; image?: { url?: string } };
+        };
+      };
+      const pollJson = (await pollRes.json()) as PollResp;
+      const node = pollJson.data?.node;
+      if (node?.image?.url) return { cdnUrl: node.image.url };
+      if (node?.fileStatus === "FAILED") {
+        console.warn("[shopify-files] file processing FAILED");
+        return null;
+      }
+    } catch {
+      // continue polling
+    }
+  }
+  console.warn("[shopify-files] file did not become READY within 10s");
+  return null;
+}
+
+/**
+ * Walk body HTML for <img src="data:image/...">, upload each to
+ * Shopify Files, and swap the src for the returned CDN URL. If any
+ * upload fails, that <img> is stripped entirely as a safety net so
+ * body_html stays under Shopify's 1 MB cap.
+ *
+ * Returns the rewritten body HTML.
+ */
+async function rewriteBodyDataUrisToShopifyUrls(
+  creds: ShopifyCreds,
+  body: string,
+  apiVersion: string,
+): Promise<string> {
+  // Match <img ... src="data:image/...;base64,...." ...> (single OR double
+  // quoted). Lazy on closing > so we don't accidentally span tags.
+  const imgRegex =
+    /<img\s+([^>]*?)src=(['"])(data:image\/[^'"]+)\2([^>]*)>/gi;
+  const matches: Array<{ full: string; before: string; uri: string; after: string }> = [];
+  let m: RegExpExecArray | null;
+  while ((m = imgRegex.exec(body)) !== null) {
+    matches.push({ full: m[0], before: m[1], uri: m[3], after: m[4] });
+  }
+  if (matches.length === 0) return body;
+
+  console.info(
+    `[shopify-files] Found ${matches.length} data: URI image(s) in body, uploading…`,
+  );
+
+  let rewritten = body;
+  for (const match of matches) {
+    const result = await uploadDataUriToShopifyFiles(creds, match.uri, apiVersion);
+    if (result) {
+      const replacement = `<img ${match.before}src="${result.cdnUrl}"${match.after}>`;
+      rewritten = rewritten.replace(match.full, replacement);
+      console.info(`[shopify-files] Uploaded → ${result.cdnUrl}`);
+      continue;
+    }
+
+    // Upload failed (commonly because the access token lacks write_files).
+    // Fall back: try to compress the image small enough to inline under
+    // Shopify's 1 MB body_html cap.
+    const compressed = await compressImageDataUri(match.uri, {
+      maxBytes: 500 * 1024, // leave headroom for the rest of body_html
+      maxWidth: 1024,
+      quality: 72,
+    });
+    if (compressed) {
+      const replacement = `<img ${match.before}src="${compressed}"${match.after}>`;
+      rewritten = rewritten.replace(match.full, replacement);
+      console.info(
+        `[shopify-files] Upload unavailable; inlining compressed JPEG (${Math.round(compressed.length / 1024)} KB)`,
+      );
+      continue;
+    }
+
+    // Both upload AND compression failed — strip the img to keep body_html
+    // under the cap. Wrap in a comment for traceability.
+    rewritten = rewritten.replace(
+      match.full,
+      "<!-- body image: upload + compression both failed; stripped to fit body_html limit -->",
+    );
+    console.warn(
+      "[shopify-files] Upload + compression both failed; img stripped from body",
+    );
+  }
+
+  return rewritten;
+}
+
 /**
  * Publish or draft an article to a Shopify blog.
  *
@@ -372,6 +744,10 @@ export interface CreateArticleOptions {
  * (picsum.photos, DALL-E, signed S3 URLs) either redirect or expire quickly.
  *
  * Falls back to `image.src` if the byte fetch fails for any reason.
+ *
+ * Any data: URI <img> tags in the body HTML are uploaded to Shopify Files
+ * via GraphQL and rewritten to CDN URLs before publish, to keep body_html
+ * under Shopify's 1 MB cap.
  *
  * Returns the article's canonical URL: /blogs/{blogHandle}/{articleHandle}
  */
@@ -427,12 +803,20 @@ export async function createArticle(
       }
     }
 
+    // Rewrite any embedded data: URI images in the body to Shopify CDN
+    // URLs (or strip if upload fails). Keeps body_html under 1 MB.
+    const rewrittenBody = await rewriteBodyDataUrisToShopifyUrls(
+      creds,
+      input.content,
+      apiVersion,
+    );
+
     const res = await client.post<{ article: ShopifyArticle }>(
       `/blogs/${targetBlogId}/articles.json`,
       {
         article: {
           title: input.title,
-          body_html: input.content,
+          body_html: rewrittenBody,
           summary_html: input.excerpt,
           tags: input.tags?.join(", "),
           published,

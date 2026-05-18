@@ -58,8 +58,6 @@ export interface BlogDescriptor {
   // Shopify
   shopifyStoreUrl?: string | null;
   shopifyAdminApiToken?: string | null;
-  shopifyApiVersion?: string | null;
-  shopifyBlogId?: string | null;
 }
 
 // ─── Scoring constants ───────────────────────────────────────────────────────
@@ -329,14 +327,14 @@ interface ShopifyArticle {
 async function fetchShopifyArticles(blog: BlogDescriptor, maxArticles = 30): Promise<ShopifyArticle[]> {
   const storeUrl = (blog.shopifyStoreUrl || `https://${blog.domain}`).replace(/\/$/, "");
   const token = blog.shopifyAdminApiToken;
-  const apiVersion = blog.shopifyApiVersion || "2024-07";
-  const blogId = blog.shopifyBlogId;
+  // API version + blog id are no longer per-blog configurable. Hardcode
+  // the default version and use the store-wide articles endpoint, which
+  // auto-discovers the blog.
+  const apiVersion = "2024-07";
 
   if (!token) return [];
 
-  const endpoint = blogId
-    ? `${storeUrl}/admin/api/${apiVersion}/blogs/${blogId}/articles.json?limit=${maxArticles}`
-    : `${storeUrl}/admin/api/${apiVersion}/articles.json?limit=${maxArticles}`;
+  const endpoint = `${storeUrl}/admin/api/${apiVersion}/articles.json?limit=${maxArticles}`;
 
   try {
     const res = await fetch(endpoint, {

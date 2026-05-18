@@ -21,6 +21,7 @@ import {
   assignProfileForBlogIfPeptides,
   getStyleProfileForBlog,
 } from "@/lib/actions/style-profile-actions";
+import { verticalForNiche } from "@/lib/content/verticals";
 
 /**
  * Load the blog's style profile, lazily assigning one if the blog is a
@@ -76,8 +77,6 @@ interface GetBlogsResult {
     wpUrl: string | null;
     seoPlugin: string | null;
     shopifyStoreUrl: string | null;
-    hostingProvider: string | null;
-    registrar: string | null;
     postingFrequency: string | null;
     postingFrequencyDays: number[] | null;
     lastPostVerifiedAt: Date | null;
@@ -178,8 +177,6 @@ export async function getBlogs(
       wpUrl: blogs.wpUrl,
       seoPlugin: blogs.seoPlugin,
       shopifyStoreUrl: blogs.shopifyStoreUrl,
-      hostingProvider: blogs.hostingProvider,
-      registrar: blogs.registrar,
       postingFrequency: blogs.postingFrequency,
       postingFrequencyDays: blogs.postingFrequencyDays,
       lastPostVerifiedAt: blogs.lastPostVerifiedAt,
@@ -230,18 +227,8 @@ export async function getBlog(id: string) {
       shopifyAdminApiToken: blogs.shopifyAdminApiToken,
       shopifyClientId: blogs.shopifyClientId,
       shopifyClientSecret: blogs.shopifyClientSecret,
-      shopifyApiVersion: blogs.shopifyApiVersion,
-      shopifyBlogId: blogs.shopifyBlogId,
       shopifyBlogHandle: blogs.shopifyBlogHandle,
       shopifyGrantedScopes: blogs.shopifyGrantedScopes,
-      hostingProvider: blogs.hostingProvider,
-      hostingLoginUrl: blogs.hostingLoginUrl,
-      hostingUsername: blogs.hostingUsername,
-      hostingPassword: blogs.hostingPassword,
-      registrar: blogs.registrar,
-      registrarLoginUrl: blogs.registrarLoginUrl,
-      registrarUsername: blogs.registrarUsername,
-      registrarPassword: blogs.registrarPassword,
       postingFrequency: blogs.postingFrequency,
       postingFrequencyDays: blogs.postingFrequencyDays,
       lastPostVerifiedAt: blogs.lastPostVerifiedAt,
@@ -298,16 +285,6 @@ export async function createBlog(data: unknown) {
         shopifyAdminApiToken: cleanValue(input.shopifyAdminApiToken),
         shopifyClientId: cleanValue(input.shopifyClientId),
         shopifyClientSecret: cleanValue(input.shopifyClientSecret),
-        shopifyApiVersion: cleanValue(input.shopifyApiVersion) ?? "2024-07",
-        shopifyBlogId: cleanValue(input.shopifyBlogId),
-        hostingProvider: cleanValue(input.hostingProvider),
-        hostingLoginUrl: cleanValue(input.hostingLoginUrl),
-        hostingUsername: cleanValue(input.hostingUsername),
-        hostingPassword: cleanValue(input.hostingPassword),
-        registrar: cleanValue(input.registrar),
-        registrarLoginUrl: cleanValue(input.registrarLoginUrl),
-        registrarUsername: cleanValue(input.registrarUsername),
-        registrarPassword: cleanValue(input.registrarPassword),
         // Frequency is now always "weekly" — fall back if the form omits it.
         postingFrequency: cleanValue(input.postingFrequency) ?? "weekly",
         postingFrequencyDays: cleanPostingDays(input.postingFrequencyDays),
@@ -384,34 +361,6 @@ export async function updateBlog(id: string, data: unknown) {
     updateData.shopifyClientSecret = cleanValueOrUndefined(
       input.shopifyClientSecret,
     );
-  if (input.shopifyApiVersion !== undefined)
-    updateData.shopifyApiVersion = cleanValueOrUndefined(
-      input.shopifyApiVersion,
-    );
-  if (input.shopifyBlogId !== undefined)
-    updateData.shopifyBlogId = cleanValueOrUndefined(input.shopifyBlogId);
-  if (input.hostingProvider !== undefined)
-    updateData.hostingProvider = cleanValueOrUndefined(input.hostingProvider);
-  if (input.hostingLoginUrl !== undefined)
-    updateData.hostingLoginUrl = cleanValueOrUndefined(input.hostingLoginUrl);
-  if (input.hostingUsername !== undefined)
-    updateData.hostingUsername = cleanValueOrUndefined(input.hostingUsername);
-  if (input.hostingPassword !== undefined)
-    updateData.hostingPassword = cleanValueOrUndefined(input.hostingPassword);
-  if (input.registrar !== undefined)
-    updateData.registrar = cleanValueOrUndefined(input.registrar);
-  if (input.registrarLoginUrl !== undefined)
-    updateData.registrarLoginUrl = cleanValueOrUndefined(
-      input.registrarLoginUrl,
-    );
-  if (input.registrarUsername !== undefined)
-    updateData.registrarUsername = cleanValueOrUndefined(
-      input.registrarUsername,
-    );
-  if (input.registrarPassword !== undefined)
-    updateData.registrarPassword = cleanValueOrUndefined(
-      input.registrarPassword,
-    );
   if (input.postingFrequency !== undefined)
     updateData.postingFrequency = cleanValueOrUndefined(input.postingFrequency);
   if (input.postingFrequencyDays !== undefined)
@@ -484,8 +433,6 @@ export async function testBlogConnection(
       shopifyAdminApiToken: blogs.shopifyAdminApiToken,
       shopifyClientId: blogs.shopifyClientId,
       shopifyClientSecret: blogs.shopifyClientSecret,
-      shopifyApiVersion: blogs.shopifyApiVersion,
-      shopifyBlogId: blogs.shopifyBlogId,
       shopifyBlogHandle: blogs.shopifyBlogHandle,
     })
     .from(blogs)
@@ -516,7 +463,6 @@ export interface TestShopifyInput {
   adminToken?: string;
   clientId?: string;
   clientSecret?: string;
-  apiVersion?: string;
 }
 
 export async function testShopifyConnection(input: TestShopifyInput) {
@@ -561,7 +507,7 @@ export async function testShopifyConnection(input: TestShopifyInput) {
     };
   }
 
-  return shopifyTestConnection(creds, input.apiVersion);
+  return shopifyTestConnection(creds);
 }
 
 // ─── Publish a Post / Article (ad-hoc input from a saved blog) ──────────────
@@ -584,8 +530,6 @@ export async function publishBlogPost(
       shopifyAdminApiToken: blogs.shopifyAdminApiToken,
       shopifyClientId: blogs.shopifyClientId,
       shopifyClientSecret: blogs.shopifyClientSecret,
-      shopifyApiVersion: blogs.shopifyApiVersion,
-      shopifyBlogId: blogs.shopifyBlogId,
       shopifyBlogHandle: blogs.shopifyBlogHandle,
     })
     .from(blogs)
@@ -681,9 +625,14 @@ export async function generateBlogPost(
       .limit(20);
 
     try {
+      // Resolve a vertical for news-aware ideation (optional — falls back
+      // to cold-start ideation when the blog's niche doesn't map to a
+      // registered vertical).
+      const vertical = verticalForNiche(blog.niche);
       const idea = await ideateTopic(
         blog.niche,
         recent.map((r) => r.title).filter((t): t is string => !!t),
+        { verticalKey: vertical?.key ?? null },
       );
       topic = idea.topic;
       if (keywords.length === 0) keywords = idea.keywords;
@@ -777,6 +726,7 @@ export async function generateBlogPost(
       metaTitle: result.metaTitle,
       metaDescription: result.metaDescription,
       featuredImageUrl: result.heroImageUrl ?? null,
+      bodyImageUrl: result.bodyImageUrl ?? null,
       keywords: result.keywords,
       wordCount: result.wordCount,
       seoScore: result.seoScore,
@@ -931,7 +881,73 @@ export async function retryGeneratedPost(
 ): Promise<PublishPostResult> {
   await requireAdmin();
 
-  // Reset status to "generated" so publishGeneratedPost will pick it up.
+  // Load the failed row to decide what kind of retry this is:
+  //
+  //   Case A — title/body are missing: generation never produced content
+  //     (Claude bad JSON, scene summarizer crash, image fetch timeout
+  //     mid-generation, etc.). Just flipping status to "generated" would
+  //     fail again at publishGeneratedPost's "Missing title or body" guard.
+  //     Re-run generateBlogPost with the original topic + keywords so the
+  //     content actually gets produced this time.
+  //
+  //   Case B — content exists, publish failed: classic publish-side retry.
+  //     Flip status back to "generated" and let publishGeneratedPost do
+  //     its thing.
+  const [post] = await db
+    .select({
+      id: generatedPosts.id,
+      blogId: generatedPosts.blogId,
+      topic: generatedPosts.topic,
+      keywords: generatedPosts.keywords,
+      title: generatedPosts.title,
+      body: generatedPosts.body,
+      status: generatedPosts.status,
+    })
+    .from(generatedPosts)
+    .where(eq(generatedPosts.id, generatedPostId));
+
+  if (!post) {
+    return { success: false, message: "Generated post not found" };
+  }
+
+  // Case A: re-run the full generation pipeline with the saved topic.
+  if (!post.title || !post.body) {
+    const savedKeywords = Array.isArray(post.keywords)
+      ? post.keywords.filter(
+          (k): k is string => typeof k === "string" && k.trim().length > 0,
+        )
+      : [];
+
+    // Remove the stale placeholder row so generateBlogPost can insert a
+    // fresh "generating" row without duplicate-topic clutter in the UI.
+    await db
+      .delete(generatedPosts)
+      .where(eq(generatedPosts.id, generatedPostId));
+
+    revalidatePath(`/blogs/${post.blogId}/posts`);
+
+    const regen = await generateBlogPost({
+      blogId: post.blogId,
+      topic: post.topic ?? undefined,
+      keywords: savedKeywords,
+      autoPublish: true,
+    });
+
+    if (!regen.success) {
+      return { success: false, message: regen.message };
+    }
+
+    // generateBlogPost(autoPublish=true) returns the nested publishResult.
+    // Surface it so the caller still sees the real publish outcome.
+    return (
+      regen.publishResult ?? {
+        success: true,
+        message: "Regenerated successfully (publish pending)",
+      }
+    );
+  }
+
+  // Case B: content exists, just publish-side retry.
   await db
     .update(generatedPosts)
     .set({
@@ -1042,8 +1058,6 @@ export async function importBlogsFromCsv(
               wpUsername: row.wpUsername,
               wpAppPassword: row.wpAppPassword,
               seoPlugin: row.seoPlugin,
-              hostingProvider: row.hostingProvider,
-              registrar: row.registrar,
               postingFrequency: row.postingFrequency,
               status: "setup" as const,
             })),
@@ -1064,8 +1078,6 @@ export async function importBlogsFromCsv(
               wpUsername: row.wpUsername,
               wpAppPassword: row.wpAppPassword,
               seoPlugin: row.seoPlugin,
-              hostingProvider: row.hostingProvider,
-              registrar: row.registrar,
               postingFrequency: row.postingFrequency,
               status: "setup",
             });
@@ -1185,8 +1197,6 @@ export async function getBlogPosts(
       shopifyAdminApiToken: blogs.shopifyAdminApiToken,
       shopifyClientId: blogs.shopifyClientId,
       shopifyClientSecret: blogs.shopifyClientSecret,
-      shopifyApiVersion: blogs.shopifyApiVersion,
-      shopifyBlogId: blogs.shopifyBlogId,
     })
     .from(blogs)
     .where(eq(blogs.id, blogId))
@@ -1295,11 +1305,7 @@ export async function getBlogPosts(
 
     if (creds) {
       try {
-        const articles = await shopifyFetchAllLive(
-          creds,
-          blog.shopifyApiVersion ?? undefined,
-          blog.shopifyBlogId ?? undefined,
-        );
+        const articles = await shopifyFetchAllLive(creds);
 
           const storeHost = (blog.shopifyStoreUrl ?? "")
           .trim()

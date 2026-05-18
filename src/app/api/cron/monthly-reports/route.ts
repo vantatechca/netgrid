@@ -1,9 +1,12 @@
 import { NextResponse } from "next/server";
 import { verifyCronSecret } from "@/lib/auth/helpers";
-import { generateReportForCron } from "@/lib/actions/report-actions";
+import {
+  generateReportForCron,
+  emailReportPdfInternal,
+} from "@/lib/actions/report-actions";
 import { db } from "@/lib/db";
-import { clients } from "@/lib/db/schema";
-import { sql } from "drizzle-orm";
+import { clients, reports } from "@/lib/db/schema";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { sendSystemMessage } from "@/lib/actions/message-actions";
 
 // Claude calls take 5-15s × N clients × serial. At 10+ clients the
@@ -36,11 +39,14 @@ const periodStart = new Date(Date.UTC(utcYear, utcMonth - 1, 1));
 
     let generated = 0;
     let failed = 0;
+    let emailed = 0;
+    let emailFailed = 0;
     const results: Array<{
       clientId: string;
       clientName: string;
       status: "generated" | "failed";
       message: string;
+      email?: { success: boolean; message: string };
     }> = [];
 
     for (const client of activeClients) {
@@ -61,12 +67,46 @@ const periodStart = new Date(Date.UTC(utcYear, utcMonth - 1, 1));
           })} performance report has been generated and is under review.`,
         );
 
+        // Pick up the row we just created so we can email the PDF.
+        // generateReportForCron doesn't return the inserted id, so we
+        // look it up by (clientId, periodStart) which is uniquely keyed
+        // for the just-generated row.
+        const periodStartIso = periodStart.toISOString().split("T")[0];
+        const [latest] = await db
+          .select({ id: reports.id, generatedAt: reports.generatedAt })
+          .from(reports)
+          .where(
+            and(
+              eq(reports.clientId, client.id),
+              eq(reports.periodStart, periodStartIso),
+            ),
+          )
+          .orderBy(desc(reports.generatedAt))
+          .limit(1);
+
+        let emailResult: { success: boolean; message: string } | undefined;
+        if (latest) {
+          // Email send is non-fatal: a missing recipient or transient
+          // Resend error should not roll back the report generation
+          // for the rest of the network.
+          emailResult = await emailReportPdfInternal(latest.id);
+          if (emailResult.success) emailed++;
+          else emailFailed++;
+        } else {
+          emailResult = {
+            success: false,
+            message: "Could not locate just-generated report row",
+          };
+          emailFailed++;
+        }
+
         generated++;
         results.push({
           clientId: client.id,
           clientName: client.name,
           status: "generated",
           message: `Report for ${periodStart.toLocaleDateString()} generated`,
+          email: emailResult,
         });
       } catch (error) {
         failed++;
@@ -85,6 +125,8 @@ const periodStart = new Date(Date.UTC(utcYear, utcMonth - 1, 1));
       considered: activeClients.length,
       generated,
       failed,
+      emailed,
+      emailFailed,
       period: {
         start: periodStart.toISOString().split("T")[0],
         end: periodEnd.toISOString().split("T")[0],

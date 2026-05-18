@@ -2,7 +2,10 @@ import Anthropic from "@anthropic-ai/sdk";
 import { composeForPost } from "@/lib/content/composer/compose";
 import { runScrubber, runScrubberLite, type ScrubberReport } from "@/lib/content/scrubber";
 import type { StyleProfile } from "@/lib/content/types";
-import { generateHeroImage } from "@/lib/services/image-generator";
+import {
+  generateBodyImage,
+  generateHeroImage,
+} from "@/lib/services/image-generator";
 
 // Match the model used elsewhere in the project.
 const CLAUDE_MODEL = "claude-sonnet-4-5";
@@ -24,6 +27,10 @@ import {
   GLOBAL_WORD_BAND_MAX,
   GLOBAL_WORD_BAND_MIN,
 } from "@/lib/content/config";
+import {
+  takeNewsContextForVertical,
+  formatNewsContextForPrompt,
+} from "@/lib/actions/news-actions";
 
 const MIN_WORDS = GLOBAL_WORD_BAND_MIN;
 const MAX_WORDS = GLOBAL_WORD_BAND_MAX;
@@ -212,6 +219,13 @@ export interface GenerationResult extends GeneratedContent, AnalysisScores {
   tokensUsed: number;
   costUsd: number;
   heroImageUrl?: string;
+  /**
+   * Second deliberately differently-framed image for the body of the
+   * post. Already embedded into `content` HTML at the midpoint by the
+   * generator; surfaced here too so the caller can persist it on its
+   * own column without HTML-parsing.
+   */
+  bodyImageUrl?: string;
   /** Scrubber audit trail, populated when scrubber runs. */
   scrubberReport?: ScrubberReport;
   /** True if scrubber flagged this post for admin review. */
@@ -367,6 +381,86 @@ function repairLlmJson(text: string): string {
 }
 
 /**
+ * Repair unescaped double quotes that appear INSIDE JSON string values.
+ *
+ * Classic Claude failure mode: emits HTML inside a string field with
+ * unescaped attribute quotes, e.g.
+ *
+ *   { "content": "<a href="https://example.com">link</a>" }
+ *
+ * The inner `"` characters close the string prematurely; downstream
+ * parsing fails with "Expected ',' or '}' after property value" deep in
+ * the response.
+ *
+ * Strategy: walk the text. At every `"`, decide whether it's a real
+ * string boundary or an escaped-but-Claude-forgot-to-escape quote by
+ * looking at the next non-whitespace character:
+ *
+ *   `: , } ] EOF`  → real boundary (key terminator / value separator / structural)
+ *   anything else  → unescaped quote inside a value; escape it
+ *
+ * Tolerates correctly-escaped backslash-quote pairs and ignores quotes
+ * outside string context.
+ */
+function escapeStrayQuotesInsideStrings(text: string): string {
+  let result = "";
+  let inString = false;
+  let escape = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+
+    if (escape) {
+      result += ch;
+      escape = false;
+      continue;
+    }
+
+    if (ch === "\\") {
+      result += ch;
+      escape = true;
+      continue;
+    }
+
+    if (ch !== '"') {
+      result += ch;
+      continue;
+    }
+
+    // We hit a `"`. Decide: open, close, or stray-inside-value?
+    if (!inString) {
+      // Outside any string — this opens a new one.
+      inString = true;
+      result += ch;
+      continue;
+    }
+
+    // We're inside a string. Look ahead at the next non-whitespace char.
+    let j = i + 1;
+    while (j < text.length && /\s/.test(text[j])) j++;
+    const next = j < text.length ? text[j] : undefined;
+
+    const isBoundary =
+      next === undefined ||  // end of input
+      next === ":" ||
+      next === "," ||
+      next === "}" ||
+      next === "]";
+
+    if (isBoundary) {
+      // Valid string close.
+      inString = false;
+      result += ch;
+    } else {
+      // Stray unescaped quote inside the value — escape it.
+      result += '\\"';
+    }
+  }
+
+  return result;
+}
+
+/**
  * Repair JSON that was TRUNCATED mid-output (Claude hit max_tokens before
  * closing the last string and the wrapping braces). Strategy:
  *
@@ -480,41 +574,261 @@ function repairTruncatedJson(text: string): string {
 }
 
 /**
+ * Tolerant article-shape normalizer. Handles the most common ways Claude
+ * deviates from the requested {title, content, excerpt, ...} envelope:
+ *
+ *   1. Wraps the article in an outer object: {"article": {...}} or
+ *      {"data": {...}} or {"response": {...}}
+ *   2. Renames "content" to "html", "body", "article_html", or "article_body"
+ *   3. Renames "title" to "headline" or "post_title"
+ *   4. Splits the article into parts instead of one content string:
+ *        - {intro, items[]}            → listicle
+ *        - {intro, body, conclusion}   → three-part
+ *        - {sections: [{heading, content}, ...]}
+ *        - {paragraphs: ["...", "..."]}
+ *        - {content: [...]} (array instead of string)
+ *      These get stitched into a single HTML string.
+ *
+ * Returns the (possibly unwrapped + remapped) partial. Other shape mismatches
+ * surface as the "missing required fields" error with the actual key list.
+ */
+function normalizeArticleShape(
+  parsed: Partial<GeneratedContent> & Record<string, unknown>,
+): Partial<GeneratedContent> {
+  // Unwrap a single-key wrapper that looks like the real envelope.
+  const wrapperKeys = ["article", "data", "response", "result", "output"];
+  for (const key of wrapperKeys) {
+    const inner = parsed[key];
+    if (
+      inner &&
+      typeof inner === "object" &&
+      !Array.isArray(inner) &&
+      ("title" in (inner as object) ||
+        "content" in (inner as object) ||
+        "intro" in (inner as object) ||
+        "sections" in (inner as object))
+    ) {
+      parsed = inner as Partial<GeneratedContent> & Record<string, unknown>;
+      break;
+    }
+  }
+
+  // Remap alternate field names.
+  if (!parsed.title) {
+    const titleAlt = parsed.headline ?? parsed.post_title ?? parsed.article_title;
+    if (typeof titleAlt === "string") parsed.title = titleAlt;
+  }
+  if (!parsed.content) {
+    const contentAlt =
+      parsed.html ?? parsed.body ?? parsed.article_html ?? parsed.article_body;
+    if (typeof contentAlt === "string") parsed.content = contentAlt;
+  }
+
+  // Multi-part reconstruction — stitch alternate part-shaped responses
+  // into a single HTML content string. Only runs when `content` is still
+  // missing, so a well-formed response is never touched.
+  if (!parsed.content || typeof parsed.content !== "string") {
+    const stitched = reconstructContentFromParts(parsed);
+    if (stitched) {
+      parsed.content = stitched;
+    }
+  }
+
+  return parsed;
+}
+
+/**
+ * Stitch a Claude response that returned the article as parts into a
+ * single HTML string. Best-effort — returns null when nothing usable is
+ * found so the caller can fall through to the "missing required fields"
+ * error with the original key list.
+ *
+ * Handles (in priority order):
+ *
+ *   {sections: [{heading, content}, ...]}
+ *      → <h2>heading</h2><p>content</p> for each section
+ *   {intro: "...", items: ["...", ...]}
+ *      → <p>intro</p><ul><li>item</li>...</ul>
+ *   {intro: "...", items: [{heading, body}, ...]}
+ *      → <p>intro</p><h2>heading</h2><p>body</p>...
+ *   {intro, body, conclusion}
+ *      → <p>intro</p>...body...<p>conclusion</p>
+ *   {paragraphs: ["...", ...]}
+ *      → <p>p1</p><p>p2</p>...
+ *   {content: ["string", "string"]}   (array instead of string)
+ *      → joined as <p>...</p> blocks
+ */
+function reconstructContentFromParts(
+  parsed: Record<string, unknown>,
+): string | null {
+  const out: string[] = [];
+
+  const intro = parsed["intro"];
+  const items = parsed["items"];
+  const sections = parsed["sections"];
+  const paragraphs = parsed["paragraphs"];
+  const conclusion = parsed["conclusion"];
+  const bodyText = parsed["body"];
+  const contentAny = parsed["content"];
+
+  // sections: [{heading, content|body|text}]
+  if (Array.isArray(sections) && sections.length > 0) {
+    if (typeof intro === "string") out.push(wrapParagraph(intro));
+    for (const sec of sections) {
+      if (!sec || typeof sec !== "object") continue;
+      const s = sec as Record<string, unknown>;
+      const heading = pickString(s, ["heading", "title", "header"]);
+      const text = pickString(s, ["content", "body", "text", "paragraph"]);
+      if (heading) out.push(`<h2>${escapeHtml(heading)}</h2>`);
+      if (text) out.push(maybeWrapHtml(text));
+    }
+    if (typeof conclusion === "string") out.push(wrapParagraph(conclusion));
+    return out.length > 0 ? out.join("\n") : null;
+  }
+
+  // intro + items (listicle or part-shaped)
+  if (Array.isArray(items) && items.length > 0) {
+    if (typeof intro === "string") out.push(wrapParagraph(intro));
+    const allStrings = items.every((it) => typeof it === "string");
+    if (allStrings) {
+      // Plain listicle — items are bullet strings.
+      out.push("<ul>");
+      for (const it of items as string[]) {
+        out.push(`<li>${escapeHtml(it)}</li>`);
+      }
+      out.push("</ul>");
+    } else {
+      // Object items — usually {heading/title, body/content/description}.
+      for (const it of items) {
+        if (!it || typeof it !== "object") continue;
+        const i = it as Record<string, unknown>;
+        const heading = pickString(i, ["heading", "title", "header", "name"]);
+        const text = pickString(i, [
+          "body",
+          "content",
+          "description",
+          "text",
+          "paragraph",
+        ]);
+        if (heading) out.push(`<h2>${escapeHtml(heading)}</h2>`);
+        if (text) out.push(maybeWrapHtml(text));
+      }
+    }
+    if (typeof conclusion === "string") out.push(wrapParagraph(conclusion));
+    return out.length > 0 ? out.join("\n") : null;
+  }
+
+  // intro + body + conclusion (three-part essay shape)
+  if (
+    typeof intro === "string" ||
+    typeof bodyText === "string" ||
+    typeof conclusion === "string"
+  ) {
+    if (typeof intro === "string") out.push(wrapParagraph(intro));
+    if (typeof bodyText === "string") out.push(maybeWrapHtml(bodyText));
+    if (typeof conclusion === "string") out.push(wrapParagraph(conclusion));
+    return out.length > 0 ? out.join("\n") : null;
+  }
+
+  // paragraphs: [...]
+  if (Array.isArray(paragraphs) && paragraphs.length > 0) {
+    for (const p of paragraphs) {
+      if (typeof p === "string") out.push(wrapParagraph(p));
+    }
+    return out.length > 0 ? out.join("\n") : null;
+  }
+
+  // content: ["string", "string"] — array instead of string
+  if (Array.isArray(contentAny) && contentAny.length > 0) {
+    for (const c of contentAny) {
+      if (typeof c === "string") out.push(maybeWrapHtml(c));
+    }
+    return out.length > 0 ? out.join("\n") : null;
+  }
+
+  return null;
+}
+
+function pickString(
+  obj: Record<string, unknown>,
+  keys: string[],
+): string | null {
+  for (const k of keys) {
+    const v = obj[k];
+    if (typeof v === "string" && v.trim().length > 0) return v;
+  }
+  return null;
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+/**
+ * If the input already looks like HTML (has angle-bracket tags), pass
+ * it through. Otherwise wrap it as a paragraph.
+ */
+function maybeWrapHtml(text: string): string {
+  const trimmed = text.trim();
+  if (/<\s*(p|h[1-6]|ul|ol|li|strong|em|a|br|div|section)\b/i.test(trimmed)) {
+    return trimmed;
+  }
+  return wrapParagraph(trimmed);
+}
+
+function wrapParagraph(text: string): string {
+  return `<p>${escapeHtml(text)}</p>`;
+}
+
+/**
  * Try JSON.parse on:
  *   1. The raw text                  (the happy path)
  *   2. Light repair                  (smart quotes, trailing commas, control chars)
- *   3. Truncation repair             (closes unterminated strings + braces)
+ *   3. Stray-quote repair            (escape unescaped " inside string values,
+ *                                     e.g. HTML attribute quotes Claude forgot
+ *                                     to backslash-escape)
+ *   4. Truncation repair             (closes unterminated strings + braces,
+ *                                     applied on top of light repair)
  *
  * Returns the parsed value or throws the original error with a helpful
  * preview of where parsing failed.
  */
 export function safeParseClaudeJson<T = unknown>(text: string): T {
+  // 1. Happy path
   try {
     return JSON.parse(text) as T;
   } catch (err1) {
-    // Try light repair (smart quotes, trailing commas, escape control chars)
+    // 2. Light repair
     try {
       return JSON.parse(repairLlmJson(text)) as T;
     } catch {
-      // Try truncation repair — close unterminated strings + braces, then
-      // also run the light repair on the recovered shape.
+      // 3. Stray-quote repair on top of light repair
       try {
-        const recovered = repairTruncatedJson(text);
-        return JSON.parse(repairLlmJson(recovered)) as T;
+        return JSON.parse(repairLlmJson(escapeStrayQuotesInsideStrings(text))) as T;
       } catch {
-        // All repairs failed — surface the original error with context.
-        const msg = err1 instanceof Error ? err1.message : "JSON parse failed";
-        const match = /position\s+(\d+)/i.exec(msg);
-        if (match) {
-          const pos = parseInt(match[1], 10);
-          const start = Math.max(0, pos - 80);
-          const end = Math.min(text.length, pos + 80);
-          const around = text.slice(start, end).replace(/\s+/g, " ").trim();
-          throw new Error(
-            `${msg} | context near pos ${pos}: "...${around}..."`,
-          );
+        // 4. Truncation repair as last resort
+        try {
+          const recovered = repairTruncatedJson(text);
+          return JSON.parse(
+            repairLlmJson(escapeStrayQuotesInsideStrings(recovered)),
+          ) as T;
+        } catch {
+          const msg = err1 instanceof Error ? err1.message : "JSON parse failed";
+          const match = /position\s+(\d+)/i.exec(msg);
+          if (match) {
+            const pos = parseInt(match[1], 10);
+            const start = Math.max(0, pos - 80);
+            const end = Math.min(text.length, pos + 80);
+            const around = text.slice(start, end).replace(/\s+/g, " ").trim();
+            throw new Error(
+              `${msg} | context near pos ${pos}: "...${around}..."`,
+            );
+          }
+          throw err1;
         }
-        throw err1;
       }
     }
   }
@@ -563,6 +877,13 @@ async function callClaudeOnce(
     ? `${system}\n\nCRITICAL OUTPUT FORMAT:
 - Respond with valid JSON only. Start with { and end with }.
 - No markdown code fences. No \`\`\`json blocks. No prose before or after.
+- Top-level keys MUST be exactly the names the schema specifies (e.g. "title", "content"). Do NOT wrap the response in another object like {"article": {...}}. Do NOT rename "content" to "html", "body", or "article_html".
+- The article body MUST be a single HTML string in the "content" field. Do NOT split it into multiple fields like "intro" + "items", "sections", "paragraphs", "body" + "conclusion". Build one HTML string and put it in "content".
+- "content" is a STRING, not an array or object.
+- When emitting HTML inside a string value, ESCAPE every double quote inside HTML attributes as a backslash-quote pair. Example:
+    WRONG:   "content": "<a href="https://example.com">link</a>"
+    CORRECT: "content": "<a href=\\"https://example.com\\">link</a>"
+  Same rule applies to any string value containing nested quotes.
 - Stay STRICTLY UNDER any maximum word count specified above. Hitting the maximum exactly often causes the response to be truncated mid-string, breaking the JSON. Aim for the target, not the ceiling.
 - Close every JSON string properly before the response ends. If you sense you're approaching the token budget, wrap up the current section and close the object — a shorter complete article is better than a longer truncated one.`
     : system;
@@ -842,7 +1163,7 @@ STRUCTURE:
 - Close with concrete takeaways, not platitudes
 
 OUTPUT FORMAT:
-Return ONLY valid JSON:
+Return ONLY valid JSON with EXACTLY these top-level keys:
 {
   "title": "Title under 60 characters with primary keyword",
   "content": "Full HTML article between ${MIN_WORDS} and ${MAX_WORDS} words",
@@ -852,7 +1173,20 @@ Return ONLY valid JSON:
   "keywords": ["keyword1", "keyword2", "keyword3"]
 }
 
-The "content" field is HTML ONLY, using this whitelist of tags: <h2>, <h3>, <p>, <ul>, <ol>, <li>, <strong>, <em>, <a>. Do not include "Created:", "Niche:", or "Keywords:" labels inline in the body.`;
+CRITICAL JSON SHAPE RULES — read carefully:
+- "content" MUST be a single HTML string. Do NOT split the article into
+  "intro" + "items", "sections", "paragraphs", "body" + "conclusion", or
+  any other multi-field structure. Build the full article as ONE HTML
+  string and put it in "content".
+- Do NOT wrap the response in another object like {"article": {...}} or
+  {"data": {...}}. Return the JSON directly.
+- Do NOT rename fields ("content" not "html"/"body"/"article_html"; "title"
+  not "headline"/"post_title"). Use the names exactly as shown above.
+- "content" is HTML ONLY, using this whitelist of tags: <h2>, <h3>, <p>,
+  <ul>, <ol>, <li>, <strong>, <em>, <a>. No <img>, <figure>, <picture>,
+  <figcaption>. No markdown headings (##) — use <h2>/<h3>.
+- Do not include "Created:", "Niche:", or "Keywords:" labels inline in
+  the body.`;
 
   const nicheReqs = opts.niche ? getNicheRequirements(opts.niche) : "";
   if (nicheReqs) {
@@ -883,23 +1217,54 @@ Begin now. Return only the JSON object.`;
 export async function ideateTopic(
   niche: string | null | undefined,
   recentTitles: string[],
+  opts: { verticalKey?: string | null } = {},
 ): Promise<{ topic: string; keywords: string[] }> {
   const ctx = getNicheContext(niche);
   const recentList = recentTitles.length
     ? recentTitles.slice(0, 20).map((t) => `- ${t}`).join("\n")
     : "(none yet)";
 
+  // Pull recent news headlines for this vertical (if registered + has
+  // cached items). Cron `/api/cron/refresh-news` keeps the cache fresh
+  // daily. Returns empty string when no vertical or no items — ideation
+  // falls back to its cold-start behavior.
+  let newsBlock = "";
+  if (opts.verticalKey) {
+    try {
+      const items = await takeNewsContextForVertical(opts.verticalKey, 6);
+      if (items.length > 0) {
+        newsBlock = await formatNewsContextForPrompt(items);
+      }
+    } catch (err) {
+      // Non-fatal — ideation should still produce a topic even if the
+      // news lookup or marking fails.
+      console.warn(
+        "[ideateTopic] news context lookup failed:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  const newsClause = newsBlock
+    ? `- Tie the topic to a current news angle when one of the recent headlines fits naturally\n- Skip the news angle entirely if no headline relates to the niche`
+    : "";
+
   const system = `You generate fresh blog post topic ideas for a ${ctx.industry} niche site (${ctx.label}). Suggest topics that:
 - Cover the niche's key topics: ${ctx.keyTopics.join(", ")}
 - Do NOT overlap with recent titles
 - Have clear search intent
 - Are specific (not generic listicles)
+${newsClause}
 
 Return JSON only:
 { "topic": "Specific topic for the article", "keywords": ["kw1", "kw2", "kw3"] }`;
 
+  const newsSection = newsBlock
+    ? `\n\nRecent news headlines relevant to this vertical (last 72 hours):\n${newsBlock}`
+    : "";
+
   const user = `Recent titles on this site (avoid duplicating these):
-${recentList}
+${recentList}${newsSection}
 
 Suggest the next post's topic.`;
 
@@ -1057,7 +1422,8 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
   });
 
   // 2. Parse — safeParseClaudeJson tries direct then repaired (handles
-  //    trailing commas, unescaped newlines in content fields, smart quotes).
+  //    trailing commas, unescaped newlines in content fields, smart quotes,
+  //    HTML-attribute stray quotes, truncation).
   let parsed: Partial<GeneratedContent>;
   try {
     parsed = safeParseClaudeJson<Partial<GeneratedContent>>(text);
@@ -1066,8 +1432,38 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
     throw new Error(`Claude returned invalid JSON: ${msg}`);
   }
 
+  // Field-name fallback: Claude occasionally returns the article wrapped
+  // in another object ({"article": {...}}) or uses alternate field names
+  // ("html" / "body" / "article_html" instead of "content"; "headline" /
+  // "post_title" instead of "title"). Unwrap and remap before failing.
+  parsed = normalizeArticleShape(parsed);
+
   if (!parsed.title || !parsed.content) {
-    throw new Error("Claude response missing required fields (title, content)");
+    const keys = Object.keys(parsed).join(", ") || "(empty)";
+    // Include a short value preview per key so an unseen shape variant
+    // is easy to triage from logs. Skip large values to keep the error
+    // message under the log truncation limit.
+    const preview = Object.entries(parsed)
+      .slice(0, 8)
+      .map(([k, v]) => {
+        if (typeof v === "string") {
+          return `${k}=str(${v.length}ch)`;
+        }
+        if (Array.isArray(v)) {
+          return `${k}=arr(${v.length})`;
+        }
+        if (v && typeof v === "object") {
+          return `${k}=obj{${Object.keys(v).slice(0, 4).join(",")}}`;
+        }
+        return `${k}=${typeof v}`;
+      })
+      .join(" ");
+    throw new Error(
+      `Claude response missing required fields (title, content). ` +
+        `Returned keys: ${keys}. Shape: ${preview}. ` +
+        `Reconstruction did not match any known variant — extend ` +
+        `reconstructContentFromParts() in content-generator.ts.`,
+    );
   }
 
   // 3. Format + sanitize, strip any Claude-emitted images (they'd be broken).
@@ -1119,8 +1515,10 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
   const imageKeywords =
     parsed.keywords && parsed.keywords.length > 0 ? parsed.keywords : opts.keywords;
   let heroImageUrl: string | undefined;
+  let bodyImageUrl: string | undefined;
+  let customScene: string | null = null;
   try {
-    const customScene = await summarizeArticleAsScene(
+    customScene = await summarizeArticleAsScene(
       parsed.title,
       body,
       imageKeywords,
@@ -1130,23 +1528,60 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
         `[content-generator] Image scene: "${customScene.slice(0, 100)}${customScene.length > 100 ? "…" : ""}"`,
       );
     }
-    const img = await generateHeroImage({
+
+    const imageInputBase = {
       title: parsed.title,
       keywords: imageKeywords,
       niche: opts.niche,
       subNicheId: opts.styleProfile?.subNicheId,
       primaryCompounds: opts.styleProfile?.primaryCompounds,
       customScene: customScene ?? undefined,
-    });
-    heroImageUrl = img.url;
-    console.info(
-      `[content-generator] Hero image generated via ${img.model} for "${parsed.title.slice(0, 60)}"`,
-    );
+    };
+
+    // Generate hero + body in parallel — they share the same scene but
+    // request different framings (wide vs detail), giving the post two
+    // visually distinct images for ~2× the latency of one.
+    // Either failure is non-fatal: settle so a body-image timeout
+    // doesn't drop the hero.
+    const [heroResult, bodyResult] = await Promise.allSettled([
+      generateHeroImage(imageInputBase),
+      generateBodyImage(imageInputBase),
+    ]);
+
+    if (heroResult.status === "fulfilled") {
+      heroImageUrl = heroResult.value.url;
+      console.info(
+        `[content-generator] Hero image via ${heroResult.value.model} for "${parsed.title.slice(0, 60)}"`,
+      );
+    } else {
+      console.error(
+        "[content-generator] Hero image generation failed:",
+        heroResult.reason,
+      );
+    }
+
+    if (bodyResult.status === "fulfilled") {
+      bodyImageUrl = bodyResult.value.url;
+      console.info(
+        `[content-generator] Body image via ${bodyResult.value.model} for "${parsed.title.slice(0, 60)}"`,
+      );
+    } else {
+      console.error(
+        "[content-generator] Body image generation failed:",
+        bodyResult.reason,
+      );
+    }
   } catch (err) {
-    // Image generation failed — log the real error and ship the post
-    // without a hero image rather than substituting an unrelated placeholder.
-    console.error("[content-generator] Hero image generation failed:", err);
-    heroImageUrl = undefined;
+    // Scene summarizer threw — log and ship without images rather than
+    // substituting an unrelated placeholder.
+    console.error("[content-generator] Image pipeline failed:", err);
+  }
+
+  // Embed the body image into the HTML at roughly the midpoint so it
+  // actually appears in the published post. Hero stays as the featured
+  // image (rendered above the post by Shopify/WordPress themes).
+  if (bodyImageUrl) {
+    body = embedBodyImage(body, bodyImageUrl, parsed.title);
   }
 
   // 6. Analyze (single combined call)
@@ -1175,7 +1610,102 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
     tokensUsed: totalTokens,
     costUsd: Number(costUsd.toFixed(6)),
     heroImageUrl,
+    bodyImageUrl,
     scrubberReport,
     flaggedForReview,
   };
+}
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * Insert the body image into the article HTML at roughly the midpoint.
+ *
+ * Strategy: split the body on closing </p> tags, walk to the paragraph
+ * that crosses the halfway word-count mark, and insert a <figure> with
+ * the image right before it. If the body has fewer than 4 paragraphs
+ * we fall back to inserting before the last paragraph so the image
+ * doesn't end up at the very top or in a one-line stub.
+ *
+ * Uses a plain alt attribute derived from the post title — the body
+ * image content is conceptually the same topic as the hero, so we
+ * don't bother generating a separate alt string.
+ */
+function embedBodyImage(html: string, dataUri: string, title: string): string {
+  const safeAlt = title
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .slice(0, 200);
+  const figure =
+    `<figure class="post-body-image" style="margin:1.5em 0;">` +
+    `<img src="${dataUri}" alt="${safeAlt}" loading="lazy" ` +
+    `style="width:100%;height:auto;display:block;" />` +
+    `</figure>`;
+
+  // Split keeping the closing tag attached to each piece.
+  const parts = html.split(/(<\/p>)/i);
+  // After the split, paragraphs look like [text, "</p>", text, "</p>", ...].
+  // Rebuild paragraphs by pairing each text part with its closing tag.
+  type Para = { html: string; words: number };
+  const paragraphs: Para[] = [];
+  for (let i = 0; i < parts.length; i += 2) {
+    const text = parts[i] ?? "";
+    const close = parts[i + 1] ?? "";
+    const combined = text + close;
+    if (combined.trim().length === 0) continue;
+    const words = combined.replace(/<[^>]+>/g, " ").trim().split(/\s+/).length;
+    paragraphs.push({ html: combined, words });
+  }
+
+  if (paragraphs.length === 0) {
+    // No paragraphs — append at end as fallback.
+    return html + figure;
+  }
+  if (paragraphs.length < 4) {
+    // Short article — insert before the last paragraph.
+    const insertAt = paragraphs.length - 1;
+    return (
+      paragraphs
+        .slice(0, insertAt)
+        .map((p) => p.html)
+        .join("") +
+      figure +
+      paragraphs
+        .slice(insertAt)
+        .map((p) => p.html)
+        .join("")
+    );
+  }
+
+  // Walk paragraphs accumulating word count until we cross the midpoint.
+  const total = paragraphs.reduce((s, p) => s + p.words, 0);
+  const midpoint = total / 2;
+  let running = 0;
+  let insertBefore = Math.floor(paragraphs.length / 2); // safe default
+  for (let i = 0; i < paragraphs.length; i++) {
+    running += paragraphs[i].words;
+    if (running >= midpoint) {
+      // Insert before paragraph i so the image breaks the flow at the
+      // halfway mark rather than after it.
+      insertBefore = i;
+      break;
+    }
+  }
+  // Never insert before paragraph 0 or after the last — both look bad.
+  if (insertBefore <= 0) insertBefore = 1;
+  if (insertBefore >= paragraphs.length) insertBefore = paragraphs.length - 1;
+
+  return (
+    paragraphs
+      .slice(0, insertBefore)
+      .map((p) => p.html)
+      .join("") +
+    figure +
+    paragraphs
+      .slice(insertBefore)
+      .map((p) => p.html)
+      .join("")
+  );
 }

@@ -5,6 +5,7 @@ import type {
   PublishPostInput,
   PublishPostResult,
 } from "@/lib/types";
+import { compressImageDataUri } from "./image-compress";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -249,10 +250,23 @@ export async function createPost(
       }
     }
 
+    // Rewrite any <img src="data:image/..."> in the body to WP Media
+    // Library URLs (or strip on upload failure). Keeps the post payload
+    // small enough that shared hosts with PHP post_max_size = 2M don't
+    // reject the request — and avoids embedding huge base64 into the
+    // editor where it would slow Gutenberg / Classic editor loads.
+    const rewrittenBody = await rewriteBodyDataUrisToWpUrls(
+      wpUrl,
+      username,
+      appPassword,
+      input.content,
+      input.title,
+    );
+
     const wpStatus = (input.status ?? "publish") === "publish" ? "publish" : "draft";
     const res = await client.post<WpPost>("/wp-json/wp/v2/posts", {
       title: input.title,
-      content: input.content,
+      content: rewrittenBody,
       excerpt: input.excerpt,
       status: wpStatus,
       ...(featuredMediaId !== undefined && { featured_media: featuredMediaId }),
@@ -783,4 +797,80 @@ export async function createTestDraft(
     postId: typeof result.postId === "number" ? result.postId : undefined,
     message: `Test draft created (ID: ${result.postId})`,
   };
+}
+
+/**
+ * Walk post body for <img src="data:image/...">, upload each to the WP
+ * Media Library, and swap the src for the returned source_url. If any
+ * upload fails, that <img> is stripped entirely so the post body stays
+ * lean.
+ */
+async function rewriteBodyDataUrisToWpUrls(
+  wpUrl: string,
+  username: string,
+  appPassword: string,
+  body: string,
+  postTitle: string,
+): Promise<string> {
+  const imgRegex =
+    /<img\s+([^>]*?)src=(['"])(data:image\/[^'"]+)\2([^>]*)>/gi;
+  const matches: Array<{ full: string; before: string; uri: string; after: string }> = [];
+  let m: RegExpExecArray | null;
+  while ((m = imgRegex.exec(body)) !== null) {
+    matches.push({ full: m[0], before: m[1], uri: m[3], after: m[4] });
+  }
+  if (matches.length === 0) return body;
+
+  console.info(
+    `[wp-media] Found ${matches.length} data: URI image(s) in body, uploading…`,
+  );
+
+  let rewritten = body;
+  for (const match of matches) {
+    try {
+      const uploaded = await uploadMediaFromUrl(
+        wpUrl,
+        username,
+        appPassword,
+        match.uri,
+        { filename: `body-${Date.now()}`, altText: postTitle },
+      );
+      const replacement = `<img ${match.before}src="${uploaded.sourceUrl}"${match.after}>`;
+      rewritten = rewritten.replace(match.full, replacement);
+      console.info(`[wp-media] Uploaded → ${uploaded.sourceUrl}`);
+      continue;
+    } catch (err) {
+      console.warn(
+        "[wp-media] Body image upload failed:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+
+    // Upload failed (often because the user lacks upload_files capability
+    // — contributors don't have it, only authors/editors/admins do).
+    // Try to inline a compressed JPEG so the post still has the image.
+    const compressed = await compressImageDataUri(match.uri, {
+      maxBytes: 500 * 1024,
+      maxWidth: 1024,
+      quality: 72,
+    });
+    if (compressed) {
+      const replacement = `<img ${match.before}src="${compressed}"${match.after}>`;
+      rewritten = rewritten.replace(match.full, replacement);
+      console.info(
+        `[wp-media] Upload unavailable; inlining compressed JPEG (${Math.round(compressed.length / 1024)} KB)`,
+      );
+      continue;
+    }
+
+    rewritten = rewritten.replace(
+      match.full,
+      "<!-- body image: upload + compression both failed; stripped -->",
+    );
+    console.warn(
+      "[wp-media] Upload + compression both failed; img stripped from body",
+    );
+  }
+
+  return rewritten;
 }

@@ -41,7 +41,13 @@ function rowToProfile(row: typeof styleProfiles.$inferSelect): StyleProfile {
     primaryCompounds: row.primaryCompounds ?? [],
     secondaryCompounds: row.secondaryCompounds ?? [],
     assignmentSeed: row.assignmentSeed ?? undefined,
-    minHammingAtAssign: row.minHammingAtAssign ?? undefined,
+    // Drizzle returns decimal columns as strings; coerce back to number
+    // so the StyleProfile type stays clean and consumers (UI, scrubber)
+    // can do numeric comparisons without re-parsing.
+    minHammingAtAssign:
+      row.minHammingAtAssign != null
+        ? Number(row.minHammingAtAssign)
+        : undefined,
   };
 }
 
@@ -168,7 +174,13 @@ export async function assignProfileForBlog(
       primaryCompounds: profile.primaryCompounds,
       secondaryCompounds: profile.secondaryCompounds,
       assignmentSeed: profile.assignmentSeed,
-      minHammingAtAssign: profile.minHammingAtAssign,
+      // Drizzle's decimal column expects a string at insert time —
+      // matches the existing costUsd pattern in blog-actions.ts.
+      minHammingAtAssign:
+        profile.minHammingAtAssign !== undefined &&
+        Number.isFinite(profile.minHammingAtAssign)
+          ? profile.minHammingAtAssign.toFixed(2)
+          : null,
     });
 
     return { success: true, assigned: true, profile };

@@ -93,8 +93,6 @@ export const blogs = pgTable("blogs", {
   seoPlugin: seoPluginEnum("seo_plugin").default("none"),
   shopifyStoreUrl: varchar("shopify_store_url", { length: 500 }),
   shopifyAdminApiToken: varchar("shopify_admin_api_token", { length: 500 }),
-  shopifyApiVersion: varchar("shopify_api_version", { length: 20 }).default("2024-07"),
-  shopifyBlogId: varchar("shopify_blog_id", { length: 50 }),
 
   // Shopify auth & metadata
   shopifyAuthMode: shopifyAuthModeEnum("shopify_auth_mode").default("client_credentials"),
@@ -103,14 +101,6 @@ export const blogs = pgTable("blogs", {
   shopifyBlogHandle: varchar("shopify_blog_handle", { length: 255 }),
   shopifyGrantedScopes: text("shopify_granted_scopes"),
 
-  hostingProvider: varchar("hosting_provider", { length: 255 }),
-  hostingLoginUrl: varchar("hosting_login_url", { length: 500 }),
-  hostingUsername: varchar("hosting_username", { length: 255 }),
-  hostingPassword: varchar("hosting_password", { length: 255 }),
-  registrar: varchar("registrar", { length: 255 }),
-  registrarLoginUrl: varchar("registrar_login_url", { length: 500 }),
-  registrarUsername: varchar("registrar_username", { length: 255 }),
-  registrarPassword: varchar("registrar_password", { length: 255 }),
   postingFrequency: varchar("posting_frequency", { length: 50 }),
   postingFrequencyDays: integer("posting_frequency_days").array(),
   // Sub-day cadence. Daily quota (e.g. 2 = max 2 posts per UTC day). Takes
@@ -288,6 +278,12 @@ export const generatedPosts = pgTable("generated_posts", {
   metaTitle: varchar("meta_title", { length: 255 }),
   metaDescription: text("meta_description"),
   featuredImageUrl: text("featured_image_url"),
+  // Second image — a deliberately differently-framed shot of the same
+  // topic, embedded into the body HTML at roughly the midpoint by
+  // content-generator.ts. Stored separately from featuredImageUrl so
+  // we can reuse it (e.g. for social cards) without re-extracting from
+  // the body. Always a data: URI when present.
+  bodyImageUrl: text("body_image_url"),
   wordCount: integer("word_count"),
   seoScore: integer("seo_score"),
   readabilityScore: integer("readability_score"),
@@ -359,7 +355,13 @@ export const styleProfiles = pgTable("style_profiles", {
 
   // Audit
   assignmentSeed: varchar("assignment_seed", { length: 64 }),
-  minHammingAtAssign: integer("min_hamming_at_assign"),
+  // Hamming distance from the closest existing profile at the moment
+  // this profile was assigned. Computed as sum of integer single-valued
+  // mismatches (0-8) + 3 Jaccard distances (0.0-1.0 each), so the
+  // realistic range is 0.00-11.00. Stored as decimal because Jaccard
+  // produces fractional values (e.g. 9.55 means 8 single-valued
+  // mismatches + ~1.55 fractional set-distance).
+  minHammingAtAssign: decimal("min_hamming_at_assign", { precision: 5, scale: 2 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [
   index("style_profiles_blog_id_idx").on(table.blogId),
@@ -382,6 +384,47 @@ export const activityLog = pgTable("activity_log", {
   index("activity_log_user_id_idx").on(table.userId),
   index("activity_log_client_id_idx").on(table.clientId),
   index("activity_log_created_at_idx").on(table.createdAt),
+]);
+
+// ─── news_items ─────────────────────────────────────────────────────────────
+//
+// Cached headlines fetched from Google News RSS (and optional NewsAPI /
+// GNews fallbacks) keyed by vertical. The auto-publish ideation step
+// reads recent rows for the blog's vertical so Claude can brainstorm
+// topics tied to current local/international news instead of cold.
+//
+// Rows are immutable: the refresh cron upserts on (verticalKey, link)
+// so duplicates from multiple queries on the same vertical collapse.
+
+export const newsItems = pgTable("news_items", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  verticalKey: varchar("vertical_key", { length: 64 }).notNull(),
+  // The query string that surfaced this item (one vertical may run
+  // several queries — one per topic angle / location). Useful for
+  // attribution and for skipping stale queries during re-fetch.
+  query: varchar("query", { length: 256 }).notNull(),
+  // Source label: "google_news_rss" | "newsapi" | "gnews".
+  source: varchar("source", { length: 32 }).notNull(),
+  // Publisher (e.g. "CBC News", "Le Devoir"). Optional — RSS sometimes
+  // omits it.
+  publisher: varchar("publisher", { length: 128 }),
+  title: varchar("title", { length: 512 }).notNull(),
+  link: varchar("link", { length: 1024 }).notNull(),
+  snippet: text("snippet"),
+  language: varchar("language", { length: 8 }),
+  country: varchar("country", { length: 8 }),
+  publishedAt: timestamp("published_at"),
+  fetchedAt: timestamp("fetched_at").defaultNow().notNull(),
+  // True once the row has been surfaced to an ideation prompt —
+  // optional dedupe signal so the same headline doesn't seed
+  // back-to-back topics on the same blog.
+  usedInIdeation: boolean("used_in_ideation").default(false).notNull(),
+  raw: jsonb("raw"),
+}, (table) => [
+  index("news_items_vertical_idx").on(table.verticalKey),
+  index("news_items_fetched_at_idx").on(table.fetchedAt),
+  index("news_items_published_at_idx").on(table.publishedAt),
+  uniqueIndex("news_items_vertical_link_uk").on(table.verticalKey, table.link),
 ]);
 
 // ─── Relations ──────────────────────────────────────────────────────────────

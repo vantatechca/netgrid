@@ -124,8 +124,7 @@ export function CsvImportDialog({ clientId }: CsvImportDialogProps) {
           <DialogTitle>Import Blogs from CSV</DialogTitle>
           <DialogDescription>
             Upload a CSV file to bulk-import blogs. Expected columns: domain, wp_url,
-            wp_username, wp_app_password, seo_plugin, hosting_provider, registrar,
-            domain_expiry_date, hosting_expiry_date, posting_frequency
+            wp_username, wp_app_password, seo_plugin, posting_frequency
           </DialogDescription>
         </DialogHeader>
 
@@ -199,8 +198,6 @@ export function CsvImportDialog({ clientId }: CsvImportDialogProps) {
                       <TableHead>Domain</TableHead>
                       <TableHead>WP URL</TableHead>
                       <TableHead>SEO Plugin</TableHead>
-                      <TableHead>Hosting</TableHead>
-                      <TableHead>Registrar</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -211,12 +208,6 @@ export function CsvImportDialog({ clientId }: CsvImportDialogProps) {
                           {row.wpUrl || "--"}
                         </TableCell>
                         <TableCell>{row.seoPlugin}</TableCell>
-                        <TableCell className="text-muted-foreground">
-                          {row.hostingProvider || "--"}
-                        </TableCell>
-                        <TableCell className="text-muted-foreground">
-                          {row.registrar || "--"}
-                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>

@@ -52,6 +52,14 @@ export interface GenerateImageInput {
    * photographic-style + anti-stock-photo negatives.
    */
   customScene?: string;
+  /**
+   * Image role within the post. Defaults to "hero" (wide establishing
+   * shot used for the featured image). "body" requests a deliberately
+   * different framing of the same topic (detail / close-up / alternative
+   * angle) so the in-content image visibly differs from the hero even
+   * when both share the same customScene.
+   */
+  variant?: "hero" | "body";
 }
 
 export interface GeneratedImage {
@@ -321,11 +329,23 @@ export function buildImagePrompt(input: GenerateImageInput): string {
   // 3. Assemble. Scene first (locks subject), style second, then strong
   //    negatives. The negatives are deliberately verbose because Nano Banana
   //    keeps gravitating to bottle/shelf imagery without explicit prohibition.
+  //
+  //    Variant directive — "body" variant forces a different framing of
+  //    the same scene so the in-content image visibly differs from the
+  //    hero (which always uses the default "hero" wide-shot framing).
+  const variant = input.variant ?? "hero";
+  const framingDirective =
+    variant === "body"
+      ? "Compose as a tight detail shot or close-up at an alternative angle — " +
+        "different framing from a wide establishing shot. Crop in on a meaningful " +
+        "object or texture from the scene rather than the whole environment."
+      : "Compose as a wide establishing shot that captures the full scene context.";
   const lead = `Realistic documentary photograph: ${scene}.`;
   const style =
     "Photojournalism style, candid composition, shallow depth of field, natural lighting only. " +
     "Magazine-quality editorial photography, not commercial or stock-photo styled. " +
-    "Believable real-world setting that a working photographer would actually shoot.";
+    "Believable real-world setting that a working photographer would actually shoot. " +
+    framingDirective;
   const negatives =
     "Strictly do not include: bottles, vials, jars, ampoules, syringes, pills, capsules, " +
     "pharmaceutical packaging, product labels, shelves with bottles arranged on them, " +
@@ -551,7 +571,35 @@ function bytesToDataUri(bytes: Buffer, mimeType: string): string {
 export async function generateHeroImage(
   input: GenerateImageInput,
 ): Promise<GeneratedImage> {
-  const prompt = buildImagePrompt(input);
+  const prompt = buildImagePrompt({ ...input, variant: "hero" });
+  const model = process.env.GOOGLE_IMAGE_MODEL || GOOGLE_DEFAULT_MODEL;
+
+  const { bytes, mimeType } = await callGoogleImage(prompt, model);
+
+  return {
+    url: bytesToDataUri(bytes, mimeType),
+    provider: "google",
+    hosting: "data_uri",
+    promptUsed: prompt,
+    model,
+  };
+}
+
+/**
+ * Generate a deliberately different second image for the body of the post.
+ *
+ * Same topic and customScene as the hero, but the prompt requests a
+ * close-up / detail / alternative-angle framing so the in-content image
+ * doesn't look like a duplicate of the featured image. Stochastic
+ * variation in Nano Banana further differentiates the two outputs.
+ *
+ * Throws on failure — caller decides whether to ship the post with just
+ * a hero image.
+ */
+export async function generateBodyImage(
+  input: GenerateImageInput,
+): Promise<GeneratedImage> {
+  const prompt = buildImagePrompt({ ...input, variant: "body" });
   const model = process.env.GOOGLE_IMAGE_MODEL || GOOGLE_DEFAULT_MODEL;
 
   const { bytes, mimeType } = await callGoogleImage(prompt, model);

@@ -25,8 +25,6 @@ function blogToDescriptor(blog: typeof blogs.$inferSelect): BlogDescriptor {
     seoPlugin: blog.seoPlugin,
     shopifyStoreUrl: blog.shopifyStoreUrl,
     shopifyAdminApiToken: blog.shopifyAdminApiToken,
-    shopifyApiVersion: blog.shopifyApiVersion,
-    shopifyBlogId: blog.shopifyBlogId,
   };
 }
 

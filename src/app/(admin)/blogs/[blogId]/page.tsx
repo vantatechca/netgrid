@@ -20,7 +20,6 @@ import {
   ArrowLeft,
   Pencil,
   Globe,
-  Server,
   ShieldCheck,
   Calendar,
   FileText,
@@ -121,17 +120,6 @@ export default async function BlogDetailPage({
             shopifyStoreUrl: blog.shopifyStoreUrl || "",
             shopifyClientId: blog.shopifyClientId || "",
             shopifyClientSecret: blog.shopifyClientSecret || "",
-            shopifyApiVersion: blog.shopifyApiVersion || "2024-07",
-            shopifyBlogId: blog.shopifyBlogId || "",
-            // Hosting / registrar (kept on the row, hidden in the form UI)
-            hostingProvider: blog.hostingProvider || "",
-            hostingLoginUrl: blog.hostingLoginUrl || "",
-            hostingUsername: blog.hostingUsername || "",
-            hostingPassword: blog.hostingPassword || "",
-            registrar: blog.registrar || "",
-            registrarLoginUrl: blog.registrarLoginUrl || "",
-            registrarUsername: blog.registrarUsername || "",
-            registrarPassword: blog.registrarPassword || "",
             // Posting cadence + status
             postingFrequency: blog.postingFrequency || "",
             postingFrequencyDays: blog.postingFrequencyDays ?? undefined,
@@ -220,7 +208,6 @@ export default async function BlogDetailPage({
             {isShopify ? (
               <>
                 <InfoRow label="Shopify Store URL" value={blog.shopifyStoreUrl} />
-                <InfoRow label="API Version" value={blog.shopifyApiVersion} />
               </>
             ) : (
               <>
@@ -252,7 +239,6 @@ export default async function BlogDetailPage({
                 label="Client Secret"
                 value={blog.shopifyClientSecret}
               />
-              <InfoRow label="API Version" value={blog.shopifyApiVersion} />
             </CardContent>
           </Card>
         ) : (
@@ -269,22 +255,6 @@ export default async function BlogDetailPage({
             </CardContent>
           </Card>
         )}
-
-        {/* Hosting */}
-        {/* <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Server className="size-4" />
-              Hosting
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <InfoRow label="Provider" value={blog.hostingProvider} />
-            <InfoRow label="Login URL" value={blog.hostingLoginUrl} />
-            <CredentialDisplay label="Username" value={blog.hostingUsername} />
-            <CredentialDisplay label="Password" value={blog.hostingPassword} />
-          </CardContent>
-        </Card> */}
 
         {/* Posting Config */}
         <Card>

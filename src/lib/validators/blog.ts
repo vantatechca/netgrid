@@ -14,19 +14,33 @@ const isValidUrl = (s: string): boolean => {
   }
 };
 
-// Optional string: accepts "" / undefined / null, returns trimmed value or undefined
-const optionalString = z
-  .union([z.string(), z.undefined(), z.null()])
-  .transform((v) => {
+// Optional string: pre-normalises empty strings / null / undefined to
+// undefined BEFORE the inner schema runs. This avoids Zod 4's stricter
+// behaviour around union+transform where "" was being rejected as
+// "Invalid input" on optional fields the user left blank.
+const optionalString = z.preprocess(
+  (v) => {
     if (v === undefined || v === null) return undefined;
+    if (typeof v !== "string") return v;
     const trimmed = v.trim();
-    return trimmed === "" ? undefined : trimmed;
-  });
+    return trimmed.length === 0 ? undefined : trimmed;
+  },
+  z.string().optional(),
+);
 
-// Optional URL: empty allowed, but if non-empty must be a valid URL
-const optionalUrl = optionalString.refine(
-  (v) => v === undefined || isValidUrl(v),
-  { message: "Must be a valid URL" },
+// Optional URL: same empty-friendly pattern; non-empty values must parse
+// as a URL.
+const optionalUrl = z.preprocess(
+  (v) => {
+    if (v === undefined || v === null) return undefined;
+    if (typeof v !== "string") return v;
+    const trimmed = v.trim();
+    return trimmed.length === 0 ? undefined : trimmed;
+  },
+  z
+    .string()
+    .refine((s) => isValidUrl(s), { message: "Must be a valid URL" })
+    .optional(),
 );
 
 // Optional positive integer: handles "", undefined, NaN, strings, numbers
@@ -49,13 +63,15 @@ const postingDays = z
   .transform((v) => {
     if (!v || v.length === 0) return undefined;
     const nums = v
-      .map((x) => (typeof x === "number" ? x : Number(x)))
-      .filter((n) => Number.isInteger(n) && n >= 1 && n <= 7);
+      .map((x: unknown) => (typeof x === "number" ? x : Number(x)))
+      .filter((n: number) => Number.isInteger(n) && n >= 1 && n <= 7);
     if (nums.length === 0) return undefined;
-    return Array.from(new Set(nums)).sort((a, b) => a - b);
+    const uniq = Array.from(new Set<number>(nums));
+    uniq.sort((a, b) => a - b);
+    return uniq;
   })
   .refine(
-    (v) => v === undefined || v.every((n) => n >= 1 && n <= 7),
+    (v) => v === undefined || v.every((n: number) => n >= 1 && n <= 7),
     { message: "Days must be between 1 (Mon) and 7 (Sun)" },
   );
 
@@ -77,7 +93,8 @@ export const createBlogSchema = z
     wpAppPassword: optionalString,
     seoPlugin: z.enum(["yoast", "rankmath", "none"]).optional().default("none"),
 
-    // Shopify fields
+    // Shopify fields — apiVersion + blogId removed (locked to defaults
+    // internally; not user-configurable any more).
     shopifyAuthMode: z
       .enum(["legacy_token", "client_credentials"])
       .optional()
@@ -92,18 +109,6 @@ export const createBlogSchema = z
     shopifyAdminApiToken: optionalString,
     shopifyClientId: optionalString,
     shopifyClientSecret: optionalString,
-    shopifyApiVersion: optionalString,
-    shopifyBlogId: optionalString,
-
-    // Legacy hosting / registrar / SSL
-    hostingProvider: optionalString,
-    hostingLoginUrl: optionalUrl,
-    hostingUsername: optionalString,
-    hostingPassword: optionalString,
-    registrar: optionalString,
-    registrarLoginUrl: optionalUrl,
-    registrarUsername: optionalString,
-    registrarPassword: optionalString,
 
     // Posting cadence — frequency is always "weekly" now; days picks Mon–Sun.
     postingFrequency: optionalString,
@@ -116,7 +121,9 @@ export const createBlogSchema = z
     notesInternal: optionalString,
   })
   .superRefine((data, ctx) => {
-    // Only enforce credentials when activating the blog
+    // Only enforce credentials when activating the blog AND only for the
+    // selected platform. The form clears opposite-platform fields before
+    // submission, but this guards against direct API callers too.
     if (data.status !== "active") return;
 
     if (data.platform === "wordpress") {
@@ -190,17 +197,6 @@ export const updateBlogSchema = z.object({
   shopifyAdminApiToken: optionalString,
   shopifyClientId: optionalString,
   shopifyClientSecret: optionalString,
-  shopifyApiVersion: optionalString,
-  shopifyBlogId: optionalString,
-
-  hostingProvider: optionalString,
-  hostingLoginUrl: optionalUrl,
-  hostingUsername: optionalString,
-  hostingPassword: optionalString,
-  registrar: optionalString,
-  registrarLoginUrl: optionalUrl,
-  registrarUsername: optionalString,
-  registrarPassword: optionalString,
 
   postingFrequency: optionalString,
   postingFrequencyDays: postingDays,
@@ -210,3 +206,7 @@ export const updateBlogSchema = z.object({
 
 export type CreateBlogInput = z.infer<typeof createBlogSchema>;
 export type UpdateBlogInput = z.infer<typeof updateBlogSchema>;
+
+// Silence "unused" lint warning for the optional-number helper — kept
+// for upcoming numeric fields (e.g. posting cap per day).
+void optionalNumber;

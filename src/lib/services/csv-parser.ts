@@ -8,8 +8,6 @@ export interface CsvBlogRow {
   wpUsername: string;
   wpAppPassword: string;
   seoPlugin: SeoPlugin;
-  hostingProvider: string;
-  registrar: string;
   postingFrequency: string;
 }
 
@@ -20,8 +18,6 @@ export interface BlogInsert {
   wpUsername: string | null;
   wpAppPassword: string | null;
   seoPlugin: SeoPlugin;
-  hostingProvider: string | null;
-  registrar: string | null;
   postingFrequency: string | null;
   status: "setup";
 }
@@ -45,8 +41,6 @@ const EXPECTED_COLUMNS = [
   "wp_username",
   "wp_app_password",
   "seo_plugin",
-  "hosting_provider",
-  "registrar",
   "posting_frequency",
 ] as const;
 
@@ -164,8 +158,6 @@ export function parseBlogCsv(csvContent: string, clientId: string): CsvParseResu
     const wpUsername = getValue("wp_username");
     const wpAppPassword = getValue("wp_app_password");
     const seoPluginRaw = getValue("seo_plugin").toLowerCase() || "none";
-    const hostingProvider = getValue("hosting_provider");
-    const registrar = getValue("registrar");
     const postingFrequency = getValue("posting_frequency");
 
     // Validate domain (required)
@@ -199,8 +191,6 @@ export function parseBlogCsv(csvContent: string, clientId: string): CsvParseResu
         wpUsername: wpUsername || null,
         wpAppPassword: wpAppPassword || null,
         seoPlugin: seoPluginRaw as SeoPlugin,
-        hostingProvider: hostingProvider || null,
-        registrar: registrar || null,
         postingFrequency: postingFrequency || null,
         status: "setup",
       });

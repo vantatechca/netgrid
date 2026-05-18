@@ -188,7 +188,6 @@ async function seedBlogs(clientIds: Record<string, string>) {
       domain: "brightstore-guide.shop",
       platform: "shopify" as const,
       shopifyStoreUrl: "brightstore.myshopify.com",
-      shopifyApiVersion: "2024-07",
       // "2x per week" → Tue + Thu
       postingFrequency: "weekly",
       postingFrequencyDays: [2, 4],

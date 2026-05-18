@@ -26,8 +26,6 @@ export interface PlatformBlog {
   shopifyAdminApiToken?: string | null;
   shopifyClientId?: string | null;
   shopifyClientSecret?: string | null;
-  shopifyApiVersion?: string | null;
-  shopifyBlogId?: string | null;
   shopifyBlogHandle?: string | null;
 }
 
@@ -105,10 +103,7 @@ export async function testConnection(
     if (!built.ok) {
       return { success: false, platform, message: built.message };
     }
-    return shopify.testConnection(
-      built.creds,
-      blog.shopifyApiVersion || undefined,
-    );
+    return shopify.testConnection(built.creds);
   }
 
   if (!blog.wpUrl || !blog.wpUsername || !blog.wpAppPassword) {
@@ -136,8 +131,8 @@ export async function fetchRecentPosts(
 
     const articles = await shopify.fetchRecentArticles(
       built.creds,
-      blog.shopifyApiVersion || undefined,
-      blog.shopifyBlogId || undefined,
+      undefined,
+      undefined,
       count,
     );
 
@@ -186,9 +181,7 @@ export async function publishPost(
       return { success: false, message: built.message };
     }
     return shopify.createArticle(built.creds, input, {
-      blogId: blog.shopifyBlogId || undefined,
       blogHandle: blog.shopifyBlogHandle || undefined,
-      apiVersion: blog.shopifyApiVersion || undefined,
     });
   }
 

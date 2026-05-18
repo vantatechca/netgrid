@@ -110,3 +110,73 @@ export async function sendGenericEmail(
 
   return data;
 }
+
+/**
+ * Send a monthly performance report PDF to the client. Used by the
+ * monthly-reports cron after `generateReportForCron` succeeds, and by
+ * the admin "resend report" action for one-off retries.
+ *
+ * Dev fallback: when RESEND_API_KEY is unset, logs a notice and resolves
+ * with a stub object — mirrors the magic-link path so local dev doesn't
+ * require a Resend account.
+ */
+export async function sendReportPdfEmail(opts: {
+  to: string;
+  clientName: string;
+  periodLabel: string; // e.g. "April 2026"
+  pdfFilename: string;
+  pdfBuffer: Buffer;
+  appUrl?: string;
+}) {
+  const { to, clientName, periodLabel, pdfFilename, pdfBuffer } = opts;
+  const portalUrl = `${opts.appUrl ?? APP_URL}/portal/reports`;
+
+  const client = resendClient();
+  if (!client) {
+    console.log("\n─── Report PDF email (RESEND_API_KEY not set) ─────────");
+    console.log(`  to:        ${to}`);
+    console.log(`  period:    ${periodLabel}`);
+    console.log(`  filename:  ${pdfFilename}`);
+    console.log(`  size:      ${pdfBuffer.length} bytes`);
+    console.log("───────────────────────────────────────────────────────\n");
+    return { id: "dev-log", from: FROM_EMAIL, to };
+  }
+
+  const { data, error } = await client.emails.send({
+    from: FROM_EMAIL,
+    to,
+    subject: `Your ${periodLabel} Performance Report`,
+    html: `
+      <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">
+        <h2 style="color: #111;">Your ${periodLabel} Report is Ready</h2>
+        <p>Hi ${clientName},</p>
+        <p>Your performance report for <strong>${periodLabel}</strong> is attached as a PDF.
+        It covers posts published, average SEO score, SEO trend, issues fixed, and blogs on/off schedule.</p>
+        <p>You can also view this and previous reports in your portal:</p>
+        <a href="${portalUrl}"
+           style="display: inline-block; background: #111; color: #fff; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 500; margin: 16px 0;">
+          Open Portal
+        </a>
+        <p style="color: #666; font-size: 12px; margin-top: 24px;">
+          If you have any questions about this report, just reply to this email.
+        </p>
+      </div>
+    `,
+    attachments: [
+      {
+        filename: pdfFilename,
+        // Resend expects either a base64-encoded `content` string or
+        // a remote `path` URL. Using base64 keeps us self-contained
+        // (no need to host the PDF anywhere first).
+        content: pdfBuffer.toString("base64"),
+      },
+    ],
+  });
+
+  if (error) {
+    console.error("Failed to send report PDF email:", error);
+    throw new Error("Failed to send report PDF email");
+  }
+
+  return data;
+}

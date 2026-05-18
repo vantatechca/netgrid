@@ -171,8 +171,6 @@ export function BlogForm({
       shopifyAdminApiToken: defaultValues?.shopifyAdminApiToken || "",
       shopifyClientId: defaultValues?.shopifyClientId || "",
       shopifyClientSecret: defaultValues?.shopifyClientSecret || "",
-      shopifyApiVersion: defaultValues?.shopifyApiVersion || "2024-07",
-      shopifyBlogId: defaultValues?.shopifyBlogId || "",
       // Frequency is hardcoded to "weekly" — the picker now drives the schedule
       postingFrequency: "weekly",
       postingFrequencyDays: initialPostingDays,
@@ -206,12 +204,26 @@ export function BlogForm({
   };
 
   const onSubmit = (data: CreateBlogInput) => {
-    // Normalize Shopify store URL just before submission
+    // Clear opposite-platform credentials so a Shopify save doesn't
+    // accidentally validate WordPress fields (and vice versa). The UI
+    // only shows one platform's section at a time, but react-hook-form
+    // keeps the unrendered fields in state at their default values.
+    const isShopify = data.platform === "shopify";
     const cleaned: CreateBlogInput = {
       ...data,
-      shopifyStoreUrl: data.shopifyStoreUrl
-        ? normalizeShopifyStoreUrl(data.shopifyStoreUrl)
-        : data.shopifyStoreUrl,
+      // WordPress fields — keep only when platform is WordPress
+      wpUrl: isShopify ? undefined : data.wpUrl,
+      wpUsername: isShopify ? undefined : data.wpUsername,
+      wpAppPassword: isShopify ? undefined : data.wpAppPassword,
+      // Shopify fields — keep only when platform is Shopify
+      shopifyStoreUrl: !isShopify
+        ? undefined
+        : data.shopifyStoreUrl
+          ? normalizeShopifyStoreUrl(data.shopifyStoreUrl)
+          : data.shopifyStoreUrl,
+      shopifyAdminApiToken: !isShopify ? undefined : data.shopifyAdminApiToken,
+      shopifyClientId: !isShopify ? undefined : data.shopifyClientId,
+      shopifyClientSecret: !isShopify ? undefined : data.shopifyClientSecret,
       // Force frequency to "weekly" — UI doesn't expose other options
       postingFrequency: "weekly",
     };
@@ -228,6 +240,34 @@ export function BlogForm({
             : await updateBlog(blogId!, cleaned);
 
         if ("error" in result) {
+          // Surface server-side validation details — without this, users
+          // see "Validation failed" with no hint which field broke. Maps
+          // Zod's flattened fieldErrors back onto the form so each
+          // invalid field also shows its message inline.
+          const details = (
+            result as {
+              details?: Partial<Record<keyof CreateBlogInput, string[]>>;
+            }
+          ).details;
+          if (details && typeof details === "object") {
+            const fieldEntries = Object.entries(details).filter(
+              ([, msgs]) => Array.isArray(msgs) && msgs.length > 0,
+            );
+            for (const [field, msgs] of fieldEntries) {
+              form.setError(field as Path<CreateBlogInput>, {
+                type: "server",
+                message: (msgs as string[])[0],
+              });
+            }
+            if (fieldEntries.length > 0) {
+              const summary = fieldEntries
+                .map(([f, msgs]) => `${f}: ${(msgs as string[])[0]}`)
+                .slice(0, 3)
+                .join(" · ");
+              toast.error(`${result.error} — ${summary}`, { id: toastId });
+              return;
+            }
+          }
           toast.error(result.error, { id: toastId });
           return;
         }
@@ -267,7 +307,6 @@ export function BlogForm({
       authMode: "client_credentials",
       clientId: v.shopifyClientId,
       clientSecret: v.shopifyClientSecret,
-      apiVersion: v.shopifyApiVersion,
     });
 
     if (res.success) {
@@ -509,20 +548,6 @@ export function BlogForm({
                 name="shopifyClientSecret"
                 type="password"
                 placeholder="shpss_xxxxxxxxxxxxxxxx"
-                register={register}
-                errors={errors}
-              />
-              <Field
-                label="API Version"
-                name="shopifyApiVersion"
-                placeholder="2024-07"
-                register={register}
-                errors={errors}
-              />
-              <Field
-                label="Blog ID (optional)"
-                name="shopifyBlogId"
-                placeholder="Leave blank to use first blog"
                 register={register}
                 errors={errors}
               />

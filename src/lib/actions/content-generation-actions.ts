@@ -376,8 +376,6 @@ async function runGenerateAndPublish(
       shopifyAdminApiToken: blog.shopifyAdminApiToken,
       shopifyClientId: blog.shopifyClientId,
       shopifyClientSecret: blog.shopifyClientSecret,
-      shopifyApiVersion: blog.shopifyApiVersion,
-      shopifyBlogId: blog.shopifyBlogId,
     };
 
     const publish = await publishPost(platformBlog, {

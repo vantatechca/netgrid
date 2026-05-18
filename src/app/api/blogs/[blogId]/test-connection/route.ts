@@ -31,8 +31,6 @@ export async function POST(
       wpAppPassword: blogs.wpAppPassword,
       shopifyStoreUrl: blogs.shopifyStoreUrl,
       shopifyAdminApiToken: blogs.shopifyAdminApiToken,
-      shopifyApiVersion: blogs.shopifyApiVersion,
-      shopifyBlogId: blogs.shopifyBlogId,
     })
     .from(blogs)
     .where(eq(blogs.id, blogId));
