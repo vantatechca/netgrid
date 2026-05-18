@@ -117,3 +117,20 @@ services:
           property: host
       - key: CRON_SECRET
         sync: false
+
+  - type: cron
+    name: netgrid-cron-refresh-news
+    runtime: docker
+    schedule: "0 2 * * 1,4"
+    dockerfilePath: ./cron/Dockerfile
+    dockerContext: ./cron
+    envVars:
+      - key: CRON_PATH
+        value: /api/refresh-news
+      - key: APP_URL
+        fromService:
+          type: web
+          name: netgrid
+          property: host
+      - key: CRON_SECRET
+        sync: false
