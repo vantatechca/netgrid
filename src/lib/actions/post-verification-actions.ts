@@ -1,0 +1,198 @@
+"use server";
+
+import { db } from "@/lib/db";
+import { blogs, postVerifications } from "@/lib/db/schema";
+import { eq, and, desc, sql } from "drizzle-orm";
+import { revalidatePath } from "next/cache";
+import { requireAdmin } from "@/lib/auth/helpers";
+import { fetchRecentPosts } from "@/lib/services/platform-client";
+
+type BlogRow = typeof blogs.$inferSelect;
+
+/**
+ * Total expected posts per 7-day window, regardless of which cadence system
+ * the blog uses. Returns 0 when no schedule is configured.
+ *
+ * - `postsPerDay` (newer system) takes precedence: e.g. 2/day → 14/week.
+ * - Otherwise, `postingFrequencyDays` is an *array* (e.g. [1,3,5] for
+ *   Mon/Wed/Fri) and its length is the weekly count.
+ */
+function expectedPostsPerWeek(blog: BlogRow): number {
+  if (blog.postsPerDay && blog.postsPerDay > 0) return blog.postsPerDay * 7;
+  if (Array.isArray(blog.postingFrequencyDays)) {
+    return blog.postingFrequencyDays.length;
+  }
+  return 0;
+}
+
+/**
+ * Max acceptable gap (in days) between consecutive posts before we flag the
+ * blog as "off schedule". 0 means no schedule is configured (always on time).
+ * Adds 1 day of grace so a near-miss isn't immediately flagged.
+ */
+function maxDaysBetweenPosts(blog: BlogRow): number {
+  const epw = expectedPostsPerWeek(blog);
+  if (epw <= 0) return 0;
+  return Math.ceil(7 / epw) + 1;
+}
+
+export async function getPostVerifications(params?: {
+  blogId?: string;
+  clientId?: string;
+  onSchedule?: boolean;
+  page?: number;
+  pageSize?: number;
+}) {
+  await requireAdmin();
+  const { blogId, clientId, onSchedule, page = 1, pageSize = 25 } = params || {};
+
+  const conditions = [];
+  if (blogId) conditions.push(eq(postVerifications.blogId, blogId));
+  if (clientId) conditions.push(eq(postVerifications.clientId, clientId));
+  if (onSchedule !== undefined) conditions.push(eq(postVerifications.onSchedule, onSchedule));
+
+  const where = conditions.length > 0 ? and(...conditions) : undefined;
+
+  const [records, [{ count }]] = await Promise.all([
+    db.select({
+      verification: postVerifications,
+      blogDomain: blogs.domain,
+    })
+      .from(postVerifications)
+      .innerJoin(blogs, eq(postVerifications.blogId, blogs.id))
+      .where(where)
+      .orderBy(desc(postVerifications.checkedAt))
+      .limit(pageSize)
+      .offset((page - 1) * pageSize),
+    db.select({ count: sql<number>`count(*)::int` })
+      .from(postVerifications)
+      .where(where),
+  ]);
+
+  return { records, total: count, page, pageSize };
+}
+
+export async function verifyBlogPosts(blogId: string) {
+  await requireAdmin();
+
+  const [blog] = await db.select().from(blogs).where(eq(blogs.id, blogId)).limit(1);
+  if (!blog) throw new Error("Blog not found");
+
+  const posts = await fetchRecentPosts(blog, 5);
+
+  const latestPost = posts[0];
+  const latestPostDate = latestPost?.publishedAt ?? null;
+  const daysSinceLastPost = latestPostDate
+    ? Math.ceil((Date.now() - latestPostDate.getTime()) / (1000 * 60 * 60 * 24))
+    : null;
+
+  const expected = expectedPostsPerWeek(blog);
+  const maxGap = maxDaysBetweenPosts(blog);
+  const onSchedule =
+    maxGap === 0
+      ? true
+      : daysSinceLastPost === null
+        ? false
+        : daysSinceLastPost <= maxGap;
+  const alertTriggered = !onSchedule;
+
+  const [verification] = await db.insert(postVerifications).values({
+    blogId: blog.id,
+    clientId: blog.clientId,
+    checkType: "manual",
+    latestPostDate,
+    latestPostTitle: latestPost?.title || null,
+    latestPostUrl: latestPost?.url || null,
+    postsInPeriod: posts.length,
+    expectedPosts: expected,
+    onSchedule,
+    daysSinceLastPost,
+    alertTriggered,
+  }).returning();
+
+  await db.update(blogs).set({
+    lastPostVerifiedAt: new Date(),
+    lastPostTitle: latestPost?.title || blog.lastPostTitle,
+    updatedAt: new Date(),
+  }).where(eq(blogs.id, blogId));
+
+  return verification;
+}
+
+/**
+ * Admin-callable wrapper for the post-verification sweep. Same logic as the
+ * cron, but auth-gated and revalidates the /posts page so the table updates
+ * once the job finishes.
+ */
+export async function runPostVerificationNow() {
+  await requireAdmin();
+  const result = await runPostVerificationCron();
+  revalidatePath("/posts");
+  return result;
+}
+
+// Called by cron job
+export async function runPostVerificationCron() {
+  const activeBlogs = await db.select().from(blogs).where(eq(blogs.status, "active"));
+
+  let verified = 0;
+  let alerts = 0;
+
+  for (const blog of activeBlogs) {
+    const hasWp = blog.wpUrl && blog.wpUsername && blog.wpAppPassword;
+    // Shopify supports two auth modes; either is sufficient.
+    const shopifyMode = blog.shopifyAuthMode ?? "client_credentials";
+    const hasShopify =
+      blog.shopifyStoreUrl &&
+      (shopifyMode === "legacy_token"
+        ? Boolean(blog.shopifyAdminApiToken)
+        : Boolean(blog.shopifyClientId && blog.shopifyClientSecret));
+    if (blog.platform === "wordpress" && !hasWp) continue;
+    if (blog.platform === "shopify" && !hasShopify) continue;
+
+    try {
+      const posts = await fetchRecentPosts(blog, 5);
+      const latestPost = posts[0];
+      const latestPostDate = latestPost?.publishedAt ?? null;
+      const daysSinceLastPost = latestPostDate
+        ? Math.ceil((Date.now() - latestPostDate.getTime()) / (1000 * 60 * 60 * 24))
+        : null;
+
+      const expected = expectedPostsPerWeek(blog);
+      const maxGap = maxDaysBetweenPosts(blog);
+      const onSchedule =
+        maxGap === 0
+          ? true
+          : daysSinceLastPost === null
+            ? false
+            : daysSinceLastPost <= maxGap;
+      const alertTriggered = !onSchedule;
+      if (alertTriggered) alerts++;
+
+      await db.insert(postVerifications).values({
+        blogId: blog.id,
+        clientId: blog.clientId,
+        checkType: "scheduled",
+        latestPostDate,
+        latestPostTitle: latestPost?.title || null,
+        latestPostUrl: latestPost?.url || null,
+        postsInPeriod: posts.length,
+        expectedPosts: expected,
+        onSchedule,
+        daysSinceLastPost,
+        alertTriggered,
+      });
+
+      await db.update(blogs).set({
+        lastPostVerifiedAt: new Date(),
+        lastPostTitle: latestPost?.title || blog.lastPostTitle,
+      }).where(eq(blogs.id, blog.id));
+
+      verified++;
+    } catch (error) {
+      console.error(`Post verification failed for ${blog.domain}:`, error);
+    }
+  }
+
+  return { verified, alerts, total: activeBlogs.length };
+}

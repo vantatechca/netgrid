@@ -1,0 +1,1 @@
+ALTER TABLE "blogs" ALTER COLUMN "posting_frequency_days" SET DATA TYPE integer[];
