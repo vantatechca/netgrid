@@ -45,10 +45,21 @@ services:
       - key: CRON_SECRET
         sync: false
 
+  # ──────────────────────────────────────────────────────────────────────
+  # Cron schedules — Render interprets all schedules as UTC. The comments
+  # below show the equivalent Philippines Time (UTC+8) so operators can
+  # reason about when each job actually fires locally.
+  #
+  #   UTC → PH:  add 8 hours
+  #   PH  → UTC: subtract 8 hours
+  # ──────────────────────────────────────────────────────────────────────
+
+  # SEO scan — runs at 02:00 PH (overnight, low-traffic window).
+  # 02:00 PH = 18:00 UTC the previous day.
   - type: cron
     name: netgrid-cron-seo-scan
     runtime: docker
-    schedule: "0 2 * * *"
+    schedule: "0 18 * * *"
     dockerfilePath: ./cron/Dockerfile
     dockerContext: ./cron
     envVars:
@@ -62,10 +73,12 @@ services:
       - key: CRON_SECRET
         sync: false
 
+  # Post verification — every 6h aligned to PH morning: 02 / 08 / 14 / 20 PH.
+  # 02 PH = 18 UTC (prev day), 08 PH = 00 UTC, 14 PH = 06 UTC, 20 PH = 12 UTC.
   - type: cron
     name: netgrid-cron-post-verification
     runtime: docker
-    schedule: "0 */6 * * *"
+    schedule: "0 0,6,12,18 * * *"
     dockerfilePath: ./cron/Dockerfile
     dockerContext: ./cron
     envVars:
@@ -79,6 +92,9 @@ services:
       - key: CRON_SECRET
         sync: false
 
+  # Monthly reports — 09:00 PH on the 1st of each month.
+  # 09:00 PH = 01:00 UTC same day. PDFs land in client inboxes around
+  # 9am-10am PH local working hours.
   - type: cron
     name: netgrid-cron-monthly-reports
     runtime: docker
@@ -97,14 +113,20 @@ services:
         sync: false
 
   # Auto-publish: generate + publish posts for every active blog whose cadence
-  # window has opened (postsPerDay + postingIntervalHours, or the legacy
-  # postingFrequencyDays). Stops per-client when clients.totalBlogsTarget posts
-  # have shipped. Runs hourly so sub-day cadences (e.g. 2x/day, every 6h) fire
-  # on time.
+  # window has opened. Stops per-client when clients.totalBlogsTarget posts
+  # have shipped.
+  #
+  # Schedule: HOURLY. Each blog has a randomly-assigned preferredHour (0-23
+  # UTC, NOT PH — internal slot only, not user-facing). The cron only
+  # publishes once the current UTC hour >= that hour, then once per
+  # configured day. Hourly granularity means a blog publishes the first
+  # hour after its slot opens.
+  #
+  # Hourly is the same regardless of timezone, so no PH adjustment needed.
   - type: cron
     name: netgrid-cron-auto-publish
     runtime: docker
-    schedule: "0 */6 * * *"  
+    schedule: "0 * * * *"
     dockerfilePath: ./cron/Dockerfile
     dockerContext: ./cron
     envVars:
@@ -118,15 +140,22 @@ services:
       - key: CRON_SECRET
         sync: false
 
+  # News refresh: pull recent headlines from Google News + NewsAPI for
+  # every vertical, dedup by link, prune items older than 30 days. Twice
+  # a week keeps the cache fresh without burning quota on idle days.
+  #
+  # Schedule: 06:00 PH every Tuesday + Friday.
+  # 06:00 PH Tue = 22:00 UTC Mon. 06:00 PH Fri = 22:00 UTC Thu.
+  # ISO weekday in cron: 1=Mon, 4=Thu → "0 22 * * 1,4".
   - type: cron
     name: netgrid-cron-refresh-news
     runtime: docker
-    schedule: "0 2 * * 1,4"
+    schedule: "0 22 * * 1,4"
     dockerfilePath: ./cron/Dockerfile
     dockerContext: ./cron
     envVars:
       - key: CRON_PATH
-        value: /api/refresh-news
+        value: /api/cron/refresh-news
       - key: APP_URL
         fromService:
           type: web

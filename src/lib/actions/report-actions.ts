@@ -15,11 +15,11 @@ import { eq, and, desc, sql, gte, lte, lt } from "drizzle-orm";
 import { requireAdmin, getClientScope, getSession } from "@/lib/auth/helpers";
 import { generateMonthlyReport } from "@/lib/services/claude-client";
 import { logActivity } from "@/lib/services/activity-logger";
-import {
-  renderReportPdf,
-  reportPdfFilename,
-  type ReportPdfData,
-} from "@/lib/services/pdf-renderer";
+// PDF renderer is dynamically imported inside emailReportPdfInternal()
+// so pages that read reports don't pay the @react-pdf/renderer
+// compile + bundle cost at request time. Keeps the type import only
+// (erased at runtime).
+import type { ReportPdfData } from "@/lib/services/pdf-renderer";
 import { sendReportPdfEmail } from "@/lib/services/email";
 import type { EmailReportResult } from "@/lib/types/news";
 
@@ -527,9 +527,17 @@ export async function emailReportPdfInternal(
     concerns: row.concerns,
   };
 
+  // Lazy import — keeps @react-pdf/renderer (~2 MB) out of the bundle
+  // for any page that imports this action file but doesn't actually
+  // generate a PDF (e.g. the reports list page, the trigger button).
   let pdfBuffer: Buffer;
+  let pdfFilename: string;
   try {
+    const { renderReportPdf, reportPdfFilename } = await import(
+      "@/lib/services/pdf-renderer"
+    );
     pdfBuffer = await renderReportPdf(pdfData);
+    pdfFilename = reportPdfFilename(pdfData);
   } catch (err) {
     const message = err instanceof Error ? err.message : "PDF render failed";
     return { success: false, message };
@@ -540,7 +548,7 @@ export async function emailReportPdfInternal(
       to: recipient.email,
       clientName: recipient.clientName,
       periodLabel: periodLabel(pdfData.periodStart),
-      pdfFilename: reportPdfFilename(pdfData),
+      pdfFilename,
       pdfBuffer,
     });
     return {
