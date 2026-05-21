@@ -337,6 +337,7 @@ export async function updateBlog(id: string, data: unknown) {
 
   const updateData: Record<string, unknown> = { updatedAt: new Date() };
 
+  if (input.clientId !== undefined) updateData.clientId = input.clientId;
   if (input.domain !== undefined)
     updateData.domain = input.domain.trim().toLowerCase();
   if (input.platform !== undefined) updateData.platform = input.platform;

@@ -180,6 +180,7 @@ export const createBlogSchema = z
 // ─── Update Schema ──────────────────────────────────────────────────────────
 
 export const updateBlogSchema = z.object({
+  clientId: z.string().uuid("Invalid client ID").optional(),
   domain: z
     .string()
     .min(1, "Domain is required")
