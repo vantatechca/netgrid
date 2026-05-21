@@ -66,10 +66,7 @@ services:
       - key: CRON_PATH
         value: /api/cron/seo-scan
       - key: APP_URL
-        fromService:
-          type: web
-          name: netgrid
-          property: host
+        value: https://netgrid-16f6.onrender.com
       - key: CRON_SECRET
         sync: false
 
@@ -85,10 +82,7 @@ services:
       - key: CRON_PATH
         value: /api/cron/post-verification
       - key: APP_URL
-        fromService:
-          type: web
-          name: netgrid
-          property: host
+        value: https://netgrid-16f6.onrender.com
       - key: CRON_SECRET
         sync: false
 
@@ -105,10 +99,7 @@ services:
       - key: CRON_PATH
         value: /api/cron/monthly-reports
       - key: APP_URL
-        fromService:
-          type: web
-          name: netgrid
-          property: host
+        value: https://netgrid-16f6.onrender.com
       - key: CRON_SECRET
         sync: false
 
@@ -141,10 +132,7 @@ services:
       - key: CRON_PATH
         value: /api/cron/auto-publish?shard=0&shardCount=4
       - key: APP_URL
-        fromService:
-          type: web
-          name: netgrid
-          property: host
+        value: https://netgrid-16f6.onrender.com
       - key: CRON_SECRET
         sync: false
       - key: CRON_MAX_TIME
@@ -160,10 +148,7 @@ services:
       - key: CRON_PATH
         value: /api/cron/auto-publish?shard=1&shardCount=4
       - key: APP_URL
-        fromService:
-          type: web
-          name: netgrid
-          property: host
+        value: https://netgrid-16f6.onrender.com
       - key: CRON_SECRET
         sync: false
       - key: CRON_MAX_TIME
@@ -179,10 +164,7 @@ services:
       - key: CRON_PATH
         value: /api/cron/auto-publish?shard=2&shardCount=4
       - key: APP_URL
-        fromService:
-          type: web
-          name: netgrid
-          property: host
+        value: https://netgrid-16f6.onrender.com
       - key: CRON_SECRET
         sync: false
       - key: CRON_MAX_TIME
@@ -198,10 +180,7 @@ services:
       - key: CRON_PATH
         value: /api/cron/auto-publish?shard=3&shardCount=4
       - key: APP_URL
-        fromService:
-          type: web
-          name: netgrid
-          property: host
+        value: https://netgrid-16f6.onrender.com
       - key: CRON_SECRET
         sync: false
       - key: CRON_MAX_TIME
@@ -224,9 +203,6 @@ services:
       - key: CRON_PATH
         value: /api/cron/refresh-news
       - key: APP_URL
-        fromService:
-          type: web
-          name: netgrid
-          property: host
+        value: https://netgrid-16f6.onrender.com
       - key: CRON_SECRET
         sync: false
