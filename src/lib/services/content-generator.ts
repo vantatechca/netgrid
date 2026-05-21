@@ -673,7 +673,7 @@ function reconstructContentFromParts(
 
   // sections: [{heading, content|body|text}]
   if (Array.isArray(sections) && sections.length > 0) {
-    if (typeof intro === "string") out.push(wrapParagraph(intro));
+    if (typeof intro === "string") out.push(maybeWrapHtml(intro));
     for (const sec of sections) {
       if (!sec || typeof sec !== "object") continue;
       const s = sec as Record<string, unknown>;
@@ -682,13 +682,13 @@ function reconstructContentFromParts(
       if (heading) out.push(`<h2>${escapeHtml(heading)}</h2>`);
       if (text) out.push(maybeWrapHtml(text));
     }
-    if (typeof conclusion === "string") out.push(wrapParagraph(conclusion));
+    if (typeof conclusion === "string") out.push(maybeWrapHtml(conclusion));
     return out.length > 0 ? out.join("\n") : null;
   }
 
   // intro + items (listicle or part-shaped)
   if (Array.isArray(items) && items.length > 0) {
-    if (typeof intro === "string") out.push(wrapParagraph(intro));
+    if (typeof intro === "string") out.push(maybeWrapHtml(intro));
     const allStrings = items.every((it) => typeof it === "string");
     if (allStrings) {
       // Plain listicle — items are bullet strings.
@@ -714,7 +714,7 @@ function reconstructContentFromParts(
         if (text) out.push(maybeWrapHtml(text));
       }
     }
-    if (typeof conclusion === "string") out.push(wrapParagraph(conclusion));
+    if (typeof conclusion === "string") out.push(maybeWrapHtml(conclusion));
     return out.length > 0 ? out.join("\n") : null;
   }
 
@@ -724,16 +724,16 @@ function reconstructContentFromParts(
     typeof bodyText === "string" ||
     typeof conclusion === "string"
   ) {
-    if (typeof intro === "string") out.push(wrapParagraph(intro));
+    if (typeof intro === "string") out.push(maybeWrapHtml(intro));
     if (typeof bodyText === "string") out.push(maybeWrapHtml(bodyText));
-    if (typeof conclusion === "string") out.push(wrapParagraph(conclusion));
+    if (typeof conclusion === "string") out.push(maybeWrapHtml(conclusion));
     return out.length > 0 ? out.join("\n") : null;
   }
 
   // paragraphs: [...]
   if (Array.isArray(paragraphs) && paragraphs.length > 0) {
     for (const p of paragraphs) {
-      if (typeof p === "string") out.push(wrapParagraph(p));
+      if (typeof p === "string") out.push(maybeWrapHtml(p));
     }
     return out.length > 0 ? out.join("\n") : null;
   }
