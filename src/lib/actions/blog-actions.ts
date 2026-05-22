@@ -1342,6 +1342,148 @@ export async function getBlogPosts(
   return { generated: generatedRows, live };
 }
 
+export interface GeneratedPostContent {
+  id: string;
+  topic: string;
+  title: string | null;
+  body: string | null;
+  excerpt: string | null;
+  metaTitle: string | null;
+  metaDescription: string | null;
+  keywords: string[];
+  featuredImageUrl: string | null;
+  wordCount: number | null;
+  seoScore: number | null;
+  status: string;
+  externalPostUrl: string | null;
+  failureReason: string | null;
+  createdAt: Date;
+  publishedAt: Date | null;
+}
+
+export async function getGeneratedPostContent(
+  postId: string,
+): Promise<GeneratedPostContent | { error: string }> {
+  await requireAdmin();
+
+  const [row] = await db
+    .select({
+      id: generatedPosts.id,
+      topic: generatedPosts.topic,
+      title: generatedPosts.title,
+      body: generatedPosts.body,
+      excerpt: generatedPosts.excerpt,
+      metaTitle: generatedPosts.metaTitle,
+      metaDescription: generatedPosts.metaDescription,
+      keywords: generatedPosts.keywords,
+      featuredImageUrl: generatedPosts.featuredImageUrl,
+      wordCount: generatedPosts.wordCount,
+      seoScore: generatedPosts.seoScore,
+      status: generatedPosts.status,
+      externalPostUrl: generatedPosts.externalPostUrl,
+      failureReason: generatedPosts.failureReason,
+      createdAt: generatedPosts.createdAt,
+      publishedAt: generatedPosts.publishedAt,
+    })
+    .from(generatedPosts)
+    .where(eq(generatedPosts.id, postId))
+    .limit(1);
+
+  if (!row) return { error: "Post not found" };
+
+  return {
+    ...row,
+    keywords: Array.isArray(row.keywords)
+      ? (row.keywords as unknown[]).map((k) => String(k))
+      : [],
+  };
+}
+
+/**
+ * Edit a generated post that hasn't been published yet. Updates the stored
+ * title/body/excerpt/meta/keywords on the row so the next publish (whether
+ * triggered by the cron or by the user clicking Publish) uses the edited
+ * content. Recomputes wordCount from the new body.
+ *
+ * Refuses to edit posts in transient states (`generating`, `publishing`)
+ * or already-published rows — editing a published post here wouldn't
+ * affect the live site, which would be misleading.
+ */
+export async function updateGeneratedPostContent(
+  postId: string,
+  data: {
+    title?: string;
+    body?: string;
+    excerpt?: string;
+    metaTitle?: string;
+    metaDescription?: string;
+    keywords?: string[];
+  },
+): Promise<{ success: boolean; message: string }> {
+  await requireAdmin();
+
+  const [post] = await db
+    .select({
+      id: generatedPosts.id,
+      blogId: generatedPosts.blogId,
+      status: generatedPosts.status,
+    })
+    .from(generatedPosts)
+    .where(eq(generatedPosts.id, postId))
+    .limit(1);
+
+  if (!post) return { success: false, message: "Generated post not found" };
+
+  if (post.status === "publishing" || post.status === "generating") {
+    return {
+      success: false,
+      message: `Post is currently ${post.status} — wait for it to finish before editing`,
+    };
+  }
+
+  if (post.status === "published") {
+    return {
+      success: false,
+      message:
+        "Post is already published — edit the live version from the Live tab instead",
+    };
+  }
+
+  const update: Record<string, unknown> = { updatedAt: new Date() };
+
+  if (data.title !== undefined) update.title = data.title.trim() || null;
+  if (data.body !== undefined) {
+    const body = data.body;
+    update.body = body;
+    // Recompute word count from the new body so the table reflects reality.
+    const text = body.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+    update.wordCount = text
+      ? text.split(" ").filter((w) => w.length > 0).length
+      : 0;
+  }
+  if (data.excerpt !== undefined) update.excerpt = data.excerpt.trim() || null;
+  if (data.metaTitle !== undefined)
+    update.metaTitle = data.metaTitle.trim() || null;
+  if (data.metaDescription !== undefined)
+    update.metaDescription = data.metaDescription.trim() || null;
+  if (data.keywords !== undefined) {
+    const cleaned = data.keywords
+      .map((k) => k.trim())
+      .filter((k) => k.length > 0);
+    update.keywords = cleaned.length > 0 ? cleaned : null;
+  }
+
+  await db
+    .update(generatedPosts)
+    .set(update)
+    .where(eq(generatedPosts.id, postId));
+
+  revalidatePath(`/blogs/${post.blogId}/posts`);
+  revalidatePath(`/blogs/${post.blogId}`);
+
+  return { success: true, message: "Generated post updated" };
+}
+
 export async function editBlogLivePost(
   blogId: string,
   postId: number,
