@@ -145,6 +145,46 @@ const NICHE_CONTEXTS: Record<string, NicheContext> = {
     contentStyle: "Use correct financial terminology (APR, LTV, DTI), show total cost not just monthly payment, address predatory lending red flags",
     keyTopics: ["personal loans", "mortgage", "APR", "interest rates", "credit score", "loan qualification", "debt consolidation"],
   },
+  tax_lawyer: {
+    label: "Tax Law & IRS Representation",
+    industry: "Legal Services",
+    defaultAudience: "Individuals and business owners facing tax issues, CPAs researching legal options, small business owners",
+    defaultBrandVoice: "authoritative legal advisor, plain-English translator of tax code",
+    contentStyle: "Cite specific IRC sections and real penalty schedules, distinguish federal vs state, use concrete dollar examples and timelines, always note this is general info not legal advice",
+    keyTopics: ["IRS audit", "tax debt settlement", "offer in compromise", "innocent spouse relief", "FBAR penalties", "back taxes", "wage garnishment", "tax court", "installment agreement"],
+  },
+  charity: {
+    label: "Charity & Nonprofit Operations",
+    industry: "Nonprofit Sector",
+    defaultAudience: "Nonprofit founders, board members, donors, fundraisers, grant writers",
+    defaultBrandVoice: "mission-driven advisor, experienced nonprofit operator",
+    contentStyle: "Reference real 501(c)(3) requirements and actual grant sources, cite donor psychology research, include realistic budgets and overhead ratios, cover legal compliance honestly",
+    keyTopics: ["501(c)(3) status", "donor retention", "grant writing", "fundraising campaigns", "nonprofit governance", "Form 990", "Giving Tuesday", "donor stewardship", "capital campaigns"],
+  },
+  pest_extermination: {
+    label: "Pest Control & Extermination",
+    industry: "Pest Management Services",
+    defaultAudience: "Homeowners with pest issues, property managers, small business owners, DIY-curious researchers",
+    defaultBrandVoice: "experienced pest control professional, practical exterminator",
+    contentStyle: "Use correct pest names (German cockroach vs American), seasonal pest patterns, real product names (Termidor, Advion), distinguish DIY vs professional treatments, address safety for pets and children",
+    keyTopics: ["termites", "bed bugs", "cockroach treatment", "rodent control", "ant infestations", "wasp removal", "integrated pest management", "preventive maintenance", "pest inspections"],
+  },
+  roofing: {
+    label: "Roofing & Roof Repair",
+    industry: "Roofing Contracting",
+    defaultAudience: "Homeowners needing repairs or replacement, property managers, contractors comparing materials",
+    defaultBrandVoice: "experienced roofing contractor, practical industry veteran",
+    contentStyle: "Distinguish material types (asphalt shingle, metal, tile, TPO), give real cost ranges per square, address regional climate considerations and warranty terms, walk through insurance claim processes honestly",
+    keyTopics: ["asphalt shingles", "metal roofing", "roof replacement cost", "storm damage claims", "roof inspections", "flashing", "underlayment", "roof leaks", "TPO commercial roofing"],
+  },
+  gym_subscription: {
+    label: "Gym Memberships & Fitness Subscriptions",
+    industry: "Fitness & Wellness",
+    defaultAudience: "Consumers comparing gyms, fitness beginners, gym owners researching the market, budget-conscious health seekers",
+    defaultBrandVoice: "honest fitness consultant, practical gym-goer",
+    contentStyle: "Compare actual chains (Planet Fitness, LA Fitness, Equinox) with real prices, contract terms, and cancellation policies, distinguish big-box vs boutique vs class-based, address hidden fees honestly",
+    keyTopics: ["Planet Fitness", "Equinox", "ClassPass", "CrossFit memberships", "gym contracts", "cancellation policies", "boutique fitness", "personal training costs", "gym comparison"],
+  },
 };
 
 const DEFAULT_NICHE: NicheContext = {
@@ -1119,6 +1159,11 @@ function getNicheRequirements(niche: string): string {
     ecom_nails: `Use correct product terminology (gel polish vs builder gel). Reference actual brands with real prices. Include timing (cure times, wear duration). Describe looks specifically with shade names and finish types. Address nail health honestly.`,
     soccer_jersey: `Distinguish authentic vs replica vs counterfeit. Reference actual manufacturers (Nike, Adidas, Puma). Use proper terminology (kit, strip, home/away/third). Address sizing by manufacturer. Never promote counterfeit sources.`,
     app_dev: `Distinguish native (Swift/Kotlin), cross-platform (React Native/Flutter), hybrid. Include realistic cost ranges and timelines. Cover iOS and Android considerations. Address ongoing costs (hosting, APIs, maintenance). Acknowledge market saturation.`,
+    tax_lawyer: `Cite specific IRC sections and real penalty amounts. Use concrete dollar figures and timelines (e.g. "10-year CSED on tax debt"). Distinguish federal vs state procedures. Always include a "general information, not legal advice — consult a licensed attorney for your situation" disclaimer. Address common myths honestly (e.g. pennies-on-the-dollar OIC marketing claims).`,
+    charity: `Reference actual 501(c)(3) compliance requirements and IRS Form 990 specifics. Use real benchmarks for overhead ratios, donor retention rates, and grant award sizes. Cite specific grant databases (Candid, Grants.gov). Distinguish program vs administrative vs fundraising expenses. Acknowledge sector-wide challenges (donor fatigue, restricted funding) honestly.`,
+    pest_extermination: `Use correct entomological names (German vs American cockroach, Eastern vs Western subterranean termite). Reference actual products and active ingredients (fipronil in Termidor, indoxacarb in Advion). Distinguish DIY-feasible vs licensed-only treatments. Address pet and child safety explicitly. Include realistic timelines (bed bug eradication takes 2-3 treatments over 4-6 weeks).`,
+    roofing: `Distinguish material types with real per-square cost ranges (asphalt $350-550, metal $900-1400, tile $1000-1800). Reference manufacturer warranties (GAF, Owens Corning, CertainTeed) honestly including pro-rated vs non-prorated terms. Address regional climate factors (snow load, hurricane straps, hail belts). Walk through insurance claim process realistically — what insurers cover vs deny.`,
+    gym_subscription: `Use actual chain pricing (Planet Fitness $15/$25 tiers, Equinox $200-$300, LA Fitness ~$30). Address contract gotchas (annual fees, cancellation requirements, auto-renewal). Distinguish big-box vs boutique vs class-based models honestly. Include realistic personal training costs ($60-150/session). Address common frustrations (overcrowding, equipment availability, cancellation friction).`,
   };
   return requirements[key] || "";
 }
