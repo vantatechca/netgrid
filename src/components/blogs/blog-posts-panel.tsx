@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
+  Eye,
   ExternalLink,
   Loader2,
   Pencil,
@@ -61,12 +62,16 @@ import {
 import {
   deleteBlogLivePost,
   editBlogLivePost,
+  getGeneratedPostContent,
   publishGeneratedPost,
   retryGeneratedPost,
+  updateGeneratedPostContent,
   type BlogGeneratedPostRow,
   type BlogLivePostRow,
+  type GeneratedPostContent,
 } from "@/lib/actions/blog-actions";
 import { GeneratePostButton } from "./generate-post-button";
+import { ArticlePreviewHtml } from "./article-preview-html";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -94,6 +99,45 @@ const LIVE_STATUS_VARIANTS: Record<
   trash: "destructive",
 };
 
+// Data-URI `<img>` tags embedded in generated post bodies (the body image
+// from Nano Banana lives inline as base64) make the edit textarea
+// unreadable — a single tag can be hundreds of KB of `src="data:..."`
+// characters. We swap each tag for a short `[[IMAGE_N]]` marker while
+// editing and restore the original tags on save. If the user deletes the
+// marker, the image is dropped from the saved body — that's intentional.
+const DATA_URI_IMG_RE =
+  /<img\b[^>]*src=["']data:image\/[^"']+["'][^>]*\/?>/gi;
+const IMAGE_MARKER_RE = /\[\[IMAGE_(\d+)\]\]/g;
+
+function extractDataUriImages(html: string): {
+  text: string;
+  images: string[];
+} {
+  const images: string[] = [];
+  const text = html.replace(DATA_URI_IMG_RE, (match) => {
+    images.push(match);
+    return `[[IMAGE_${images.length}]]`;
+  });
+  return { text, images };
+}
+
+function restoreDataUriImages(text: string, images: string[]): string {
+  return text.replace(IMAGE_MARKER_RE, (_full, n) => {
+    const idx = parseInt(n, 10) - 1;
+    return images[idx] ?? "";
+  });
+}
+
+function extractImgSrcFromTag(tag: string): string | null {
+  const m = tag.match(/src=["']([^"']+)["']/i);
+  return m ? m[1] : null;
+}
+
+function extractImgAltFromTag(tag: string): string {
+  const m = tag.match(/alt=["']([^"']*)["']/i);
+  return m ? m[1] : "";
+}
+
 function formatDateTime(
   value: string | Date | null | undefined,
 ): string {
@@ -111,7 +155,21 @@ function formatDateTime(
 
 // ─── Per-row actions for the Generated tab ──────────────────────────────────
 
-function GeneratedRowActions({ row }: { row: BlogGeneratedPostRow }) {
+function GeneratedRowActions({
+  row,
+  onView,
+  onEdit,
+  viewLoadingId,
+  editLoadingId,
+}: {
+  row: BlogGeneratedPostRow;
+  onView: (row: BlogGeneratedPostRow) => void;
+  onEdit: (row: BlogGeneratedPostRow) => void;
+  // ID of the row whose body is currently being fetched (if any) — lets
+  // this specific eye button show a spinner instead of the icon.
+  viewLoadingId: string | null;
+  editLoadingId: string | null;
+}) {
   const router = useRouter();
   const [pending, start] = useTransition();
 
@@ -120,6 +178,16 @@ function GeneratedRowActions({ row }: { row: BlogGeneratedPostRow }) {
   const isInFlight =
     row.status === "publishing" || row.status === "generating";
   const canPublish = row.status === "generated" || row.status === "pending";
+  // Body only exists once Claude has finished generating. Pending and
+  // in-flight rows have nothing to show yet.
+  const canView =
+    row.status !== "pending" && row.status !== "generating";
+  // Editing only makes sense for content that's ready to publish but
+  // hasn't gone live. Published rows can be edited from the Live tab;
+  // in-flight rows must wait.
+  const canEdit = row.status === "generated" || row.status === "failed";
+  const viewPending = viewLoadingId === row.id;
+  const editPending = editLoadingId === row.id;
 
   const handlePublish = () => {
     start(async () => {
@@ -137,6 +205,38 @@ function GeneratedRowActions({ row }: { row: BlogGeneratedPostRow }) {
 
   return (
     <div className="flex items-center justify-end gap-1">
+      {canView && (
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => onView(row)}
+          disabled={viewPending}
+          title="View generated content"
+        >
+          {viewPending ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <Eye className="size-4" />
+          )}
+        </Button>
+      )}
+
+      {canEdit && (
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => onEdit(row)}
+          disabled={editPending}
+          title="Edit generated content"
+        >
+          {editPending ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <Pencil className="size-4" />
+          )}
+        </Button>
+      )}
+
       {(canPublish || isFailed) && (
         <Button
           size="sm"
@@ -168,7 +268,7 @@ function GeneratedRowActions({ row }: { row: BlogGeneratedPostRow }) {
           rel="noopener noreferrer"
           className="inline-flex"
         >
-          <Button variant="ghost" size="icon" title="View live post">
+          <Button variant="ghost" size="icon" title="Open live post">
             <ExternalLink className="size-4" />
           </Button>
         </a>
@@ -211,6 +311,102 @@ export function BlogPostsPanel({ blogId, generated, live }: Props) {
   const [deleting, setDeleting] = useState<BlogLivePostRow | null>(null);
   const [forceDelete, setForceDelete] = useState(false);
   const [deletingPending, setDeletingPending] = useState(false);
+
+  // View-generated-post dialog state. Body/excerpt/meta are not in the
+  // table row payload — fetched on demand when the eye icon is clicked.
+  const [viewingRow, setViewingRow] = useState<BlogGeneratedPostRow | null>(
+    null,
+  );
+  const [viewContent, setViewContent] = useState<GeneratedPostContent | null>(
+    null,
+  );
+  const [viewLoading, setViewLoading] = useState(false);
+
+  async function openView(row: BlogGeneratedPostRow) {
+    setViewingRow(row);
+    setViewContent(null);
+    setViewLoading(true);
+    const result = await getGeneratedPostContent(row.id);
+    if ("error" in result) {
+      toast.error(result.error);
+      setViewingRow(null);
+      setViewLoading(false);
+      return;
+    }
+    setViewContent(result);
+    setViewLoading(false);
+  }
+
+  // Edit-generated-post dialog state. Like view, the full body isn't in
+  // the row payload so we fetch on click and pre-fill the form fields.
+  const [editingGenRow, setEditingGenRow] = useState<BlogGeneratedPostRow | null>(
+    null,
+  );
+  const [editGenLoading, setEditGenLoading] = useState(false);
+  const [editGenSaving, setEditGenSaving] = useState(false);
+  const [editGenTitle, setEditGenTitle] = useState("");
+  const [editGenBody, setEditGenBody] = useState("");
+  const [editGenExcerpt, setEditGenExcerpt] = useState("");
+  const [editGenMetaTitle, setEditGenMetaTitle] = useState("");
+  const [editGenMetaDescription, setEditGenMetaDescription] = useState("");
+  const [editGenKeywords, setEditGenKeywords] = useState("");
+  // Original `<img src="data:...">` tags pulled out of the body so the
+  // textarea shows short `[[IMAGE_N]]` markers instead of huge base64
+  // blobs. Restored verbatim on save.
+  const [editGenImages, setEditGenImages] = useState<string[]>([]);
+
+  async function openEditGen(row: BlogGeneratedPostRow) {
+    setEditingGenRow(row);
+    setEditGenLoading(true);
+    setEditGenTitle("");
+    setEditGenBody("");
+    setEditGenExcerpt("");
+    setEditGenMetaTitle("");
+    setEditGenMetaDescription("");
+    setEditGenKeywords("");
+    setEditGenImages([]);
+
+    const result = await getGeneratedPostContent(row.id);
+    if ("error" in result) {
+      toast.error(result.error);
+      setEditingGenRow(null);
+      setEditGenLoading(false);
+      return;
+    }
+    const { text, images } = extractDataUriImages(result.body ?? "");
+    setEditGenTitle(result.title ?? "");
+    setEditGenBody(text);
+    setEditGenImages(images);
+    setEditGenExcerpt(result.excerpt ?? "");
+    setEditGenMetaTitle(result.metaTitle ?? "");
+    setEditGenMetaDescription(result.metaDescription ?? "");
+    setEditGenKeywords(result.keywords.join(", "));
+    setEditGenLoading(false);
+  }
+
+  async function handleSaveEditGen() {
+    if (!editingGenRow) return;
+    setEditGenSaving(true);
+    const result = await updateGeneratedPostContent(editingGenRow.id, {
+      title: editGenTitle,
+      body: restoreDataUriImages(editGenBody, editGenImages),
+      excerpt: editGenExcerpt,
+      metaTitle: editGenMetaTitle,
+      metaDescription: editGenMetaDescription,
+      keywords: editGenKeywords
+        .split(",")
+        .map((k) => k.trim())
+        .filter(Boolean),
+    });
+    setEditGenSaving(false);
+    if (result.success) {
+      toast.success(result.message);
+      setEditingGenRow(null);
+      router.refresh();
+    } else {
+      toast.error(result.message);
+    }
+  }
 
   function openEdit(post: BlogLivePostRow) {
     setEditing(post);
@@ -383,7 +579,13 @@ export function BlogPostsPanel({ blogId, generated, live }: Props) {
                         )}
                       </TableCell>
                       <TableCell className="text-right">
-                        <GeneratedRowActions row={row} />
+                        <GeneratedRowActions
+                          row={row}
+                          onView={openView}
+                          onEdit={openEditGen}
+                          viewLoadingId={viewLoading ? viewingRow?.id ?? null : null}
+                          editLoadingId={editGenLoading ? editingGenRow?.id ?? null : null}
+                        />
                       </TableCell>
                     </TableRow>
                   ))}
@@ -496,6 +698,376 @@ export function BlogPostsPanel({ blogId, generated, live }: Props) {
           </TabsContent>
         </Tabs>
       </CardContent>
+
+      {/* View generated post dialog */}
+      <Dialog
+        open={viewingRow !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setViewingRow(null);
+            setViewContent(null);
+          }
+        }}
+      >
+        <DialogContent className="max-h-[90vh] max-w-4xl overflow-y-auto p-0">
+          {/* The visible dialog title is the article H1 itself (rendered
+              further down). This header is kept only so the Radix dialog
+              has an accessible label and a description for screen readers. */}
+          <DialogHeader className="sr-only">
+            <DialogTitle>
+              {viewContent?.title ?? viewingRow?.title ?? viewingRow?.topic ?? "Generated post"}
+            </DialogTitle>
+            <DialogDescription>
+              Preview of the generated article as it would appear when published.
+            </DialogDescription>
+          </DialogHeader>
+
+          {viewLoading || !viewContent ? (
+            <div className="flex items-center justify-center py-24">
+              <Loader2 className="size-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : (
+            <>
+              {/* ── Article preview (looks like the published page) ── */}
+              <article className="px-8 pt-8 pb-6">
+                {viewContent.featuredImageUrl && (
+                  // Featured image is a data: URI authored by Nano Banana.
+                  // next/image isn't needed and would require remote-pattern
+                  // config for data URIs.
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={viewContent.featuredImageUrl}
+                    alt={viewContent.title ?? viewContent.topic}
+                    className="mb-6 w-full rounded-md border"
+                  />
+                )}
+
+                <h1 className="text-3xl font-bold leading-tight tracking-tight">
+                  {viewContent.title ?? viewContent.topic}
+                </h1>
+
+                <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
+                  <span>
+                    {formatDateTime(
+                      viewContent.publishedAt ?? viewContent.createdAt,
+                    )}
+                  </span>
+                  {viewContent.wordCount != null && (
+                    <>
+                      <span aria-hidden>·</span>
+                      <span>{viewContent.wordCount} words</span>
+                    </>
+                  )}
+                </div>
+
+                {viewContent.excerpt && (
+                  <p className="mt-4 text-lg italic leading-relaxed text-muted-foreground">
+                    {viewContent.excerpt}
+                  </p>
+                )}
+
+                {viewContent.failureReason && (
+                  <div className="mt-4 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                    {viewContent.failureReason}
+                  </div>
+                )}
+
+                <div className="mt-6">
+                  {viewContent.body ? (
+                    <ArticlePreviewHtml html={viewContent.body} />
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      No body content stored for this post.
+                    </p>
+                  )}
+                </div>
+              </article>
+
+              {/* ── Admin details (not visible to readers of the live post) ── */}
+              <div className="border-t bg-muted/30 px-8 py-5">
+                <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Admin details
+                </p>
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <Badge
+                    variant={
+                      GENERATED_STATUS_VARIANTS[viewContent.status] ?? "outline"
+                    }
+                  >
+                    {viewContent.status}
+                  </Badge>
+                  {viewContent.seoScore != null && (
+                    <span className="text-muted-foreground">
+                      SEO {viewContent.seoScore}
+                    </span>
+                  )}
+                  <span className="text-muted-foreground">
+                    Generated {formatDateTime(viewContent.createdAt)}
+                  </span>
+                  {viewContent.publishedAt && (
+                    <span className="text-muted-foreground">
+                      · Published {formatDateTime(viewContent.publishedAt)}
+                    </span>
+                  )}
+                </div>
+
+                {(viewContent.metaTitle ||
+                  viewContent.metaDescription ||
+                  viewContent.keywords.length > 0 ||
+                  (viewingRow?.title &&
+                    viewingRow.topic !== viewingRow.title)) && (
+                  <div className="mt-3 space-y-2 text-sm">
+                    {viewingRow?.title &&
+                      viewingRow.topic !== viewingRow.title && (
+                        <div>
+                          <span className="text-xs font-medium text-muted-foreground">
+                            Topic:{" "}
+                          </span>
+                          <span>{viewingRow.topic}</span>
+                        </div>
+                      )}
+                    {viewContent.metaTitle && (
+                      <div>
+                        <span className="text-xs font-medium text-muted-foreground">
+                          Meta title:{" "}
+                        </span>
+                        <span>{viewContent.metaTitle}</span>
+                      </div>
+                    )}
+                    {viewContent.metaDescription && (
+                      <div>
+                        <span className="text-xs font-medium text-muted-foreground">
+                          Meta description:{" "}
+                        </span>
+                        <span>{viewContent.metaDescription}</span>
+                      </div>
+                    )}
+                    {viewContent.keywords.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-1">
+                        <span className="text-xs font-medium text-muted-foreground">
+                          Keywords:
+                        </span>
+                        {viewContent.keywords.map((kw) => (
+                          <Badge
+                            key={kw}
+                            variant="outline"
+                            className="text-xs font-normal"
+                          >
+                            {kw}
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
+          <DialogFooter className="border-t px-6 py-4">
+            {viewContent?.externalPostUrl && (
+              <a
+                href={viewContent.externalPostUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex"
+              >
+                <Button variant="outline">
+                  <ExternalLink className="mr-2 size-4" />
+                  Open live post
+                </Button>
+              </a>
+            )}
+            <Button
+              variant="outline"
+              onClick={() => {
+                setViewingRow(null);
+                setViewContent(null);
+              }}
+            >
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit generated post dialog (pre-publish) */}
+      <Dialog
+        open={editingGenRow !== null}
+        onOpenChange={(open) => {
+          if (!open && !editGenSaving) {
+            setEditingGenRow(null);
+          }
+        }}
+      >
+        <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Edit generated post</DialogTitle>
+            <DialogDescription>
+              Changes are saved to the stored draft. The next publish will use
+              the edited content.
+            </DialogDescription>
+          </DialogHeader>
+
+          {editGenLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="size-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="edit-gen-title">Title</Label>
+                <Input
+                  id="edit-gen-title"
+                  value={editGenTitle}
+                  onChange={(e) => setEditGenTitle(e.target.value)}
+                  disabled={editGenSaving}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="edit-gen-body">Body</Label>
+
+                {editGenImages.length > 0 && (
+                  <div className="space-y-2 rounded-md border bg-muted/30 p-3">
+                    <p className="text-xs font-medium text-muted-foreground">
+                      Inline images — keep the{" "}
+                      <code className="rounded bg-muted px-1 text-[10px]">
+                        [[IMAGE_N]]
+                      </code>{" "}
+                      marker in the body to keep the image; delete it to drop
+                      the image; move it to reposition.
+                    </p>
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                      {editGenImages.map((tag, i) => {
+                        const src = extractImgSrcFromTag(tag);
+                        const alt = extractImgAltFromTag(tag);
+                        const marker = `[[IMAGE_${i + 1}]]`;
+                        if (!src) return null;
+                        return (
+                          <div key={i} className="space-y-1">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={src}
+                              alt={alt}
+                              className="aspect-video w-full rounded-md border object-cover"
+                            />
+                            <code className="block text-[10px] text-muted-foreground">
+                              {marker}
+                            </code>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                <Tabs defaultValue="source">
+                  <TabsList>
+                    <TabsTrigger value="source">Source</TabsTrigger>
+                    <TabsTrigger value="preview">Preview</TabsTrigger>
+                  </TabsList>
+
+                  <TabsContent value="source" className="pt-2">
+                    <Textarea
+                      id="edit-gen-body"
+                      rows={16}
+                      className="font-mono text-xs"
+                      value={editGenBody}
+                      onChange={(e) => setEditGenBody(e.target.value)}
+                      disabled={editGenSaving}
+                    />
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Word count auto-recalculates on save.
+                    </p>
+                  </TabsContent>
+
+                  <TabsContent value="preview" className="pt-2">
+                    <div className="rounded-md border bg-background p-6">
+                      <ArticlePreviewHtml
+                        html={restoreDataUriImages(editGenBody, editGenImages)}
+                      />
+                    </div>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Live preview — shows exactly how the body will render
+                      when published.
+                    </p>
+                  </TabsContent>
+                </Tabs>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="edit-gen-excerpt">Excerpt</Label>
+                <Textarea
+                  id="edit-gen-excerpt"
+                  rows={2}
+                  value={editGenExcerpt}
+                  onChange={(e) => setEditGenExcerpt(e.target.value)}
+                  disabled={editGenSaving}
+                />
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="edit-gen-meta-title">Meta title</Label>
+                  <Input
+                    id="edit-gen-meta-title"
+                    value={editGenMetaTitle}
+                    onChange={(e) => setEditGenMetaTitle(e.target.value)}
+                    disabled={editGenSaving}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-gen-keywords">
+                    Keywords{" "}
+                    <span className="font-normal text-muted-foreground">
+                      (comma-separated)
+                    </span>
+                  </Label>
+                  <Input
+                    id="edit-gen-keywords"
+                    value={editGenKeywords}
+                    onChange={(e) => setEditGenKeywords(e.target.value)}
+                    disabled={editGenSaving}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="edit-gen-meta-description">
+                  Meta description
+                </Label>
+                <Textarea
+                  id="edit-gen-meta-description"
+                  rows={2}
+                  value={editGenMetaDescription}
+                  onChange={(e) => setEditGenMetaDescription(e.target.value)}
+                  disabled={editGenSaving}
+                />
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setEditingGenRow(null)}
+              disabled={editGenSaving}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleSaveEditGen}
+              disabled={editGenSaving || editGenLoading}
+            >
+              {editGenSaving && (
+                <Loader2 className="mr-2 size-4 animate-spin" />
+              )}
+              Save changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Edit dialog */}
       <Dialog

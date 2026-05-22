@@ -208,10 +208,50 @@ export function normalizeNicheKey(niche: string | null | undefined): string | nu
   return niche.trim().toLowerCase().replace(/[\s-]+/g, "_");
 }
 
+/**
+ * Turn a raw niche string into a human-readable label.
+ *
+ *   "Dog Grooming"  → "Dog Grooming"
+ *   "dog_grooming"  → "Dog Grooming"
+ *   "DOG-GROOMING"  → "Dog Grooming"
+ *
+ * Used when synthesizing a NicheContext on the fly for unregistered niches
+ * so the ideation + article prompts still get a real topical anchor instead
+ * of falling back to a generic "General" placeholder.
+ */
+function humanizeNiche(raw: string): string {
+  return raw
+    .trim()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .split(" ")
+    .map((w) => (w.length === 0 ? w : w[0].toUpperCase() + w.slice(1).toLowerCase()))
+    .join(" ");
+}
+
 export function getNicheContext(niche: string | null | undefined): NicheContext {
   const key = normalizeNicheKey(niche);
   if (!key) return DEFAULT_NICHE;
-  return NICHE_CONTEXTS[key] ?? DEFAULT_NICHE;
+
+  const registered = NICHE_CONTEXTS[key];
+  if (registered) return registered;
+
+  // Unregistered niche — synthesize a context from the typed string so
+  // Claude is still grounded in the admin's intent (e.g. "Dog Grooming"
+  // produces "blog topics for a Dog Grooming niche site"). The 17 curated
+  // niches above still give sharper output because of their hand-tuned
+  // keyTopics, audience, voice, and style cues — but a synthesized context
+  // is far better than silently writing about "general" topics.
+  const label = humanizeNiche(niche!);
+  return {
+    label,
+    industry: label,
+    defaultAudience: `readers interested in ${label.toLowerCase()}`,
+    defaultBrandVoice: "knowledgeable and helpful, evidence-based",
+    contentStyle:
+      "clear and specific, use real names and numbers when possible, acknowledge limitations honestly, avoid generic filler",
+    keyTopics: [],
+  };
 }
 
 export function getAvailableNiches(): Array<{ key: string; label: string }> {
@@ -1294,8 +1334,16 @@ export async function ideateTopic(
     ? `- Tie the topic to a current news angle when one of the recent headlines fits naturally\n- Skip the news angle entirely if no headline relates to the niche`
     : "";
 
+  // When the niche is registered we get a curated keyTopics list; when it
+  // isn't (synthesized context) the list is empty — fall back to telling
+  // Claude to stay tightly within the niche label itself.
+  const focusLine =
+    ctx.keyTopics.length > 0
+      ? `- Cover the niche's key topics: ${ctx.keyTopics.join(", ")}`
+      : `- Stay tightly focused on the ${ctx.label} niche — do not drift into adjacent industries`;
+
   const system = `You generate fresh blog post topic ideas for a ${ctx.industry} niche site (${ctx.label}). Suggest topics that:
-- Cover the niche's key topics: ${ctx.keyTopics.join(", ")}
+${focusLine}
 - Do NOT overlap with recent titles
 - Have clear search intent
 - Are specific (not generic listicles)

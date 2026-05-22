@@ -38,6 +38,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Plus,
+  Loader2,
 } from "lucide-react";
 import { deleteBlog, testBlogConnection } from "@/lib/actions/blog-actions";
 import { toast } from "sonner";
@@ -172,22 +173,22 @@ export function BlogTable({
   };
 
   const handleTestConnection = async (blogId: string, domain: string) => {
-    toast.loading(`Testing connection to ${domain}...`);
+    const t = toast.loading(`Testing connection to ${domain}…`);
     const result = await testBlogConnection(blogId);
-    toast.dismiss();
     if (result.success) {
-      toast.success(result.message);
+      toast.success(result.message, { id: t });
     } else {
-      toast.error(result.message);
+      toast.error(result.message, { id: t });
     }
   };
 
   const handleDelete = async (blogId: string, domain: string) => {
+    const t = toast.loading(`Decommissioning ${domain}…`);
     const result = await deleteBlog(blogId);
     if ("error" in result) {
-      toast.error(result.error);
+      toast.error(result.error, { id: t });
     } else {
-      toast.success(`${domain} marked as decommissioned`);
+      toast.success(`${domain} marked as decommissioned`, { id: t });
       router.refresh();
     }
   };
@@ -198,16 +199,25 @@ export function BlogTable({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-1 items-center gap-2">
           <div className="relative flex-1 max-w-sm">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+            {isPending ? (
+              <Loader2 className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 animate-spin text-muted-foreground" />
+            ) : (
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+            )}
             <Input
               placeholder="Search domains..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleSearch()}
               className="pl-8"
+              disabled={isPending}
             />
           </div>
-          <Select value={statusFilter} onValueChange={handleStatusChange}>
+          <Select
+            value={statusFilter}
+            onValueChange={handleStatusChange}
+            disabled={isPending}
+          >
             <SelectTrigger className="w-[140px]">
               <SelectValue placeholder="Status" />
             </SelectTrigger>
