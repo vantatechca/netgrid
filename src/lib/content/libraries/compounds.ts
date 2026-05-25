@@ -175,6 +175,17 @@ export const COMPOUND_CANON: Record<SubNicheId, CompoundCanonEntry> = {
     primary: [],
     adjacent: ["any"],
   },
+
+  // 26 - Gym Franchise & Memberships
+  // Shared canon for both the openings/launch vertical and the long-term
+  // subscription vertical. Topics span franchise operations, membership
+  // economics, and member experience.
+  26: {
+    subNiche: 26,
+    mode: "primary",
+    primary: ["franchise openings", "membership pricing", "member retention", "gym equipment", "personal training"],
+    adjacent: ["franchise fees", "lease negotiation", "class programming", "member acquisition", "churn reduction"],
+  },
 };
 
 /**
