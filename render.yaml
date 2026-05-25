@@ -54,12 +54,17 @@ services:
   #   PH  → UTC: subtract 8 hours
   # ──────────────────────────────────────────────────────────────────────
 
-  # SEO scan — runs at 02:00 PH (overnight, low-traffic window).
-  # 02:00 PH = 18:00 UTC the previous day.
+   # SEO scan — runs TWICE A MONTH at 02:00 PH (overnight, low-traffic).
+  # Fires at 18:00 UTC on the 1st and 15th of every month, which is
+  # 02:00 PH on the 2nd and 16th (UTC → PH adds 8 hours, rolling past
+  # midnight). Two scans/month keeps the rotation moving without
+  # burning PageSpeed quota or hammering blog hosts; the cron still
+  # rotates through the oldest-scanned blog so the network gets full
+  # coverage over time.
   - type: cron
     name: netgrid-cron-seo-scan
     runtime: docker
-    schedule: "0 18 * * *"
+    schedule: "0 18 1,15 * *"
     dockerfilePath: ./cron/Dockerfile
     dockerContext: ./cron
     envVars:
