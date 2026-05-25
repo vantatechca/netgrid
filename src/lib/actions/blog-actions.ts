@@ -689,6 +689,9 @@ export async function generateBlogPost(
 
   let result;
   try {
+    // Resolve the blog's vertical so the generator can pull recent
+    // news headlines as external-link sources for non-peptide posts.
+    const verticalForGen = verticalForNiche(blog.niche);
     const opts: GenerateOptions = {
       topic,
       keywords,
@@ -699,6 +702,7 @@ export async function generateBlogPost(
       targetAudience: input.targetAudience,
       seoOptimized: input.seoOptimized ?? true,
       styleProfile: styleProfile ?? undefined,
+      verticalKey: verticalForGen?.key ?? null,
     };
     result = await generateContent(opts);
   } catch (err) {

@@ -16,6 +16,7 @@ import {
   getStyleProfileForBlog,
 } from "@/lib/actions/style-profile-actions";
 import { publishPost, type PlatformBlog } from "@/lib/services/platform-client";
+import { verticalForNiche } from "@/lib/content/verticals";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -102,15 +103,12 @@ const MAX_BLOGS_PER_CRON_RUN = Number(
 );
 
 /**
- * Pause between consecutive blog runs inside a single cron tick. The
- * end-to-end generate+publish for one blog takes 25-35s, which is plenty
- * of natural spacing — this small extra delay just protects against burst
- * rate-limit pressure on Anthropic / Google AI Studio when multiple blogs
- * happen to finish quickly back-to-back. Configurable via env.
+ * Per-tick concurrency: how many blogs run in parallel inside a single
+ * cron tick. Default 3 (safe vs. Anthropic 50 RPM and Google 60 RPM
+ * when combined with 4 shards = 12 simultaneous publishes). Clamped to
+ * 1..8. Override on the web service via env var.
  */
-const INTER_BLOG_DELAY_MS = Number(
-  process.env.AUTO_PUBLISH_INTER_BLOG_DELAY_MS || "1500",
-);
+void process.env.AUTO_PUBLISH_INTER_BLOG_DELAY_MS; // legacy env, no longer read
 
 /**
  * Deterministic preferred publishing hour (0-23 UTC) for a blog, derived
@@ -158,9 +156,14 @@ function shardForBlog(blogId: string, shardCount: number): number {
   return parseInt(hex, 16) % shardCount;
 }
 
-/** Reason a blog is or isn't due. The string is what the cron reports. */
+/**
+ * Reason a blog is or isn't due. `catchUp` flags blogs that missed
+ * their last expected post date — these get queue priority AND bypass
+ * the currentHour < preferredHour gate so they don't sit idle waiting
+ * for their slot.
+ */
 type DueDecision =
-  | { due: true }
+  | { due: true; catchUp?: boolean; expectedAt?: Date }
   | { due: false; reason: string };
 
 /**
@@ -186,6 +189,43 @@ const WEEKDAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 function formatWeekdayList(days: number[]): string {
   return days.map((d) => WEEKDAY_NAMES[d - 1] ?? `?${d}`).join(", ");
+}
+
+/**
+ * Days since a blog's last verified post. Returns Infinity when the
+ * blog has never posted (catch-up should fire immediately for new
+ * blogs whose first scheduled day has already passed).
+ */
+function daysSinceLastPost(
+  lastPostVerifiedAt: Date | null | undefined,
+  now: Date,
+): number {
+  if (!lastPostVerifiedAt) return Number.POSITIVE_INFINITY;
+  const ms = now.getTime() - lastPostVerifiedAt.getTime();
+  return ms / (24 * 60 * 60 * 1000);
+}
+
+/**
+ * Compute the expected gap (in days) between consecutive posts based on
+ * the weekday cadence. e.g. [2,5] → average gap ~3.5d. We use the MAX
+ * gap as the "behind" threshold so a Tue+Fri blog is only "behind" if
+ * 4+ days have passed since the last post (the Tue→Fri gap is 3 days,
+ * Fri→Tue is 4 days).
+ */
+function maxGapDaysForWeekdays(days: number[]): number {
+  if (days.length === 0) return 7;
+  if (days.length === 1) return 7; // posts once a week → 7-day gap
+  const sorted = Array.from(new Set(days)).sort((a, b) => a - b);
+  let maxGap = 0;
+  for (let i = 0; i < sorted.length; i++) {
+    const next = sorted[(i + 1) % sorted.length];
+    const gap =
+      i === sorted.length - 1
+        ? 7 - sorted[i] + next // wrap to next week
+        : next - sorted[i];
+    if (gap > maxGap) maxGap = gap;
+  }
+  return maxGap;
 }
 
 function isBlogDueForPost(
@@ -219,21 +259,17 @@ function isBlogDueForPost(
 
   // postingFrequencyDays is an integer[] of ISO weekdays (e.g. [2,5] = Tue/Fri).
   // Semantics: "publish on these specific weekdays" — once per configured day.
+  // Catch-up mode: if the blog is past its expected next-post date,
+  // publish today even if today isn't a normally-configured weekday.
   const configuredDays = Array.isArray(blog.postingFrequencyDays)
     ? blog.postingFrequencyDays
     : null;
   if (configuredDays && configuredDays.length > 0) {
     const today = isoWeekdayUtc(now);
+    const todayConfigured = configuredDays.includes(today);
 
-    // 1. Is today one of the configured weekdays?
-    if (!configuredDays.includes(today)) {
-      return {
-        due: false,
-        reason: `today is ${WEEKDAY_NAMES[today - 1]}; configured days are [${formatWeekdayList(configuredDays)}]`,
-      };
-    }
-
-    // 2. Already posted today?
+    // 1. Already posted today? Block re-publish regardless of catch-up
+    //    mode — never double-post on the same day.
     if (todaysPublishedCount > 0) {
       return {
         due: false,
@@ -241,8 +277,27 @@ function isBlogDueForPost(
       };
     }
 
-    // 3. Safety floor against rapid-fire posts (cron poke / manual trigger
-    //    races).
+    // 2. Behind-schedule check. A blog is "behind" if the days-since-last-
+    //    post exceeds the longest cadence gap. E.g. a Tue+Fri blog is
+    //    behind after 4+ days; a Tue-only blog after 7+ days. New blogs
+    //    (no last post yet) are always behind on their first eligible day.
+    const maxGap = maxGapDaysForWeekdays(configuredDays);
+    const daysBehind = daysSinceLastPost(last, now);
+    const isCatchUp = daysBehind > maxGap;
+
+    // 3. If today isn't a configured weekday AND we're not in catch-up
+    //    mode, defer to the next configured day. Catch-up blogs ignore
+    //    this and publish today.
+    if (!todayConfigured && !isCatchUp) {
+      return {
+        due: false,
+        reason: `today is ${WEEKDAY_NAMES[today - 1]}; configured days are [${formatWeekdayList(configuredDays)}]`,
+      };
+    }
+
+    // 4. Safety floor against rapid-fire posts (cron poke / manual
+    //    trigger races). Same window for catch-up; we just need to make
+    //    sure we never publish twice within 6 hours.
     if (last) {
       const hoursSince = (now.getTime() - last.getTime()) / hour;
       if (hoursSince < MIN_HOURS_BETWEEN_POSTS) {
@@ -253,7 +308,7 @@ function isBlogDueForPost(
       }
     }
 
-    return { due: true };
+    return { due: true, catchUp: isCatchUp };
   }
 
   return {
@@ -350,6 +405,9 @@ async function runGenerateAndPublish(
       );
     }
 
+    // Resolve vertical so the generator can pull recent news headlines
+    // as external-link sources for non-peptide posts.
+    const verticalForGen = verticalForNiche(clientNiche);
     const genOpts: GenerateOptions = {
       topic,
       keywords,
@@ -358,6 +416,7 @@ async function runGenerateAndPublish(
       niche: clientNiche,
       seoOptimized: true,
       styleProfile: styleProfile ?? undefined,
+      verticalKey: verticalForGen?.key ?? null,
     };
     const content = await generateContent(genOpts);
 
@@ -622,6 +681,7 @@ export async function runAutoPublishCron(
     preferredHour: number;
     todayCount: number;
     clientCount: number;
+    catchUp: boolean;
   }
   const queue: QueueEntry[] = [];
   const results: AutoPublishResult["results"] = [];
@@ -674,17 +734,20 @@ export async function runAutoPublishCron(
       });
       continue;
     }
+    const catchUp = decision.catchUp === true;
 
     // 3c. Time-of-day slot. Wait until the cron sees the blog's preferred
     //     hour or later. Blocks before-hours publishes; once hour is
     //     reached, the blog is eligible for the rest of the day.
     //
-    //     EXCEPTION: blogs that have never published (lastPostVerifiedAt
-    //     is null) bypass the slot check on first run. A newly-created
-    //     blog shouldn't have to wait until its randomly-assigned slot
-    //     hour to get its first post out — that could be up to 23 hours.
-    //     From the second post onward the slot applies normally.
-    if (blog.lastPostVerifiedAt && currentHour < preferredHour) {
+    //     EXCEPTIONS that bypass the slot check:
+    //     - Brand-new blogs (lastPostVerifiedAt is null) shouldn't have
+    //       to wait up to 23h for their first post.
+    //     - Catch-up blogs (missed their last expected post day) need
+    //       to publish AS SOON AS the cron sees them — making them wait
+    //       for an arbitrary preferred-hour slot keeps them in "behind"
+    //       state for longer.
+    if (blog.lastPostVerifiedAt && !catchUp && currentHour < preferredHour) {
       skipped++;
       results.push({
         blogId: blog.id,
@@ -709,11 +772,38 @@ export async function runAutoPublishCron(
       continue;
     }
 
-    queue.push({ blog, clientTarget, preferredHour, todayCount, clientCount });
+    queue.push({
+      blog,
+      clientTarget,
+      preferredHour,
+      todayCount,
+      clientCount,
+      catchUp,
+    });
   }
 
-  // 4. Apply per-run cap. Anything beyond the cap is "deferred" — same
-  //    blogs will become eligible again on the next cron tick.
+  // 4. Sort + apply per-run cap.
+  //
+  //    Sort priority:
+  //      a. catchUp=true blogs first (these missed their last expected
+  //         post day; getting them out NOW is the whole point of
+  //         catch-up mode).
+  //      b. Then by lastPostVerifiedAt ASC NULLS FIRST — oldest-waiting
+  //         blogs jump the line over freshly-posted ones.
+  //      c. Tie-break by blog UUID for stable ordering.
+  //
+  //    Anything beyond MAX_BLOGS_PER_CRON_RUN is "deferred" — those
+  //    blogs become eligible again on the next cron tick.
+  queue.sort((a, b) => {
+    // catch-up first
+    if (a.catchUp !== b.catchUp) return a.catchUp ? -1 : 1;
+    // oldest-waiting first (null = never posted → goes first)
+    const aLast = a.blog.lastPostVerifiedAt?.getTime() ?? 0;
+    const bLast = b.blog.lastPostVerifiedAt?.getTime() ?? 0;
+    if (aLast !== bLast) return aLast - bLast;
+    // stable ordering
+    return a.blog.id.localeCompare(b.blog.id);
+  });
   const toRun = queue.slice(0, MAX_BLOGS_PER_CRON_RUN);
   const deferredQueue = queue.slice(MAX_BLOGS_PER_CRON_RUN);
   for (const entry of deferredQueue) {
@@ -740,57 +830,120 @@ export async function runAutoPublishCron(
     );
   }
 
-  // 5. Process the run queue sequentially. In-memory counters update so
-  //    multi-blog clients respect per-client caps within the same run.
+  // 5. Process the run queue with a concurrency-capped worker pool.
   //
-  //    A small inter-blog pause (INTER_BLOG_DELAY_MS) gives Anthropic and
-  //    Google a moment to release rate-limit budget between heavy
-  //    end-to-end pipelines. At sequential 25-35s/blog the natural delay
-  //    is already substantial; this is belt-and-suspenders for bursts.
+  //    Default 3 concurrent publishes per cron tick. With 4 shards
+  //    running hourly this gives 12 simultaneous in-flight publishes
+  //    across the network — safe vs. Anthropic's 50 RPM (3 Claude
+  //    calls/post × 12 = 36 RPM peak) and Google's 60 RPM (2 image
+  //    calls/post × 12 = 24 RPM peak).
+  //
+  //    Override via AUTO_PUBLISH_CONCURRENCY env var on the web service.
+  //    Set to 1 to restore old sequential behaviour for debugging.
+  //
+  //    Per-blog retry: transient errors (rate limits, 5xx, network)
+  //    retry once inside the same tick. Permanent errors (validation,
+  //    auth) bail immediately.
+  //
+  //    JS is single-threaded — Map operations are atomic without locks,
+  //    so publishedTodayByBlog / publishedByClient updates are safe
+  //    even with parallel workers.
   let published = 0;
   let failed = 0;
-  let blogIndex = 0;
 
-  for (const entry of toRun) {
-    const { blog, todayCount, clientCount, preferredHour } = entry;
+  const concurrency = Math.max(
+    1,
+    Math.min(
+      8,
+      Number(process.env.AUTO_PUBLISH_CONCURRENCY || "3"),
+    ),
+  );
 
-    if (blogIndex > 0) {
-      await new Promise((r) => setTimeout(r, INTER_BLOG_DELAY_MS));
-    }
-    blogIndex++;
+  async function publishOne(entry: QueueEntry): Promise<void> {
+    const { blog, todayCount, clientCount, preferredHour, catchUp } = entry;
+    let lastError: unknown = null;
 
-    try {
-      const result = await runGenerateAndPublish({
-        blogId: blog.id,
-        isAutoGenerated: true,
-      });
-      results.push({
-        blogId: blog.id,
-        domain: blog.domain,
-        preferredHour,
-        status: result.status,
-        message: result.message,
-      });
-      if (result.status === "published") {
-        published++;
-        publishedTodayByBlog.set(blog.id, todayCount + 1);
-        publishedByClient.set(blog.clientId, clientCount + 1);
-      } else {
-        failed++;
+    // Up to 2 attempts. Sleep 8s between them so a transient Anthropic
+    // 429 has time to release budget. The publish action itself has
+    // internal retries against Anthropic/Google, so this is the
+    // outermost belt + suspenders.
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        if (attempt > 1) {
+          await new Promise((r) => setTimeout(r, 8000));
+        }
+        const result = await runGenerateAndPublish({
+          blogId: blog.id,
+          isAutoGenerated: true,
+        });
+        const message = catchUp
+          ? `[catch-up] ${result.message}`
+          : result.message;
+        results.push({
+          blogId: blog.id,
+          domain: blog.domain,
+          preferredHour,
+          status: result.status,
+          message,
+        });
+        if (result.status === "published") {
+          published++;
+          publishedTodayByBlog.set(blog.id, todayCount + 1);
+          publishedByClient.set(blog.clientId, clientCount + 1);
+        } else {
+          failed++;
+        }
+        return;
+      } catch (error) {
+        lastError = error;
+        const msg = error instanceof Error ? error.message.toLowerCase() : "";
+        // Non-transient errors (auth, validation, bad config) — give up
+        // immediately so we don't waste a retry slot.
+        const isTransient =
+          msg.includes("rate limit") ||
+          msg.includes("429") ||
+          msg.includes("503") ||
+          msg.includes("504") ||
+          msg.includes("timeout") ||
+          msg.includes("etimedout") ||
+          msg.includes("econnreset") ||
+          msg.includes("network") ||
+          msg.includes("overloaded");
+        if (!isTransient) break;
       }
-    } catch (error) {
-      failed++;
-      const message = error instanceof Error ? error.message : "Unknown error";
-      console.error(`Auto-publish failed for ${blog.domain}:`, error);
-      results.push({
-        blogId: blog.id,
-        domain: blog.domain,
-        preferredHour,
-        status: "failed",
-        message,
-      });
+    }
+
+    failed++;
+    const message =
+      lastError instanceof Error ? lastError.message : "Unknown error";
+    console.error(
+      `Auto-publish failed for ${blog.domain} after retry:`,
+      lastError,
+    );
+    results.push({
+      blogId: blog.id,
+      domain: blog.domain,
+      preferredHour,
+      status: "failed",
+      message: catchUp ? `[catch-up] ${message}` : message,
+    });
+  }
+
+  let cursor = 0;
+  async function worker(): Promise<void> {
+    while (true) {
+      const i = cursor++;
+      if (i >= toRun.length) return;
+      await publishOne(toRun[i]);
     }
   }
+
+  console.info(
+    `[auto-publish] starting ${toRun.length} blogs with concurrency=${concurrency}`,
+  );
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, toRun.length) }, () => worker()),
+  );
 
   return {
     // When sharded, "considered" is the count this shard saw after

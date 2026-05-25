@@ -346,6 +346,20 @@ export async function getRecentNewsForVertical(
   limit = 20,
 ): Promise<NewsContextItem[]> {
   await requireAdmin();
+  return getRecentNewsForVerticalInternal(verticalKey, limit);
+}
+
+/**
+ * Internal peek — same as getRecentNewsForVertical but without the
+ * admin gate. Used by content-generator at generation time to source
+ * external-link candidates for non-peptide blog posts without
+ * affecting the "used in ideation" rotation flag.
+ */
+export async function getRecentNewsForVerticalInternal(
+  verticalKey: string | null | undefined,
+  limit = 6,
+): Promise<NewsContextItem[]> {
+  if (!verticalKey) return [];
   return db
     .select({
       id: newsItems.id,

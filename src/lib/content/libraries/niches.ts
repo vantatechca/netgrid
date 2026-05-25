@@ -184,6 +184,18 @@ export const NICHES: Record<string, NicheConfig> = {
     description: "Personal loans, mortgages, credit, debt consolidation.",
   },
 
+  gym_franchise: {
+    key: "gym_franchise",
+    name: "Gym Franchise & Memberships",
+    subNicheIds: [26],
+    voiceIds: CROSS_NICHE_VOICE_POOL,
+    useCompliancePhrases: false,
+    compliancePhraseIds: [],
+    useSubjectCanon: true,
+    description:
+      "Gym franchise openings, membership comparisons, fitness-industry coverage. Covers both the launch-pump vertical (#2 gym_openings) and the long-term subscription vertical (#3 gym_subscriptions).",
+  },
+
   // Universal fallback — used when a client's niche string doesn't match
   // any other registered key. The blog's actual niche label (e.g.
   // "gym marketing", "real estate", "dental practice") gets passed

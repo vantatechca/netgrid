@@ -30,6 +30,7 @@ import {
 import {
   takeNewsContextForVertical,
   formatNewsContextForPrompt,
+  getRecentNewsForVerticalInternal,
 } from "@/lib/actions/news-actions";
 
 const MIN_WORDS = GLOBAL_WORD_BAND_MIN;
@@ -185,6 +186,14 @@ const NICHE_CONTEXTS: Record<string, NicheContext> = {
     contentStyle: "Compare actual chains (Planet Fitness, LA Fitness, Equinox) with real prices, contract terms, and cancellation policies, distinguish big-box vs boutique vs class-based, address hidden fees honestly",
     keyTopics: ["Planet Fitness", "Equinox", "ClassPass", "CrossFit memberships", "gym contracts", "cancellation policies", "boutique fitness", "personal training costs", "gym comparison"],
   },
+  gym_franchise: {
+    label: "Gym Franchise & Memberships",
+    industry: "Fitness Franchise",
+    defaultAudience: "Prospective members, current gym-goers, fitness journalists covering openings, franchise operators",
+    defaultBrandVoice: "local fitness journalist, plain-spoken consumer advocate",
+    contentStyle: "Mix opening-day coverage (new locations, ribbon-cuttings, founder backgrounds) with membership comparison content (real prices, contract terms, hidden fees). Name specific chains by their actual local names — in Quebec that's Énergie Cardio, Éconofitness, Nautilus Plus, Buzzfit, World Gym. Distinguish franchise vs corporate vs independent. Cite Statistics Canada / IHRSA membership data when relevant.",
+    keyTopics: ["new gym opening", "franchise launch", "Énergie Cardio", "Éconofitness", "Nautilus Plus", "Buzzfit", "Planet Fitness", "membership pricing", "contract terms", "cancellation policy", "grand opening promotions", "boutique vs big-box"],
+  },
 };
 
 const DEFAULT_NICHE: NicheContext = {
@@ -277,6 +286,15 @@ export interface GenerateOptions {
    * The scrubber also runs profile-aware checks on the generated content.
    */
   styleProfile?: StyleProfile;
+  /**
+   * Vertical key (from src/lib/content/verticals/registry.ts). When set
+   * AND the niche is not peptides, the generator pulls recent news
+   * items for this vertical and instructs Claude to weave 1-3 of them
+   * in as external `<a href>` links — adds topical credibility AND
+   * outbound link signal for SEO. Peptide blogs intentionally skip
+   * external news links for compliance.
+   */
+  verticalKey?: string | null;
 }
 
 export interface GeneratedContent {
@@ -1204,6 +1222,7 @@ function getNicheRequirements(niche: string): string {
     pest_extermination: `Use correct entomological names (German vs American cockroach, Eastern vs Western subterranean termite). Reference actual products and active ingredients (fipronil in Termidor, indoxacarb in Advion). Distinguish DIY-feasible vs licensed-only treatments. Address pet and child safety explicitly. Include realistic timelines (bed bug eradication takes 2-3 treatments over 4-6 weeks).`,
     roofing: `Distinguish material types with real per-square cost ranges (asphalt $350-550, metal $900-1400, tile $1000-1800). Reference manufacturer warranties (GAF, Owens Corning, CertainTeed) honestly including pro-rated vs non-prorated terms. Address regional climate factors (snow load, hurricane straps, hail belts). Walk through insurance claim process realistically — what insurers cover vs deny.`,
     gym_subscription: `Use actual chain pricing (Planet Fitness $15/$25 tiers, Equinox $200-$300, LA Fitness ~$30). Address contract gotchas (annual fees, cancellation requirements, auto-renewal). Distinguish big-box vs boutique vs class-based models honestly. Include realistic personal training costs ($60-150/session). Address common frustrations (overcrowding, equipment availability, cancellation friction).`,
+    gym_franchise: `Name specific local franchise chains by their real names — in Quebec that's Énergie Cardio, Éconofitness, Nautilus Plus, Buzzfit, World Gym. Use real Quebec-CAD pricing tiers when discussing memberships (~$10-$30/month for budget chains, $50-$100+ for boutique). Cover both opening-day stories (founder backgrounds, ribbon-cutting dates, equipment partners) and ongoing membership content (contract terms, cancellation policies, class schedules). Distinguish franchise vs corporate vs independent operations. When local news headlines about gym openings or industry shifts are provided in the prompt, cite them as inline links — local context is the whole point of this niche.`,
   };
   return requirements[key] || "";
 }
@@ -1472,6 +1491,48 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
   //     scrubber-lite (punctuation + AI-tells, no compliance enforcement)
   const usingProfile = Boolean(opts.styleProfile);
 
+  // External-link news references — non-peptide blogs only. Pulls
+  // recent items from the news_items cache for the blog's vertical and
+  // formats them as a reference list Claude can inline as <a href>
+  // links. Peptide blogs intentionally skip outbound news links for
+  // compliance posture (we don't want to look like we're endorsing
+  // third-party clinical claims by linking to news articles about
+  // peptides).
+  const nicheNormalized = normalizeNicheKey(opts.niche);
+  const allowExternalNewsLinks =
+    nicheNormalized !== "peptides" && Boolean(opts.verticalKey);
+  let newsLinksClause = "";
+  if (allowExternalNewsLinks) {
+    try {
+      const items = await getRecentNewsForVerticalInternal(
+        opts.verticalKey ?? null,
+        6,
+      );
+      if (items.length > 0) {
+        const refList = items
+          .map((it, i) => {
+            const pub = it.publisher ? ` — ${it.publisher}` : "";
+            return `[${i + 1}] "${it.title}"${pub}\n    ${it.link}`;
+          })
+          .join("\n");
+        newsLinksClause =
+          `\n\nEXTERNAL NEWS REFERENCES (use 1-3 as inline <a href> links where they fit the topic):\n` +
+          `${refList}\n\n` +
+          `LINKING RULES:\n` +
+          `- Pick 1-3 of the above whose headline genuinely relates to a point you're making.\n` +
+          `- Use HTML <a href="URL" target="_blank" rel="noopener nofollow">descriptive anchor text</a>.\n` +
+          `- Anchor text should describe what the reader is clicking to, NOT raw URLs or "click here".\n` +
+          `- If none of the references fits naturally, do NOT force a link — quality over count.\n` +
+          `- Never include all 6; keep external link count to 3 max.`;
+      }
+    } catch (err) {
+      console.warn(
+        "[content-generator] news-links lookup failed:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
   let system: string;
   let user: string;
   let maxTokens: number;
@@ -1486,6 +1547,11 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
     });
     system = composed.systemPrompt;
     user = composed.userPrompt;
+    // Append the external-news-links clause (no-op for peptides — they
+    // skip this entirely upstream).
+    if (newsLinksClause) {
+      user = user + newsLinksClause;
+    }
     // Profile blogs may target word bands up to 3000 words. Schema C (FAQ-
     // rich) and Schema D (listicle) include extra structured arrays beyond
     // the main content, so we budget generously: ~3.0 tokens/word covers
@@ -1500,6 +1566,9 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
   } else {
     system = buildSystemPrompt(opts);
     user = buildUserPrompt(opts);
+    if (newsLinksClause) {
+      user = user + newsLinksClause;
+    }
     maxTokens = 4000;
   }
 

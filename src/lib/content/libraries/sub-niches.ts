@@ -43,12 +43,18 @@ export const SUB_NICHES: Record<SubNicheId, SubNiche> = {
   // passed through at compose time as the {sub_niche} substitution so
   // Claude still receives the topical context.
   25: { id: 25, key: "universal_general", name: "General Content", targetPct: 0, targetBlogs: 0 },
+
+  // ─── Gym Franchise (sub-niche 26) ─────────────────────────────────────────
+  // Covers both the openings/launch vertical (#2) and the long-term
+  // subscription vertical (#3). Shared sub-niche so the style profile
+  // pool is consistent across both verticals.
+  26: { id: 26, key: "gym_franchise_general", name: "Gym Franchise & Memberships", targetPct: 0, targetBlogs: 0 },
 };
 
 export const SUB_NICHE_IDS: SubNicheId[] = [
   1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
   14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-  25,
+  25, 26,
 ];
 /** Peptide-only sub-niche IDs (the original distribution). */
 export const PEPTIDE_SUB_NICHE_IDS: SubNicheId[] = [
