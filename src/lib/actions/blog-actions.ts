@@ -613,7 +613,28 @@ export async function generateBlogPost(
     return { success: false, message: "Blog not found" };
   }
 
-  // 2. Topic — explicit or ideated from recent titles
+  // 2. Load (or lazily assign) the blog's locked style profile FIRST so
+  //    it can flow into both topic ideation AND article generation.
+  //    Critical: without passing the profile into ideateTopic, every
+  //    peptide blog's first post defaulted to BPC-157 (the first item
+  //    in the generic peptides keyTopics list). The profile gives each
+  //    blog a UNIQUE primary-compounds pair to anchor on.
+  const styleProfile = await loadOrAssignStyleProfile(input.blogId);
+  if (styleProfile) {
+    console.info(
+      `[generateBlogPost] Using style profile for ${blog.domain}: ` +
+        `voice V${styleProfile.voiceId}, skeleton S${styleProfile.skeletonId}, ` +
+        `cadence ${styleProfile.cadenceId}, sub-niche ${styleProfile.subNicheId}, ` +
+        `strictness=${styleProfile.scrubberStrictness}, ` +
+        `primary=${styleProfile.primaryCompounds.join("+")}`,
+    );
+  } else {
+    console.info(
+      `[generateBlogPost] No style profile for ${blog.domain} (niche="${blog.niche ?? "none"}") — using legacy prompt path`,
+    );
+  }
+
+  // 3. Topic — explicit or ideated from recent titles + style profile
   let topic = input.topic?.trim() || "";
   let keywords = input.keywords ?? [];
 
@@ -633,7 +654,10 @@ export async function generateBlogPost(
       const idea = await ideateTopic(
         blog.niche,
         recent.map((r) => r.title).filter((t): t is string => !!t),
-        { verticalKey: vertical?.key ?? null },
+        {
+          verticalKey: vertical?.key ?? null,
+          styleProfile: styleProfile ?? undefined,
+        },
       );
       topic = idea.topic;
       if (keywords.length === 0) keywords = idea.keywords;
@@ -652,7 +676,7 @@ export async function generateBlogPost(
     return { success: false, message: "No topic provided and ideation returned empty" };
   }
 
-  // 3. Insert "generating" placeholder so the row appears in the UI immediately
+  // 4. Insert "generating" placeholder so the row appears in the UI immediately
   const [pending] = await db
     .insert(generatedPosts)
     .values({
@@ -667,25 +691,6 @@ export async function generateBlogPost(
 
   revalidatePath(`/blogs/${input.blogId}`);
   revalidatePath(`/blogs/${input.blogId}/posts`);
-
-  // 4. Generate via Claude — peptide blogs use their locked style profile
-  //    so the prompt is composed via skeleton + scrubber runs after.
-  //    If the blog was created before the style-profile system landed and
-  //    is a peptide blog, this lazily assigns one and reuses it for all
-  //    future generations.
-  const styleProfile = await loadOrAssignStyleProfile(input.blogId);
-  if (styleProfile) {
-    console.info(
-      `[generateBlogPost] Using style profile for ${blog.domain}: ` +
-        `voice V${styleProfile.voiceId}, skeleton S${styleProfile.skeletonId}, ` +
-        `cadence ${styleProfile.cadenceId}, sub-niche ${styleProfile.subNicheId}, ` +
-        `strictness=${styleProfile.scrubberStrictness}`,
-    );
-  } else {
-    console.info(
-      `[generateBlogPost] No style profile for ${blog.domain} (niche="${blog.niche ?? "none"}") — using legacy prompt path`,
-    );
-  }
 
   let result;
   try {
