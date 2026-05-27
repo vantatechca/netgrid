@@ -46,34 +46,44 @@ services:
         sync: false
 
   # ──────────────────────────────────────────────────────────────────────
-  # Cron schedules — Render interprets all schedules as UTC. The comments
-  # below show the equivalent Philippines Time (UTC+8) so operators can
-  # reason about when each job actually fires locally.
+  # SEO SCAN — once-per-month per blog.
   #
-  #   UTC → PH:  add 8 hours
-  #   PH  → UTC: subtract 8 hours
+  # The route enforces a strict once-per-month boundary in SQL: blogs
+  # scanned this calendar month are EXCLUDED from the candidate query
+  # automatically. So even though the rush cron fires hourly for 7
+  # days (168 runs), each individual blog gets exactly one scan per
+  # month. Once everyone is covered, subsequent runs return
+  # "all active blogs already scanned this month" with zero work.
+  #
+  # Capacity:
+  #   168 runs × 20 blogs = 3,360 scan slots per month
+  #   → comfortably covers a 3,000-blog network
+  #
+  # Reporting flow:
+  #   Day 25-31 — rush scans every blog once, writes lastSeoScanAt
+  #   Day 1, 09:00 PH — monthly-reports cron reads fresh per-blog
+  #                     scores into the PDF
+  #
+  # Manual catch-up: hit /api/cron/seo-scan?force=1&limit=20 to ignore
+  # the once-per-month filter (useful after onboarding new blogs
+  # mid-month).
   # ──────────────────────────────────────────────────────────────────────
 
-   # SEO scan — runs TWICE A MONTH at 02:00 PH (overnight, low-traffic).
-  # Fires at 18:00 UTC on the 1st and 15th of every month, which is
-  # 02:00 PH on the 2nd and 16th (UTC → PH adds 8 hours, rolling past
-  # midnight). Two scans/month keeps the rotation moving without
-  # burning PageSpeed quota or hammering blog hosts; the cron still
-  # rotates through the oldest-scanned blog so the network gets full
-  # coverage over time.
   - type: cron
-    name: netgrid-cron-seo-scan
+    name: netgrid-cron-seo-scan-rush
     runtime: docker
-    schedule: "0 18 1,15 * *"
+    schedule: "0 * 25-31 * *"
     dockerfilePath: ./cron/Dockerfile
     dockerContext: ./cron
     envVars:
       - key: CRON_PATH
-        value: /api/cron/seo-scan
+        value: /api/cron/seo-scan?limit=20&concurrency=5
       - key: APP_URL
         value: https://netgrid-16f6.onrender.com
       - key: CRON_SECRET
         sync: false
+      - key: CRON_MAX_TIME
+        value: "360"
 
   # Post verification — every 6h aligned to PH morning: 02 / 08 / 14 / 20 PH.
   # 02 PH = 18 UTC (prev day), 08 PH = 00 UTC, 14 PH = 06 UTC, 20 PH = 12 UTC.
