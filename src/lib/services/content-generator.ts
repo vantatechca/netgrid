@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { composeForPost } from "@/lib/content/composer/compose";
 import { runScrubber, runScrubberLite, type ScrubberReport } from "@/lib/content/scrubber";
 import type { StyleProfile } from "@/lib/content/types";
+import { SUB_NICHES } from "@/lib/content/libraries/sub-niches";
 import {
   generateBodyImage,
   generateHeroImage,
@@ -1321,12 +1322,23 @@ Begin now. Return only the JSON object.`;
 export async function ideateTopic(
   niche: string | null | undefined,
   recentTitles: string[],
-  opts: { verticalKey?: string | null } = {},
+  opts: {
+    verticalKey?: string | null;
+    /**
+     * Per-blog locked style profile. When provided, the topic ideation
+     * anchors on this blog's UNIQUE primaryCompounds and locked
+     * sub-niche instead of the niche's generic keyTopics list. Without
+     * this, every blog's first post (no recent titles) defaulted to
+     * the first compound in keyTopics (BPC-157 for peptides) — every
+     * peptide blog ended up starting with the same topic.
+     */
+    styleProfile?: StyleProfile;
+  } = {},
 ): Promise<{ topic: string; keywords: string[] }> {
   const ctx = getNicheContext(niche);
   const recentList = recentTitles.length
     ? recentTitles.slice(0, 20).map((t) => `- ${t}`).join("\n")
-    : "(none yet)";
+    : "(none yet — first post for this blog)";
 
   // Pull recent news headlines for this vertical (if registered + has
   // cached items). Cron `/api/cron/refresh-news` keeps the cache fresh
@@ -1353,13 +1365,50 @@ export async function ideateTopic(
     ? `- Tie the topic to a current news angle when one of the recent headlines fits naturally\n- Skip the news angle entirely if no headline relates to the niche`
     : "";
 
-  // When the niche is registered we get a curated keyTopics list; when it
-  // isn't (synthesized context) the list is empty — fall back to telling
-  // Claude to stay tightly within the niche label itself.
-  const focusLine =
-    ctx.keyTopics.length > 0
-      ? `- Cover the niche's key topics: ${ctx.keyTopics.join(", ")}`
-      : `- Stay tightly focused on the ${ctx.label} niche — do not drift into adjacent industries`;
+  // Profile-aware focus anchor. When a style profile is present, force
+  // the topic to center on this blog's UNIQUE primary/secondary
+  // compounds and locked sub-niche. This is what makes each peptide
+  // blog's first post unique — the random assignment algorithm gave
+  // every blog a different 2-compound primary canon, so anchoring
+  // ideation on those compounds guarantees blog-level uniqueness even
+  // when recentTitles is empty.
+  //
+  // When no profile (non-peptide blogs), fall back to the niche's
+  // generic keyTopics list.
+  let focusLine: string;
+  let profileAnchorSection = "";
+  if (opts.styleProfile) {
+    const sp = opts.styleProfile;
+    const subNiche = SUB_NICHES[sp.subNicheId];
+    const subNicheName = subNiche?.name ?? "general";
+    const primary = sp.primaryCompounds.length
+      ? sp.primaryCompounds.join(", ")
+      : "(none specified)";
+    const secondary = sp.secondaryCompounds.length
+      ? sp.secondaryCompounds.join(", ")
+      : "(none specified)";
+
+    focusLine =
+      `- Anchor the topic on ONE of THIS BLOG'S primary compounds: ${primary}\n` +
+      `- Stay strictly within the "${subNicheName}" sub-niche\n` +
+      `- Secondary compounds available for comparison/stack context: ${secondary}`;
+
+    profileAnchorSection =
+      `\n\nBLOG-SPECIFIC CANON (this blog's locked profile — DO NOT drift):\n` +
+      `  sub-niche: ${subNicheName}\n` +
+      `  primary compounds: ${primary}\n` +
+      `  secondary compounds: ${secondary}\n` +
+      `Every peptide blog in this network has a different primary-compound\n` +
+      `pair, which is what makes each site unique. The topic you suggest\n` +
+      `MUST center on one of the two primary compounds above — do not\n` +
+      `default to BPC-157 / TB-500 / semaglutide unless those are in the\n` +
+      `primary list. Picking a compound outside this canon breaks the\n` +
+      `network's per-blog distinctiveness.`;
+  } else if (ctx.keyTopics.length > 0) {
+    focusLine = `- Cover the niche's key topics: ${ctx.keyTopics.join(", ")}`;
+  } else {
+    focusLine = `- Stay tightly focused on the ${ctx.label} niche — do not drift into adjacent industries`;
+  }
 
   const system = `You generate fresh blog post topic ideas for a ${ctx.industry} niche site (${ctx.label}). Suggest topics that:
 ${focusLine}
@@ -1376,7 +1425,7 @@ Return JSON only:
     : "";
 
   const user = `Recent titles on this site (avoid duplicating these):
-${recentList}${newsSection}
+${recentList}${profileAnchorSection}${newsSection}
 
 Suggest the next post's topic.`;
 
