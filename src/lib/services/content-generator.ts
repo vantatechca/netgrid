@@ -187,12 +187,12 @@ const NICHE_CONTEXTS: Record<string, NicheContext> = {
     keyTopics: ["Planet Fitness", "Equinox", "ClassPass", "CrossFit memberships", "gym contracts", "cancellation policies", "boutique fitness", "personal training costs", "gym comparison"],
   },
   gym_franchise: {
-    label: "Gym Franchise & Memberships",
+    label: "Gym Franchise Openings & Launches",
     industry: "Fitness Franchise",
-    defaultAudience: "Prospective members, current gym-goers, fitness journalists covering openings, franchise operators",
-    defaultBrandVoice: "local fitness journalist, plain-spoken consumer advocate",
-    contentStyle: "Mix opening-day coverage (new locations, ribbon-cuttings, founder backgrounds) with membership comparison content (real prices, contract terms, hidden fees). Name specific chains by their actual local names — in Quebec that's Énergie Cardio, Éconofitness, Nautilus Plus, Buzzfit, World Gym. Distinguish franchise vs corporate vs independent. Cite Statistics Canada / IHRSA membership data when relevant.",
-    keyTopics: ["new gym opening", "franchise launch", "Énergie Cardio", "Éconofitness", "Nautilus Plus", "Buzzfit", "Planet Fitness", "membership pricing", "contract terms", "cancellation policy", "grand opening promotions", "boutique vs big-box"],
+    defaultAudience: "Local readers tracking new fitness options, prospective first-time members, fitness journalists, franchise operators",
+    defaultBrandVoice: "local fitness journalist covering opening-day stories",
+    contentStyle: "Focused on NEW gym launches and franchise openings — not ongoing membership comparisons (that's a separate niche). Cover ribbon-cutting dates, founder backgrounds, equipment partners, opening-day promotions, the franchise's local footprint. Name specific chains by their real local names — in Quebec: Énergie Cardio, Éconofitness, Nautilus Plus, Buzzfit, World Gym. Distinguish franchise vs corporate vs independent. Mention permit timing or municipal context when known.",
+    keyTopics: ["new gym opening", "franchise launch", "ribbon cutting", "grand opening promotions", "franchise owner", "Énergie Cardio", "Éconofitness", "Nautilus Plus", "Buzzfit", "World Gym", "first-month free", "equipment partner", "build-out timeline"],
   },
 };
 
@@ -1222,7 +1222,7 @@ function getNicheRequirements(niche: string): string {
     pest_extermination: `Use correct entomological names (German vs American cockroach, Eastern vs Western subterranean termite). Reference actual products and active ingredients (fipronil in Termidor, indoxacarb in Advion). Distinguish DIY-feasible vs licensed-only treatments. Address pet and child safety explicitly. Include realistic timelines (bed bug eradication takes 2-3 treatments over 4-6 weeks).`,
     roofing: `Distinguish material types with real per-square cost ranges (asphalt $350-550, metal $900-1400, tile $1000-1800). Reference manufacturer warranties (GAF, Owens Corning, CertainTeed) honestly including pro-rated vs non-prorated terms. Address regional climate factors (snow load, hurricane straps, hail belts). Walk through insurance claim process realistically — what insurers cover vs deny.`,
     gym_subscription: `Use actual chain pricing (Planet Fitness $15/$25 tiers, Equinox $200-$300, LA Fitness ~$30). Address contract gotchas (annual fees, cancellation requirements, auto-renewal). Distinguish big-box vs boutique vs class-based models honestly. Include realistic personal training costs ($60-150/session). Address common frustrations (overcrowding, equipment availability, cancellation friction).`,
-    gym_franchise: `Name specific local franchise chains by their real names — in Quebec that's Énergie Cardio, Éconofitness, Nautilus Plus, Buzzfit, World Gym. Use real Quebec-CAD pricing tiers when discussing memberships (~$10-$30/month for budget chains, $50-$100+ for boutique). Cover both opening-day stories (founder backgrounds, ribbon-cutting dates, equipment partners) and ongoing membership content (contract terms, cancellation policies, class schedules). Distinguish franchise vs corporate vs independent operations. When local news headlines about gym openings or industry shifts are provided in the prompt, cite them as inline links — local context is the whole point of this niche.`,
+    gym_franchise: `Focus on NEW gym launches and franchise openings — NOT ongoing membership comparison (that's the gym_subscription niche). Cover ribbon-cutting dates, the franchise owner's background, equipment partners, opening-day promotions (first-month-free deals, founder discounts), location-specific build-out timing, and how this opening fits the local fitness scene. Name specific local chains by their real names — in Quebec: Énergie Cardio, Éconofitness, Nautilus Plus, Buzzfit, World Gym. Distinguish franchise vs corporate vs independent operations. When local news headlines about gym openings or industry shifts are provided in the prompt, cite them as inline links — this niche lives or dies on locally relevant news context.`,
   };
   return requirements[key] || "";
 }
