@@ -13,7 +13,12 @@ export type SubNicheId =
   | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13
   | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24
   | 25  // universal — for niches not in the registry
-  | 26; // gym_franchise (#7 in the cross-niche set)
+  | 26  // gym_franchise (openings / launches — short-lifespan)
+  | 27  // roofing
+  | 28  // tax_lawyer
+  | 29  // pest_extermination
+  | 30  // charity
+  | 31; // gym_subscription (long-term membership comparisons)
 
 export type ArchetypeId =
   | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12;
