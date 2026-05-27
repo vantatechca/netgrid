@@ -352,20 +352,53 @@ async function runGenerateAndPublish(
     );
   }
 
-  // 2. Resolve topic + keywords (auto-ideate if not supplied)
+  // 2. Load (or lazily assign) the blog's locked style profile FIRST so
+  //    it can flow into both topic ideation AND article generation.
+  //    Without passing the profile into ideateTopic, every peptide
+  //    blog's first post defaulted to BPC-157 (the first item in the
+  //    generic peptides keyTopics list). The profile gives each blog a
+  //    UNIQUE primary-compounds pair to anchor on.
+  let styleProfile = await getStyleProfileForBlog(blog.id);
+  if (!styleProfile) {
+    const r = await assignProfileForBlogIfPeptides(blog.id);
+    if (r.success && r.assigned) {
+      styleProfile = await getStyleProfileForBlog(blog.id);
+    }
+  }
+  if (styleProfile) {
+    console.info(
+      `[auto-publish] Using style profile for ${blog.domain}: ` +
+        `voice V${styleProfile.voiceId}, skeleton S${styleProfile.skeletonId}, ` +
+        `cadence ${styleProfile.cadenceId}, sub-niche ${styleProfile.subNicheId}, ` +
+        `strictness=${styleProfile.scrubberStrictness}, ` +
+        `primary=${styleProfile.primaryCompounds.join("+")}`,
+    );
+  } else {
+    console.info(
+      `[auto-publish] No style profile for ${blog.domain} (niche="${clientNiche ?? "none"}") — using legacy prompt path`,
+    );
+  }
+
+  // 3. Resolve topic + keywords (auto-ideate if not supplied). Pass the
+  //    style profile so the topic anchors on this blog's unique
+  //    primary-compounds + locked sub-niche.
   let topic = input.topic?.trim();
   let keywords = input.keywords ?? [];
 
   if (!topic) {
     const recentTitles = await getRecentTitles(blog.id);
-    const ideated = await ideateTopic(clientNiche, recentTitles);
+    const vertical = verticalForNiche(clientNiche);
+    const ideated = await ideateTopic(clientNiche, recentTitles, {
+      verticalKey: vertical?.key ?? null,
+      styleProfile: styleProfile ?? undefined,
+    });
     topic = ideated.topic;
     if (keywords.length === 0) keywords = ideated.keywords;
   }
 
   if (!topic) throw new Error("Could not resolve a topic to write about");
 
-  // 3. Insert pending row to track the attempt
+  // 4. Insert pending row to track the attempt
   const [pending] = await db
     .insert(generatedPosts)
     .values({
@@ -381,32 +414,9 @@ async function runGenerateAndPublish(
   const generatedPostId = pending.id;
 
   try {
-    // 4. Generate content — pull the style profile (peptide blogs only) so
-    //    the composer uses the locked skeleton + the scrubber runs. If the
-    //    blog predates the style-profile system, lazily assign one before
-    //    generating so the first auto-publish gets the full pipeline.
-    let styleProfile = await getStyleProfileForBlog(blog.id);
-    if (!styleProfile) {
-      const r = await assignProfileForBlogIfPeptides(blog.id);
-      if (r.success && r.assigned) {
-        styleProfile = await getStyleProfileForBlog(blog.id);
-      }
-    }
-    if (styleProfile) {
-      console.info(
-        `[auto-publish] Using style profile for ${blog.domain}: ` +
-          `voice V${styleProfile.voiceId}, skeleton S${styleProfile.skeletonId}, ` +
-          `cadence ${styleProfile.cadenceId}, sub-niche ${styleProfile.subNicheId}, ` +
-          `strictness=${styleProfile.scrubberStrictness}`,
-      );
-    } else {
-      console.info(
-        `[auto-publish] No style profile for ${blog.domain} (niche="${clientNiche ?? "none"}") — using legacy prompt path`,
-      );
-    }
-
-    // Resolve vertical so the generator can pull recent news headlines
-    // as external-link sources for non-peptide posts.
+    // 5. Generate content using the style profile loaded in step 2.
+    //    Resolve vertical so the generator can pull recent news headlines
+    //    as external-link sources for non-peptide posts.
     const verticalForGen = verticalForNiche(clientNiche);
     const genOpts: GenerateOptions = {
       topic,
