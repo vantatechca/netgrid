@@ -141,13 +141,20 @@ export function ClientForm({ mode, defaultValues }: ClientFormProps) {
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="totalBlogsTarget">Total Blogs Target</Label>
+            <Label htmlFor="totalBlogsTarget">Total Posts Cap (network-wide)</Label>
             <Input
               id="totalBlogsTarget"
               type="number"
               min={0}
               {...register("totalBlogsTarget")}
             />
+            <p className="text-xs text-muted-foreground">
+              Maximum number of posts the auto-publish cron will create
+              across ALL of this client's blogs combined. Set to{" "}
+              <span className="font-medium">0</span> for no cap. When the
+              cap is reached, every blog for this client stops publishing
+              until you edit this number higher.
+            </p>
           </div>
         </CardContent>
       </Card>
