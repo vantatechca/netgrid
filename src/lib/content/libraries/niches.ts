@@ -186,14 +186,79 @@ export const NICHES: Record<string, NicheConfig> = {
 
   gym_franchise: {
     key: "gym_franchise",
-    name: "Gym Franchise & Memberships",
+    name: "Gym Franchise Openings & Launches",
     subNicheIds: [26],
     voiceIds: CROSS_NICHE_VOICE_POOL,
     useCompliancePhrases: false,
     compliancePhraseIds: [],
     useSubjectCanon: true,
+    placementHint: "TOP",
     description:
-      "Gym franchise openings, membership comparisons, fitness-industry coverage. Covers both the launch-pump vertical (#2 gym_openings) and the long-term subscription vertical (#3 gym_subscriptions).",
+      "Vertical #2 only — short-lifespan content tied to new gym launches: opening dates, ribbon-cuttings, founder backgrounds, location announcements, opening promotions. Distinct from the long-term gym_subscription niche which handles ongoing membership comparison content.",
+  },
+
+  gym_subscription: {
+    key: "gym_subscription",
+    name: "Gym Memberships & Subscriptions",
+    subNicheIds: [31],
+    voiceIds: CROSS_NICHE_VOICE_POOL,
+    useCompliancePhrases: false,
+    compliancePhraseIds: [],
+    useSubjectCanon: true,
+    description:
+      "Vertical #3 only — evergreen membership comparison content. Chain-vs-chain pricing, contract gotchas, cancellation walkthroughs, boutique vs big-box analysis. Defensible long-term content; reads more like consumer-advisor than local news. Distinct from gym_franchise which covers opening-day stories.",
+  },
+
+  roofing: {
+    key: "roofing",
+    name: "Roofing & Roof Repair",
+    subNicheIds: [27],
+    voiceIds: CROSS_NICHE_VOICE_POOL,
+    useCompliancePhrases: false,
+    compliancePhraseIds: [],
+    useSubjectCanon: true,
+    description:
+      "Roofing contractor content — material comparisons (asphalt/metal/tile), insurance claims, regional climate factors, RBQ licensing checks. More specific than generic construction; gives the prompt richer roofing-vocabulary context.",
+  },
+
+  tax_lawyer: {
+    key: "tax_lawyer",
+    name: "Tax Law & IRS Representation",
+    subNicheIds: [28],
+    voiceIds: CROSS_NICHE_VOICE_POOL,
+    // Tax law has mandatory disclaimers + bar-review posture; track
+    // those at the vertical-config level (disclaimers field) rather
+    // than wiring compliance phrases that were designed for peptides.
+    useCompliancePhrases: false,
+    compliancePhraseIds: [],
+    useSubjectCanon: true,
+    description:
+      "Tax law, IRS / Revenu Québec representation, audit defense. Highest compliance posture in the network — vertical config locks the author byline to 'Recherchiste en information juridique' and appends mandatory disclaimers.",
+  },
+
+  pest_extermination: {
+    key: "pest_extermination",
+    name: "Pest Control & Extermination",
+    subNicheIds: [29],
+    voiceIds: CROSS_NICHE_VOICE_POOL,
+    useCompliancePhrases: false,
+    compliancePhraseIds: [],
+    useSubjectCanon: true,
+    description:
+      "Residential and commercial pest control — PMRA-registered products, seasonal pest cycles, DIY vs professional treatment, identification guides. Pest-specific terminology + label-rate compliance.",
+  },
+
+  charity: {
+    key: "charity",
+    name: "Charity & Nonprofit Operations",
+    subNicheIds: [30],
+    voiceIds: CROSS_NICHE_VOICE_POOL,
+    useCompliancePhrases: false,
+    compliancePhraseIds: [],
+    useSubjectCanon: true,
+    placementHint: "BOTTOM",
+    description:
+      "Charity operations, fundraising, donor stewardship, news-cycle advocacy. Two parallel editorial tracks (charity-branded news + independent advocacy w/ CASL disclosure) are configured at the vertical level.",
   },
 
   // Universal fallback — used when a client's niche string doesn't match
