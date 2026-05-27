@@ -186,6 +186,58 @@ export const COMPOUND_CANON: Record<SubNicheId, CompoundCanonEntry> = {
     primary: ["franchise openings", "membership pricing", "member retention", "gym equipment", "personal training"],
     adjacent: ["franchise fees", "lease negotiation", "class programming", "member acquisition", "churn reduction"],
   },
+
+  // 27 - Roofing & Roof Repair
+  // Materials, repair vs replacement decisions, insurance claims, RBQ
+  // licensing, regional climate damage patterns.
+  27: {
+    subNiche: 27,
+    mode: "primary",
+    primary: ["asphalt shingles", "metal roofing", "tile roofing", "flat roof", "ice damming"],
+    adjacent: ["roof inspection", "hail damage", "insurance claim", "RBQ licensing", "ventilation"],
+  },
+
+  // 28 - Tax Law & IRS Representation
+  // Audit defense, debt settlement, compliance — both US (IRS) and
+  // Quebec (Revenu Québec, ARC) angles. Vertical config locks the
+  // byline to a research role + appends disclaimers.
+  28: {
+    subNiche: 28,
+    mode: "primary",
+    primary: ["tax audit", "offer in compromise", "installment agreement", "Revenu Québec assessment", "tax court"],
+    adjacent: ["FBAR", "innocent spouse relief", "wage garnishment", "credits and deductions", "CRA review"],
+  },
+
+  // 29 - Pest Control & Extermination
+  // Residential and commercial pest control. Includes named species,
+  // PMRA / EPA registered treatments, seasonal patterns.
+  29: {
+    subNiche: 29,
+    mode: "primary",
+    primary: ["bed bugs", "cockroaches", "termites", "rodents", "ants"],
+    adjacent: ["wasps and hornets", "ticks", "spiders", "integrated pest management", "PMRA registry"],
+  },
+
+  // 30 - Charity & Nonprofit Operations
+  // Fundraising, governance, donor stewardship, news-cycle advocacy.
+  // Two parallel editorial tracks at the vertical level.
+  30: {
+    subNiche: 30,
+    mode: "primary",
+    primary: ["fundraising campaigns", "donor retention", "grant writing", "501(c)(3) compliance", "T3010 filings"],
+    adjacent: ["Giving Tuesday", "capital campaigns", "board governance", "volunteer management", "advocacy"],
+  },
+
+  // 31 - Gym Subscription / Long-term Membership
+  // Vertical #3 only. Distinct from sub-niche 26 (openings) — this is
+  // for ongoing membership content: which chain is cheapest, contract
+  // gotchas, comparison content, cancellation walkthroughs.
+  31: {
+    subNiche: 31,
+    mode: "primary",
+    primary: ["membership pricing", "contract terms", "cancellation policy", "annual fees", "auto-renewal"],
+    adjacent: ["personal training cost", "class pass models", "boutique vs big-box", "freeze and pause options", "couple and family plans"],
+  },
 };
 
 /**
