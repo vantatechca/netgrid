@@ -156,14 +156,9 @@ function shardForBlog(blogId: string, shardCount: number): number {
   return parseInt(hex, 16) % shardCount;
 }
 
-/**
- * Reason a blog is or isn't due. `catchUp` flags blogs that missed
- * their last expected post date — these get queue priority AND bypass
- * the currentHour < preferredHour gate so they don't sit idle waiting
- * for their slot.
- */
+/** Reason a blog is or isn't due. */
 type DueDecision =
-  | { due: true; catchUp?: boolean; expectedAt?: Date }
+  | { due: true }
   | { due: false; reason: string };
 
 /**
@@ -191,42 +186,10 @@ function formatWeekdayList(days: number[]): string {
   return days.map((d) => WEEKDAY_NAMES[d - 1] ?? `?${d}`).join(", ");
 }
 
-/**
- * Days since a blog's last verified post. Returns Infinity when the
- * blog has never posted (catch-up should fire immediately for new
- * blogs whose first scheduled day has already passed).
- */
-function daysSinceLastPost(
-  lastPostVerifiedAt: Date | null | undefined,
-  now: Date,
-): number {
-  if (!lastPostVerifiedAt) return Number.POSITIVE_INFINITY;
-  const ms = now.getTime() - lastPostVerifiedAt.getTime();
-  return ms / (24 * 60 * 60 * 1000);
-}
-
-/**
- * Compute the expected gap (in days) between consecutive posts based on
- * the weekday cadence. e.g. [2,5] → average gap ~3.5d. We use the MAX
- * gap as the "behind" threshold so a Tue+Fri blog is only "behind" if
- * 4+ days have passed since the last post (the Tue→Fri gap is 3 days,
- * Fri→Tue is 4 days).
- */
-function maxGapDaysForWeekdays(days: number[]): number {
-  if (days.length === 0) return 7;
-  if (days.length === 1) return 7; // posts once a week → 7-day gap
-  const sorted = Array.from(new Set(days)).sort((a, b) => a - b);
-  let maxGap = 0;
-  for (let i = 0; i < sorted.length; i++) {
-    const next = sorted[(i + 1) % sorted.length];
-    const gap =
-      i === sorted.length - 1
-        ? 7 - sorted[i] + next // wrap to next week
-        : next - sorted[i];
-    if (gap > maxGap) maxGap = gap;
-  }
-  return maxGap;
-}
+// daysSinceLastPost + maxGapDaysForWeekdays were used by the catch-up
+// path that bypassed the day filter when a blog missed its scheduled
+// day. Removed — the platform now enforces a strict day-only policy:
+// the only way a blog publishes is if today is in its configured days.
 
 function isBlogDueForPost(
   blog: typeof blogs.$inferSelect,
@@ -237,8 +200,17 @@ function isBlogDueForPost(
   const hour = 1000 * 60 * 60;
 
   const postsPerDay = parsePostsPerDay(blog.postingFrequency);
+  const configuredDays = Array.isArray(blog.postingFrequencyDays)
+    ? blog.postingFrequencyDays
+    : null;
+  const hasDayFilter = configuredDays !== null && configuredDays.length > 0;
 
-  if (postsPerDay !== null) {
+  // PRIORITY: when posting_frequency_days is set, it is THE day filter.
+  // The legacy posting_frequency field (parsed by parsePostsPerDay) only
+  // owns the schedule when posting_frequency_days is empty. This stops
+  // legacy/CSV data with posting_frequency="1" or "2x per day" from
+  // bypassing the weekday picker the operator configured in the form.
+  if (postsPerDay !== null && !hasDayFilter) {
     if (todaysPublishedCount >= postsPerDay) {
       return {
         due: false,
@@ -258,18 +230,23 @@ function isBlogDueForPost(
   }
 
   // postingFrequencyDays is an integer[] of ISO weekdays (e.g. [2,5] = Tue/Fri).
-  // Semantics: "publish on these specific weekdays" — once per configured day.
-  // Catch-up mode: if the blog is past its expected next-post date,
-  // publish today even if today isn't a normally-configured weekday.
-  const configuredDays = Array.isArray(blog.postingFrequencyDays)
-    ? blog.postingFrequencyDays
-    : null;
-  if (configuredDays && configuredDays.length > 0) {
+  // Semantics: strict day-only — the blog publishes only when today
+  // matches one of the configured weekdays. No catch-up, no bypass,
+  // no exceptions. If a scheduled day is missed (cron outage, paused
+  // blog, etc.) the blog simply waits for the next matching weekday.
+  if (hasDayFilter && configuredDays) {
     const today = isoWeekdayUtc(now);
-    const todayConfigured = configuredDays.includes(today);
 
-    // 1. Already posted today? Block re-publish regardless of catch-up
-    //    mode — never double-post on the same day.
+    // 1. Strict day filter. Today MUST be a configured weekday.
+    if (!configuredDays.includes(today)) {
+      return {
+        due: false,
+        reason: `today is ${WEEKDAY_NAMES[today - 1]}; configured days are [${formatWeekdayList(configuredDays)}]`,
+      };
+    }
+
+    // 2. Already posted today? Block re-publish — one post per
+    //    configured day.
     if (todaysPublishedCount > 0) {
       return {
         due: false,
@@ -277,27 +254,9 @@ function isBlogDueForPost(
       };
     }
 
-    // 2. Behind-schedule check. A blog is "behind" if the days-since-last-
-    //    post exceeds the longest cadence gap. E.g. a Tue+Fri blog is
-    //    behind after 4+ days; a Tue-only blog after 7+ days. New blogs
-    //    (no last post yet) are always behind on their first eligible day.
-    const maxGap = maxGapDaysForWeekdays(configuredDays);
-    const daysBehind = daysSinceLastPost(last, now);
-    const isCatchUp = daysBehind > maxGap;
-
-    // 3. If today isn't a configured weekday AND we're not in catch-up
-    //    mode, defer to the next configured day. Catch-up blogs ignore
-    //    this and publish today.
-    if (!todayConfigured && !isCatchUp) {
-      return {
-        due: false,
-        reason: `today is ${WEEKDAY_NAMES[today - 1]}; configured days are [${formatWeekdayList(configuredDays)}]`,
-      };
-    }
-
-    // 4. Safety floor against rapid-fire posts (cron poke / manual
-    //    trigger races). Same window for catch-up; we just need to make
-    //    sure we never publish twice within 6 hours.
+    // 3. Safety floor against rapid-fire posts (cron poke / manual
+    //    trigger races). Never publish twice within 6 hours, even on
+    //    consecutive configured days.
     if (last) {
       const hoursSince = (now.getTime() - last.getTime()) / hour;
       if (hoursSince < MIN_HOURS_BETWEEN_POSTS) {
@@ -308,7 +267,7 @@ function isBlogDueForPost(
       }
     }
 
-    return { due: true, catchUp: isCatchUp };
+    return { due: true };
   }
 
   return {
@@ -691,7 +650,6 @@ export async function runAutoPublishCron(
     preferredHour: number;
     todayCount: number;
     clientCount: number;
-    catchUp: boolean;
   }
   const queue: QueueEntry[] = [];
   const results: AutoPublishResult["results"] = [];
@@ -726,7 +684,7 @@ export async function runAutoPublishCron(
         domain: blog.domain,
         preferredHour,
         status: "skipped",
-        message: `client cap hit (${clientCount}/${clientTarget} total posts)`,
+        message: `client total-posts cap hit (${clientCount}/${clientTarget}) — increase clients.totalBlogsTarget to resume`,
       });
       continue;
     }
@@ -744,20 +702,16 @@ export async function runAutoPublishCron(
       });
       continue;
     }
-    const catchUp = decision.catchUp === true;
 
     // 3c. Time-of-day slot. Wait until the cron sees the blog's preferred
     //     hour or later. Blocks before-hours publishes; once hour is
     //     reached, the blog is eligible for the rest of the day.
     //
-    //     EXCEPTIONS that bypass the slot check:
-    //     - Brand-new blogs (lastPostVerifiedAt is null) shouldn't have
-    //       to wait up to 23h for their first post.
-    //     - Catch-up blogs (missed their last expected post day) need
-    //       to publish AS SOON AS the cron sees them — making them wait
-    //       for an arbitrary preferred-hour slot keeps them in "behind"
-    //       state for longer.
-    if (blog.lastPostVerifiedAt && !catchUp && currentHour < preferredHour) {
+    //     EXCEPTION: brand-new blogs (lastPostVerifiedAt is null)
+    //     bypass the slot check on their first eligible weekday so
+    //     they don't sit idle for up to 23h waiting for their slot.
+    //     From the second post onward the slot applies normally.
+    if (blog.lastPostVerifiedAt && currentHour < preferredHour) {
       skipped++;
       results.push({
         blogId: blog.id,
@@ -788,30 +742,23 @@ export async function runAutoPublishCron(
       preferredHour,
       todayCount,
       clientCount,
-      catchUp,
     });
   }
 
   // 4. Sort + apply per-run cap.
   //
   //    Sort priority:
-  //      a. catchUp=true blogs first (these missed their last expected
-  //         post day; getting them out NOW is the whole point of
-  //         catch-up mode).
-  //      b. Then by lastPostVerifiedAt ASC NULLS FIRST — oldest-waiting
-  //         blogs jump the line over freshly-posted ones.
-  //      c. Tie-break by blog UUID for stable ordering.
+  //      a. lastPostVerifiedAt ASC NULLS FIRST — oldest-waiting
+  //         blogs (and brand-new blogs with null) jump the line over
+  //         freshly-posted ones.
+  //      b. Tie-break by blog UUID for stable ordering.
   //
   //    Anything beyond MAX_BLOGS_PER_CRON_RUN is "deferred" — those
   //    blogs become eligible again on the next cron tick.
   queue.sort((a, b) => {
-    // catch-up first
-    if (a.catchUp !== b.catchUp) return a.catchUp ? -1 : 1;
-    // oldest-waiting first (null = never posted → goes first)
     const aLast = a.blog.lastPostVerifiedAt?.getTime() ?? 0;
     const bLast = b.blog.lastPostVerifiedAt?.getTime() ?? 0;
     if (aLast !== bLast) return aLast - bLast;
-    // stable ordering
     return a.blog.id.localeCompare(b.blog.id);
   });
   const toRun = queue.slice(0, MAX_BLOGS_PER_CRON_RUN);
@@ -870,7 +817,7 @@ export async function runAutoPublishCron(
   );
 
   async function publishOne(entry: QueueEntry): Promise<void> {
-    const { blog, todayCount, clientCount, preferredHour, catchUp } = entry;
+    const { blog, todayCount, clientCount, preferredHour } = entry;
     let lastError: unknown = null;
 
     // Up to 2 attempts. Sleep 8s between them so a transient Anthropic
@@ -886,15 +833,12 @@ export async function runAutoPublishCron(
           blogId: blog.id,
           isAutoGenerated: true,
         });
-        const message = catchUp
-          ? `[catch-up] ${result.message}`
-          : result.message;
         results.push({
           blogId: blog.id,
           domain: blog.domain,
           preferredHour,
           status: result.status,
-          message,
+          message: result.message,
         });
         if (result.status === "published") {
           published++;
@@ -935,7 +879,7 @@ export async function runAutoPublishCron(
       domain: blog.domain,
       preferredHour,
       status: "failed",
-      message: catchUp ? `[catch-up] ${message}` : message,
+      message,
     });
   }
 
