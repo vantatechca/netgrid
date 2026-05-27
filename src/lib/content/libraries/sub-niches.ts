@@ -45,16 +45,48 @@ export const SUB_NICHES: Record<SubNicheId, SubNiche> = {
   25: { id: 25, key: "universal_general", name: "General Content", targetPct: 0, targetBlogs: 0 },
 
   // ─── Gym Franchise (sub-niche 26) ─────────────────────────────────────────
-  // Covers both the openings/launch vertical (#2) and the long-term
-  // subscription vertical (#3). Shared sub-niche so the style profile
-  // pool is consistent across both verticals.
-  26: { id: 26, key: "gym_franchise_general", name: "Gym Franchise & Memberships", targetPct: 0, targetBlogs: 0 },
+  // Vertical #2 only — gym OPENINGS and franchise launches. Short-
+  // lifespan pump-and-dump content tied to specific ribbon-cutting
+  // events, founder backgrounds, location announcements.
+  // Vertical #3 (long-term subscriptions) uses sub-niche 31 instead.
+  26: { id: 26, key: "gym_franchise_general", name: "Gym Franchise Openings & Launches", targetPct: 0, targetBlogs: 0 },
+
+  // ─── Roofing (sub-niche 27) ───────────────────────────────────────────────
+  // Roofing contractor / replacement / repair content. Distinct from
+  // generic "construction" — covers asphalt vs metal vs tile, insurance
+  // claims, hail damage, regional climate factors.
+  27: { id: 27, key: "roofing_general", name: "Roofing & Roof Repair", targetPct: 0, targetBlogs: 0 },
+
+  // ─── Tax Law (sub-niche 28) ───────────────────────────────────────────────
+  // Tax law / IRS representation / Revenu Québec content. Highest
+  // compliance posture in the network — strict author byline + mandatory
+  // disclaimers per the vertical config.
+  28: { id: 28, key: "tax_lawyer_general", name: "Tax Law & IRS Representation", targetPct: 0, targetBlogs: 0, defaultStrictness: "strict" },
+
+  // ─── Pest Extermination (sub-niche 29) ────────────────────────────────────
+  // Residential + commercial pest control. PMRA / EPA registered
+  // products, seasonal pest cycles, DIY vs professional treatment.
+  29: { id: 29, key: "pest_extermination_general", name: "Pest Control & Extermination", targetPct: 0, targetBlogs: 0 },
+
+  // ─── Charity & Nonprofit (sub-niche 30) ───────────────────────────────────
+  // Charity operations, fundraising, donor stewardship, news-cycle
+  // advocacy. Two parallel editorial tracks (branded + independent
+  // advocacy) handled via the vertical config's contentTracks.
+  30: { id: 30, key: "charity_general", name: "Charity & Nonprofit Operations", targetPct: 0, targetBlogs: 0 },
+
+  // ─── Gym Subscription (sub-niche 31) ──────────────────────────────────────
+  // Vertical #3 only — long-term, evergreen membership comparison
+  // content. Chain-vs-chain pricing, contract terms, cancellation
+  // policies, boutique vs big-box analysis. Lives in parallel with
+  // sub-niche 26 (gym openings) so the two verticals get genuinely
+  // different style profiles + topic angles.
+  31: { id: 31, key: "gym_subscription_general", name: "Gym Memberships & Subscriptions", targetPct: 0, targetBlogs: 0 },
 };
 
 export const SUB_NICHE_IDS: SubNicheId[] = [
   1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
   14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-  25, 26,
+  25, 26, 27, 28, 29, 30, 31,
 ];
 /** Peptide-only sub-niche IDs (the original distribution). */
 export const PEPTIDE_SUB_NICHE_IDS: SubNicheId[] = [
