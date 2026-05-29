@@ -195,8 +195,16 @@ function isBlogDueForPost(
   blog: typeof blogs.$inferSelect,
   todaysPublishedCount: number,
   now: Date = new Date(),
+  // The blog's REAL last-publish time, sourced from
+  // MAX(generated_posts.published_at WHERE status='published').
+  // CRITICAL: do NOT use blog.lastPostVerifiedAt here — that field is
+  // reset every 6h by the post-verification cron whenever it confirms
+  // live posts, which would make the safety floor think the blog just
+  // posted and skip it forever. Only an actual publish through our
+  // system advances this timestamp.
+  lastPublishedAt: Date | null = null,
 ): DueDecision {
-  const last = blog.lastPostVerifiedAt;
+  const last = lastPublishedAt;
   const hour = 1000 * 60 * 60;
 
   const postsPerDay = parsePostsPerDay(blog.postingFrequency);
@@ -642,6 +650,26 @@ export async function runAutoPublishCron(
     .groupBy(generatedPosts.blogId);
   const publishedTodayByBlog = new Map(blogCountsToday.map((r) => [r.blogId, r.n]));
 
+  // Per-blog REAL last-publish timestamp = MAX(published_at) over our own
+  // published posts. This is the source of truth for the safety floor and
+  // the "brand-new blog" check — NOT blogs.lastPostVerifiedAt, which the
+  // post-verification cron resets every 6h (and would otherwise make the
+  // safety floor permanently skip blogs that haven't actually re-posted).
+  const lastPublishedRows = await db
+    .select({
+      blogId: generatedPosts.blogId,
+      lastPublishedAt: sql<Date | null>`max(${generatedPosts.publishedAt})`,
+    })
+    .from(generatedPosts)
+    .where(eq(generatedPosts.status, "published"))
+    .groupBy(generatedPosts.blogId);
+  const lastPublishedByBlog = new Map(
+    lastPublishedRows.map((r) => [
+      r.blogId,
+      r.lastPublishedAt ? new Date(r.lastPublishedAt) : null,
+    ]),
+  );
+
   // 3. Determine eligibility for each blog. Build the run queue + the
   //    skip list in one pass so the final result reports both.
   interface QueueEntry {
@@ -650,6 +678,7 @@ export async function runAutoPublishCron(
     preferredHour: number;
     todayCount: number;
     clientCount: number;
+    lastPublishedAt: Date | null;
   }
   const queue: QueueEntry[] = [];
   const results: AutoPublishResult["results"] = [];
@@ -675,6 +704,10 @@ export async function runAutoPublishCron(
     const preferredHour = preferredHourForBlog(blog.id);
     const todayCount = publishedTodayByBlog.get(blog.id) ?? 0;
     const clientCount = publishedByClient.get(blog.clientId) ?? 0;
+    // Real last-publish time from OUR publish history (not the
+    // verification timestamp). null = we have never published to this
+    // blog through the system.
+    const lastPublishedAt = lastPublishedByBlog.get(blog.id) ?? null;
 
     // 3a. Client total cap
     if (clientTarget && clientTarget > 0 && clientCount >= clientTarget) {
@@ -690,7 +723,7 @@ export async function runAutoPublishCron(
     }
 
     // 3b. Cadence (weekday + daily-cap + min hours)
-    const decision = isBlogDueForPost(blog, todayCount, now);
+    const decision = isBlogDueForPost(blog, todayCount, now, lastPublishedAt);
     if (!decision.due) {
       skipped++;
       results.push({
@@ -707,11 +740,13 @@ export async function runAutoPublishCron(
     //     hour or later. Blocks before-hours publishes; once hour is
     //     reached, the blog is eligible for the rest of the day.
     //
-    //     EXCEPTION: brand-new blogs (lastPostVerifiedAt is null)
-    //     bypass the slot check on their first eligible weekday so
-    //     they don't sit idle for up to 23h waiting for their slot.
-    //     From the second post onward the slot applies normally.
-    if (blog.lastPostVerifiedAt && currentHour < preferredHour) {
+    //     EXCEPTION: brand-new blogs (never published through our system)
+    //     bypass the slot check on their first eligible weekday so they
+    //     don't sit idle for up to 23h waiting for their slot. We use
+    //     OUR publish history (lastPublishedAt), NOT lastPostVerifiedAt,
+    //     so a blog with pre-existing live posts that the verification
+    //     cron stamped still counts as new to the auto-publisher.
+    if (lastPublishedAt && currentHour < preferredHour) {
       skipped++;
       results.push({
         blogId: blog.id,
@@ -742,6 +777,7 @@ export async function runAutoPublishCron(
       preferredHour,
       todayCount,
       clientCount,
+      lastPublishedAt,
     });
   }
 
@@ -756,8 +792,10 @@ export async function runAutoPublishCron(
   //    Anything beyond MAX_BLOGS_PER_CRON_RUN is "deferred" — those
   //    blogs become eligible again on the next cron tick.
   queue.sort((a, b) => {
-    const aLast = a.blog.lastPostVerifiedAt?.getTime() ?? 0;
-    const bLast = b.blog.lastPostVerifiedAt?.getTime() ?? 0;
+    // Oldest real-publish first (null = never published → goes first).
+    // Uses our publish history, not the verification timestamp.
+    const aLast = a.lastPublishedAt?.getTime() ?? 0;
+    const bLast = b.lastPublishedAt?.getTime() ?? 0;
     if (aLast !== bLast) return aLast - bLast;
     return a.blog.id.localeCompare(b.blog.id);
   });
@@ -781,7 +819,7 @@ export async function runAutoPublishCron(
       `[auto-publish] run order: ${toRun
         .map(
           (e, i) =>
-            `${i + 1}. ${e.blog.domain} (slot=${e.preferredHour}h, lastPost=${e.blog.lastPostVerifiedAt?.toISOString() ?? "never"})`,
+            `${i + 1}. ${e.blog.domain} (slot=${e.preferredHour}h, lastPublished=${e.lastPublishedAt?.toISOString() ?? "never"})`,
         )
         .join(" | ")}`,
     );
