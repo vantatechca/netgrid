@@ -53,6 +53,14 @@ import {
 const MIN_WORDS = GLOBAL_WORD_BAND_MIN;
 const MAX_WORDS = GLOBAL_WORD_BAND_MAX;
 
+// Appended to the user prompt on a regeneration retry when the first
+// response came back without a usable "content" field (e.g. the model
+// returned {title, deck} where "deck" is a short French chapô/standfirst
+// instead of the article body). Pushes the model back onto the schema.
+const SHAPE_RETRY_REMINDER = `
+
+IMPORTANT — your previous response was REJECTED because it did not contain a usable "content" field. Return a JSON object whose "content" field holds the FULL HTML article body (every section, ${MIN_WORDS}+ words) as a single string. Do NOT put a "deck", "chapô", "subtitle", "standfirst", "summary", or "description" in place of "content". "content" is mandatory and must be the complete article — not a short blurb.`;
+
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // ─── Niche contexts ─────────────────────────────────────────────────────────
@@ -1022,6 +1030,7 @@ async function callClaudeOnce(
 - Respond with valid JSON only. Start with { and end with }.
 - No markdown code fences. No \`\`\`json blocks. No prose before or after.
 - Top-level keys MUST be exactly the names the schema specifies (e.g. "title", "content"). Do NOT wrap the response in another object like {"article": {...}}. Do NOT rename "content" to "html", "body", or "article_html".
+- NEVER replace "content" with a "deck", "chapô"/"chapo", "subtitle", "standfirst", "summary", "description", or "excerpt" field. "content" is REQUIRED and MUST be the FULL HTML article body (every section), not a short blurb or sub-headline.
 - The article body MUST be a single HTML string in the "content" field. Do NOT split it into multiple fields like "intro" + "items", "sections", "paragraphs", "body" + "conclusion". Build one HTML string and put it in "content".
 - "content" is a STRING, not an array or object.
 - When emitting HTML inside a string value, ESCAPE every double quote inside HTML attributes as a backslash-quote pair. Example:
@@ -1824,40 +1833,67 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
     maxTokens = 4000;
   }
 
-  // 1. Generate. Cache the system prompt ONLY on the non-profile path —
-  // its system prompt is stable per niche/config, so same-vertical posts
-  // generated within the ~5-min cache window bill the shared prefix at
-  // 0.1x. The profile path bakes a unique topic + topic-seeded template
-  // into the system prompt, so caching it would be an all-write, no-read
-  // 1.25x penalty — left off deliberately.
-  const {
-    text,
-    inputTokens: genInput,
-    outputTokens: genOutput,
-    costUsd: genCostUsd,
-  } = await callClaude(system, user, {
-    maxTokens,
-    temperature: 0.7,
-    expectJson: true,
-    cacheSystem: !usingProfile,
-  });
+  // 1. Generate — with ONE regeneration retry on JSON-shape drift. The
+  //    model occasionally returns valid JSON that omits "content" entirely
+  //    (e.g. {title, deck} where "deck" is a short French chapô, not the
+  //    body). There's nothing to reconstruct from, but shape drift is
+  //    intermittent — a clean regeneration with a stricter reminder almost
+  //    always returns proper content. Costs/tokens accumulate across both
+  //    attempts so reporting stays accurate.
+  //
+  //    Cache the system prompt ONLY on the non-profile path — its system
+  //    prompt is stable per niche/config, so same-vertical posts generated
+  //    within the ~5-min cache window bill the shared prefix at 0.1x. The
+  //    profile path bakes a unique topic + topic-seeded template into the
+  //    system prompt, so caching it would be an all-write, no-read 1.25x
+  //    penalty — left off deliberately.
+  const MAX_SHAPE_RETRIES = 1;
+  let parsed: Partial<GeneratedContent> = {};
+  let genInput = 0;
+  let genOutput = 0;
+  let genCostUsd = 0;
 
-  // 2. Parse — safeParseClaudeJson tries direct then repaired (handles
-  //    trailing commas, unescaped newlines in content fields, smart quotes,
-  //    HTML-attribute stray quotes, truncation).
-  let parsed: Partial<GeneratedContent>;
-  try {
-    parsed = safeParseClaudeJson<Partial<GeneratedContent>>(text);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "parse error";
-    throw new Error(`Claude returned invalid JSON: ${msg}`);
+  for (let shapeAttempt = 0; shapeAttempt <= MAX_SHAPE_RETRIES; shapeAttempt++) {
+    const userMessage =
+      shapeAttempt === 0 ? user : user + SHAPE_RETRY_REMINDER;
+
+    const gen = await callClaude(system, userMessage, {
+      maxTokens,
+      temperature: 0.7,
+      expectJson: true,
+      cacheSystem: !usingProfile,
+    });
+    genInput += gen.inputTokens;
+    genOutput += gen.outputTokens;
+    genCostUsd += gen.costUsd;
+
+    // 2. Parse — safeParseClaudeJson tries direct then repaired (handles
+    //    trailing commas, unescaped newlines in content fields, smart
+    //    quotes, HTML-attribute stray quotes, truncation).
+    let candidate: Partial<GeneratedContent>;
+    try {
+      candidate = safeParseClaudeJson<Partial<GeneratedContent>>(gen.text);
+    } catch (err) {
+      if (shapeAttempt < MAX_SHAPE_RETRIES) continue; // retry a fresh generation
+      const msg = err instanceof Error ? err.message : "parse error";
+      throw new Error(`Claude returned invalid JSON: ${msg}`);
+    }
+
+    // Field-name fallback: Claude occasionally returns the article wrapped
+    // in another object ({"article": {...}}) or uses alternate field names
+    // ("html" / "body" / "article_html" instead of "content"; "headline" /
+    // "post_title" instead of "title"). Unwrap and remap before failing.
+    parsed = normalizeArticleShape(candidate);
+
+    if (parsed.title && parsed.content) break; // good shape — done
+
+    // Shape drift (missing content) — regenerate if we still have budget.
+    if (shapeAttempt < MAX_SHAPE_RETRIES) {
+      console.warn(
+        `[content-generator] response missing content (keys: ${Object.keys(parsed).join(", ") || "(empty)"}) — regenerating with stricter reminder`,
+      );
+    }
   }
-
-  // Field-name fallback: Claude occasionally returns the article wrapped
-  // in another object ({"article": {...}}) or uses alternate field names
-  // ("html" / "body" / "article_html" instead of "content"; "headline" /
-  // "post_title" instead of "title"). Unwrap and remap before failing.
-  parsed = normalizeArticleShape(parsed);
 
   if (!parsed.title || !parsed.content) {
     const keys = Object.keys(parsed).join(", ") || "(empty)";
