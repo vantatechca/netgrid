@@ -13,6 +13,7 @@ import {
 import {
   generateContent,
   ideateTopic,
+  resolvePostLanguage,
   type GenerateOptions,
   type Tone,
 } from "@/lib/services/content-generator";
@@ -634,6 +635,12 @@ export async function generateBlogPost(
     );
   }
 
+  // Resolve the vertical + post language ONCE so topic ideation and
+  // article generation are in the SAME language. For bilingual (en_fr)
+  // verticals this coin-flips to one concrete language for this post.
+  const verticalForPost = verticalForNiche(blog.niche);
+  const postLanguage = resolvePostLanguage(verticalForPost?.language);
+
   // 3. Topic — explicit or ideated from recent titles + style profile
   let topic = input.topic?.trim() || "";
   let keywords = input.keywords ?? [];
@@ -647,16 +654,13 @@ export async function generateBlogPost(
       .limit(20);
 
     try {
-      // Resolve a vertical for news-aware ideation (optional — falls back
-      // to cold-start ideation when the blog's niche doesn't map to a
-      // registered vertical).
-      const vertical = verticalForNiche(blog.niche);
       const idea = await ideateTopic(
         blog.niche,
         recent.map((r) => r.title).filter((t): t is string => !!t),
         {
-          verticalKey: vertical?.key ?? null,
+          verticalKey: verticalForPost?.key ?? null,
           styleProfile: styleProfile ?? undefined,
+          language: postLanguage,
         },
       );
       topic = idea.topic;
@@ -696,7 +700,6 @@ export async function generateBlogPost(
   try {
     // Resolve the blog's vertical so the generator can pull recent
     // news headlines as external-link sources for non-peptide posts.
-    const verticalForGen = verticalForNiche(blog.niche);
     const opts: GenerateOptions = {
       topic,
       keywords,
@@ -707,7 +710,9 @@ export async function generateBlogPost(
       targetAudience: input.targetAudience,
       seoOptimized: input.seoOptimized ?? true,
       styleProfile: styleProfile ?? undefined,
-      verticalKey: verticalForGen?.key ?? null,
+      verticalKey: verticalForPost?.key ?? null,
+      // Concrete language resolved once above (matches the topic's language).
+      language: postLanguage,
     };
     result = await generateContent(opts);
   } catch (err) {
