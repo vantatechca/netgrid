@@ -201,17 +201,13 @@ services:
       - key: CRON_MAX_TIME
         value: "660"
 
-  # News refresh: pull recent headlines from Google News + NewsAPI for
-  # every vertical, dedup by link, prune items older than 30 days. Twice
-  # a week keeps the cache fresh without burning quota on idle days.
-  #
-  # Schedule: 06:00 PH every Tuesday + Friday.
-  # 06:00 PH Tue = 22:00 UTC Mon. 06:00 PH Fri = 22:00 UTC Thu.
-  # ISO weekday in cron: 1=Mon, 4=Thu → "0 22 * * 1,4".
+  # Schedule: 06:00 PH every Tuesday.
+  # 06:00 PH Tue = 22:00 UTC Mon.
+  # ISO weekday in cron: 1=Mon → "0 22 * * 1".
   - type: cron
     name: netgrid-cron-refresh-news
     runtime: docker
-    schedule: "0 22 * * 1,4"
+    schedule: "0 22 * * 1"
     dockerfilePath: ./cron/Dockerfile
     dockerContext: ./cron
     envVars:
