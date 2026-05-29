@@ -36,6 +36,52 @@ function maxDaysBetweenPosts(blog: BlogRow): number {
   return Math.ceil(7 / epw) + 1;
 }
 
+/**
+ * Decide whether a blog is "on schedule" (true) or "behind" (false).
+ *
+ *   maxGap === 0  → no schedule configured → always on time.
+ *
+ *   NEW-BLOG GRACE (checked FIRST, before any live-post logic):
+ *     If WE added this blog within one cadence window (createdAt age
+ *     <= maxGap), it's "on schedule" regardless of the live site's
+ *     post state. We haven't had a chance to publish on our cadence
+ *     yet. This covers two cases:
+ *       (a) a fresh blog with no posts at all, and
+ *       (b) a fresh blog on a store that already had an OLD post
+ *           (e.g. a Shopify article from weeks ago) — that pre-
+ *           existing content shouldn't make a just-onboarded blog
+ *           look behind.
+ *
+ *   Past the grace window, judge by the latest LIVE post:
+ *     daysSinceLastPost === null  → no posts at all → behind
+ *     daysSinceLastPost <= maxGap → on schedule
+ *     else                        → behind
+ *
+ * Once we publish our own first post, the live site shows it as the
+ * latest, so daysSinceLastPost reflects OUR cadence from then on.
+ */
+function computeOnSchedule(
+  blog: BlogRow,
+  daysSinceLastPost: number | null,
+  maxGap: number,
+  now: Date = new Date(),
+): boolean {
+  if (maxGap === 0) return true;
+
+  // New-blog grace — based on when WE onboarded the blog, NOT on the
+  // live site's post history.
+  if (blog.createdAt) {
+    const ageDays = Math.ceil(
+      (now.getTime() - blog.createdAt.getTime()) / (1000 * 60 * 60 * 24),
+    );
+    if (ageDays <= maxGap) return true;
+  }
+
+  // Past grace: a stale or missing live post means behind.
+  if (daysSinceLastPost === null) return false;
+  return daysSinceLastPost <= maxGap;
+}
+
 export async function getPostVerifications(params?: {
   blogId?: string;
   clientId?: string;
@@ -88,12 +134,7 @@ export async function verifyBlogPosts(blogId: string) {
 
   const expected = expectedPostsPerWeek(blog);
   const maxGap = maxDaysBetweenPosts(blog);
-  const onSchedule =
-    maxGap === 0
-      ? true
-      : daysSinceLastPost === null
-        ? false
-        : daysSinceLastPost <= maxGap;
+  const onSchedule = computeOnSchedule(blog, daysSinceLastPost, maxGap);
   const alertTriggered = !onSchedule;
 
   const [verification] = await db.insert(postVerifications).values({
@@ -160,12 +201,7 @@ export async function runPostVerificationCron() {
 
       const expected = expectedPostsPerWeek(blog);
       const maxGap = maxDaysBetweenPosts(blog);
-      const onSchedule =
-        maxGap === 0
-          ? true
-          : daysSinceLastPost === null
-            ? false
-            : daysSinceLastPost <= maxGap;
+      const onSchedule = computeOnSchedule(blog, daysSinceLastPost, maxGap);
       const alertTriggered = !onSchedule;
       if (alertTriggered) alerts++;
 
