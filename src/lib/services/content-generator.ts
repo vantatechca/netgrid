@@ -11,13 +11,29 @@ import {
 // Match the model used elsewhere in the project.
 const CLAUDE_MODEL = "claude-sonnet-4-5";
 
-// Sonnet 4.5 pricing — per-token (USD), not per-1K. Verify current rates at
+// Cheaper model for the short, structured, NON-body calls: topic ideation,
+// hero-scene summary, and the SEO/readability/brand-voice scorer. These
+// produce tiny, mechanical outputs where Haiku matches Sonnet quality at
+// ~1/3 the price. The article body stays on CLAUDE_MODEL (Sonnet) — that's
+// the only call where prose quality actually moves the needle.
+const CLAUDE_SMALL_MODEL = "claude-haiku-4-5";
+
+// Per-token (USD) pricing, not per-1K. Verify current rates at
 // https://www.anthropic.com/pricing before relying on cost reporting.
-// As of writing: $3 / 1M input tokens, $15 / 1M output tokens.
+// Cached input is billed separately — see calcCost(): cache READ at 0.1x
+// the base input rate, cache WRITE at 1.25x.
+// As of writing: Sonnet 4.5 = $3/$15 per 1M; Haiku 4.5 = $1/$5 per 1M.
 const PRICING = {
   inputPerToken: 0.000003,
   outputPerToken: 0.000015,
 };
+const SMALL_PRICING = {
+  inputPerToken: 0.000001,
+  outputPerToken: 0.000005,
+};
+// Cache multipliers applied to the base input-per-token rate.
+const CACHE_READ_MULTIPLIER = 0.1;
+const CACHE_WRITE_MULTIPLIER = 1.25;
 
 // Network-wide word-count policy. Single source of truth lives in
 // src/lib/content/config.ts. Imported here so both the legacy
@@ -348,6 +364,12 @@ interface ClaudeCallResult {
   text: string;
   inputTokens: number;
   outputTokens: number;
+  /** Tokens served from the prompt cache (billed at 0.1x input rate). */
+  cacheReadInputTokens: number;
+  /** Tokens written to the prompt cache (billed at 1.25x input rate). */
+  cacheCreationInputTokens: number;
+  /** Cost of THIS call, model- and cache-aware. */
+  costUsd: number;
 }
 
 /**
@@ -979,9 +1001,21 @@ const CLAUDE_BACKOFF_BASE_MS = 2000; // 2s, 4s, 8s
 async function callClaudeOnce(
   system: string,
   userMessage: string,
-  options: { maxTokens?: number; temperature?: number; expectJson?: boolean },
+  options: {
+    maxTokens?: number;
+    temperature?: number;
+    expectJson?: boolean;
+    model?: string;
+    cacheSystem?: boolean;
+  },
 ): Promise<ClaudeCallResult> {
-  const { maxTokens = 4000, temperature = 0.7, expectJson = false } = options;
+  const {
+    maxTokens = 4000,
+    temperature = 0.7,
+    expectJson = false,
+    model = CLAUDE_MODEL,
+    cacheSystem = false,
+  } = options;
 
   const finalSystem = expectJson
     ? `${system}\n\nCRITICAL OUTPUT FORMAT:
@@ -998,11 +1032,29 @@ async function callClaudeOnce(
 - Close every JSON string properly before the response ends. If you sense you're approaching the token budget, wrap up the current section and close the object — a shorter complete article is better than a longer truncated one.`
     : system;
 
+  // When caching is requested, send the system prompt as a single
+  // cache-controlled block. Anthropic caches the identical prefix for ~5
+  // minutes; subsequent calls that share it bill those tokens at 0.1x.
+  // Enable this ONLY where the system prompt is reused across posts (the
+  // non-profile body path, whose system prompt is stable per niche/config).
+  // Caching a per-post-unique prompt (the profile path bakes the topic +
+  // a topic-seeded template into the system prompt) would always be a
+  // cache WRITE (1.25x) and never a read — a net cost increase.
+  const systemParam = cacheSystem
+    ? [
+        {
+          type: "text" as const,
+          text: finalSystem,
+          cache_control: { type: "ephemeral" as const },
+        },
+      ]
+    : finalSystem;
+
   const response = await anthropic.messages.create({
-    model: CLAUDE_MODEL,
+    model,
     max_tokens: maxTokens,
     temperature,
-    system: finalSystem,
+    system: systemParam,
     messages: [{ role: "user", content: userMessage }],
   });
 
@@ -1018,10 +1070,25 @@ async function callClaudeOnce(
   // non-whitespace char appeared to be `{` (or vice versa).
   const text = expectJson ? extractJsonObject(rawText) : rawText.trim();
 
+  const inputTokens = response.usage.input_tokens;
+  const outputTokens = response.usage.output_tokens;
+  const cacheReadInputTokens = response.usage.cache_read_input_tokens ?? 0;
+  const cacheCreationInputTokens =
+    response.usage.cache_creation_input_tokens ?? 0;
+  const pricing = model === CLAUDE_MODEL ? PRICING : SMALL_PRICING;
+
   return {
     text,
-    inputTokens: response.usage.input_tokens,
-    outputTokens: response.usage.output_tokens,
+    inputTokens,
+    outputTokens,
+    cacheReadInputTokens,
+    cacheCreationInputTokens,
+    costUsd: calcCost(pricing, {
+      inputTokens,
+      outputTokens,
+      cacheReadInputTokens,
+      cacheCreationInputTokens,
+    }),
   };
 }
 
@@ -1038,7 +1105,13 @@ async function callClaudeOnce(
 async function callClaude(
   system: string,
   userMessage: string,
-  options: { maxTokens?: number; temperature?: number; expectJson?: boolean } = {},
+  options: {
+    maxTokens?: number;
+    temperature?: number;
+    expectJson?: boolean;
+    model?: string;
+    cacheSystem?: boolean;
+  } = {},
 ): Promise<ClaudeCallResult> {
   let lastErr: unknown;
   for (let attempt = 0; attempt <= MAX_CLAUDE_RETRIES; attempt++) {
@@ -1056,12 +1129,47 @@ async function callClaude(
       await new Promise((r) => setTimeout(r, delayMs));
     }
   }
+
+  // Sonnet fallback: if a SMALL-model (Haiku) call exhausted its retries —
+  // whether the model id is unavailable/invalid, or Haiku is overloaded /
+  // rate-limited — make ONE last attempt on the default Sonnet model.
+  // The small calls (topic ideation, scene summary, scoring) must never
+  // block a post just because the cheaper model is unreachable. Worst case
+  // that single call reverts to the old Sonnet cost — posting never stops.
+  if (options.model && options.model !== CLAUDE_MODEL) {
+    const msg = lastErr instanceof Error ? lastErr.message : String(lastErr);
+    console.warn(
+      `[claude] ${options.model} failed, falling back to ${CLAUDE_MODEL}: ${msg.slice(0, 200)}`,
+    );
+    try {
+      return await callClaudeOnce(system, userMessage, {
+        ...options,
+        model: CLAUDE_MODEL,
+      });
+    } catch (fallbackErr) {
+      lastErr = fallbackErr;
+    }
+  }
+
   throw lastErr;
 }
 
-function calcCost(inputTokens: number, outputTokens: number): number {
+function calcCost(
+  pricing: { inputPerToken: number; outputPerToken: number },
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadInputTokens?: number;
+    cacheCreationInputTokens?: number;
+  },
+): number {
+  const cacheRead = usage.cacheReadInputTokens ?? 0;
+  const cacheWrite = usage.cacheCreationInputTokens ?? 0;
   return (
-    inputTokens * PRICING.inputPerToken + outputTokens * PRICING.outputPerToken
+    usage.inputTokens * pricing.inputPerToken +
+    usage.outputTokens * pricing.outputPerToken +
+    cacheRead * pricing.inputPerToken * CACHE_READ_MULTIPLIER +
+    cacheWrite * pricing.inputPerToken * CACHE_WRITE_MULTIPLIER
   );
 }
 
@@ -1185,7 +1293,17 @@ Constraints — every prompt MUST NOT include:
 - Text, labels, logos, or watermarks
 - Words like "wellness", "luxury", "premium", or "boutique"
 
-The scene should visually evoke the article's actual subject matter — if the article is about ligament repair, show a rehab clinic; if about growth hormone for performance, show a strength gym; if about sleep, show a bedroom at night.
+The scene MUST visually evoke the article's actual subject matter and stay strictly within its niche. Examples:
+- ligament repair / recovery → a physiotherapy rehab clinic with a treatment bench
+- growth hormone / performance → a strength-training gym, loaded barbell
+- sleep / circadian → a bedroom at night, moonlight through curtains
+- gym opening / membership → a new fitness facility interior, cardio + weight equipment, sign-up desk
+- roofing → a residential roof mid-replacement, shingles, ladder, roofing tools
+- tax law / IRS / Revenu Québec → a law office desk with legal code books and tax documents
+- pest control → a technician's sprayer + inspection flashlight on a home floor, baseboard visible
+- charity / nonprofit → a community food-bank sorting table stacked with donations
+
+Never drift to an unrelated domain. A gym article must NOT show a lab; a roofing article must NOT show an office; a tax article must NOT show a gym.
 
 Output: ONE sentence, 25-60 words, describing the scene. Plain text only. No quotes, no preamble.`;
 
@@ -1202,6 +1320,7 @@ Describe the photographic scene for the hero image.`;
     const { text } = await callClaude(system, user, {
       maxTokens: 200,
       temperature: 0.8,
+      model: CLAUDE_SMALL_MODEL,
     });
     const cleaned = text.trim().replace(/^["']|["']$/g, "");
     if (cleaned.length < 20 || cleaned.length > 600) return null;
@@ -1505,6 +1624,7 @@ Suggest the next post's topic.`;
     maxTokens: 300,
     temperature: 0.9,
     expectJson: true,
+    model: CLAUDE_SMALL_MODEL,
   });
 
   try {
@@ -1527,6 +1647,7 @@ interface AnalysisOutcome {
   scores: AnalysisScores;
   inputTokens: number;
   outputTokens: number;
+  costUsd: number;
 }
 
 async function analyzeContent(
@@ -1573,11 +1694,16 @@ CONTENT:
 ${truncated}`;
 
   try {
-    const { text, inputTokens, outputTokens } = await callClaude(system, user, {
-      maxTokens: 200,
-      temperature: 0.1,
-      expectJson: true,
-    });
+    const { text, inputTokens, outputTokens, costUsd } = await callClaude(
+      system,
+      user,
+      {
+        maxTokens: 200,
+        temperature: 0.1,
+        expectJson: true,
+        model: CLAUDE_SMALL_MODEL,
+      },
+    );
     const parsed = safeParseClaudeJson<{
       seoScore?: number;
       readabilityScore?: number;
@@ -1592,10 +1718,10 @@ ${truncated}`;
     if (typeof parsed.brandVoiceScore === "number") {
       scores.brandVoiceScore = Math.max(1, Math.min(100, Math.round(parsed.brandVoiceScore)));
     }
-    return { scores, inputTokens, outputTokens };
+    return { scores, inputTokens, outputTokens, costUsd };
   } catch (err) {
     console.warn("Content analysis failed, using fallback scores:", err);
-    return { scores, inputTokens: 0, outputTokens: 0 };
+    return { scores, inputTokens: 0, outputTokens: 0, costUsd: 0 };
   }
 }
 
@@ -1698,15 +1824,22 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
     maxTokens = 4000;
   }
 
-  // 1. Generate
+  // 1. Generate. Cache the system prompt ONLY on the non-profile path —
+  // its system prompt is stable per niche/config, so same-vertical posts
+  // generated within the ~5-min cache window bill the shared prefix at
+  // 0.1x. The profile path bakes a unique topic + topic-seeded template
+  // into the system prompt, so caching it would be an all-write, no-read
+  // 1.25x penalty — left off deliberately.
   const {
     text,
     inputTokens: genInput,
     outputTokens: genOutput,
+    costUsd: genCostUsd,
   } = await callClaude(system, user, {
     maxTokens,
     temperature: 0.7,
     expectJson: true,
+    cacheSystem: !usingProfile,
   });
 
   // 2. Parse — safeParseClaudeJson tries direct then repaired (handles
@@ -1859,6 +1992,57 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
         bodyResult.reason,
       );
     }
+
+    // HERO RETRY — the hero is the post's primary image; never ship
+    // without one if we can avoid it. If the first attempt failed
+    // (transient Google error, or a customScene the safety filter
+    // rejected), retry ONCE using the static niche scene instead of
+    // the article-derived customScene. The static scenes are
+    // pre-vetted and safe-filter-friendly, so this recovers the vast
+    // majority of first-attempt failures.
+    if (!heroImageUrl) {
+      try {
+        const retry = await generateHeroImage({
+          title: parsed.title,
+          keywords: imageKeywords,
+          niche: opts.niche,
+          subNicheId: opts.styleProfile?.subNicheId,
+          primaryCompounds: opts.styleProfile?.primaryCompounds,
+          // No customScene → buildImagePrompt uses the static niche
+          // scene (SUB_NICHE_VISUALS / FREE_NICHE_VISUALS / default).
+        });
+        heroImageUrl = retry.url;
+        console.info(
+          `[content-generator] Hero image RECOVERED on retry (static scene) for "${parsed.title.slice(0, 60)}"`,
+        );
+      } catch (retryErr) {
+        console.error(
+          "[content-generator] Hero image retry also failed:",
+          retryErr,
+        );
+      }
+    }
+
+    // BODY RETRY — same idea, lower priority. Only retry if the hero
+    // succeeded (so we don't double-spend Google calls on a fully-down
+    // API). Static scene, body framing.
+    if (!bodyImageUrl && heroImageUrl) {
+      try {
+        const retry = await generateBodyImage({
+          title: parsed.title,
+          keywords: imageKeywords,
+          niche: opts.niche,
+          subNicheId: opts.styleProfile?.subNicheId,
+          primaryCompounds: opts.styleProfile?.primaryCompounds,
+        });
+        bodyImageUrl = retry.url;
+        console.info(
+          `[content-generator] Body image RECOVERED on retry (static scene) for "${parsed.title.slice(0, 60)}"`,
+        );
+      } catch {
+        // Non-fatal — body image is optional.
+      }
+    }
   } catch (err) {
     // Scene summarizer threw — log and ship without images rather than
     // substituting an unrelated placeholder.
@@ -1877,12 +2061,16 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
     scores,
     inputTokens: analyzeInput,
     outputTokens: analyzeOutput,
+    costUsd: analyzeCostUsd,
   } = await analyzeContent(body, parsed.title, opts);
 
   const totalInputTokens = genInput + analyzeInput;
   const totalOutputTokens = genOutput + analyzeOutput;
   const totalTokens = totalInputTokens + totalOutputTokens;
-  const costUsd = calcCost(totalInputTokens, totalOutputTokens);
+  // Sum per-call costs rather than re-pricing aggregate tokens — the body
+  // (Sonnet, possibly cache-discounted) and the analysis (Haiku) are priced
+  // on different rate cards, so a single blended rate would be wrong.
+  const costUsd = genCostUsd + analyzeCostUsd;
 
   return {
     title: parsed.title,
