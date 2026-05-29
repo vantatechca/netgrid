@@ -30,7 +30,8 @@ export const VERTICALS: Record<string, VerticalConfig> = {
     name: "Peptide Research Network",
     clientNumber: 1,
     nicheKey: "peptides",
-    language: "en",
+    // Bilingual — alternates French + English per post.
+    language: "en_fr",
     // Inherit the niche's full pool — peptides already owns V1-V77 and
     // sub-niches 1-13.
     compliancePhraseIds: Array.from({ length: 40 }, (_, i) => i + 1),
@@ -262,7 +263,8 @@ export const VERTICALS: Record<string, VerticalConfig> = {
     name: "Tax Lawyer (Quebec)",
     clientNumber: 5,
     nicheKey: "tax_lawyer",
-    language: "fr",
+    // Bilingual — alternates French + English per post.
+    language: "en_fr",
     compliancePhraseIds: [],
     // Legal content leans formal citation styles (academic / footnoted).
     citationStyleIds: [1, 2],
