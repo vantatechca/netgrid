@@ -104,6 +104,33 @@ const MAX_BLOGS_PER_CRON_RUN = Number(
 );
 
 /**
+ * Strip inline base64 `data:` image tags from an HTML body. Run on the
+ * STORED copy only AFTER a successful publish: by then the images live on
+ * the platform's own media library (WP/Shopify re-host them at publish
+ * time), so the DB copy doesn't need the ~150-300 KB base64 blob that
+ * `embedBodyImage` inlined. Removing it keeps each generated_posts row at
+ * ~text size (~25 KB) instead of ~250 KB — a ~10× storage reduction.
+ *
+ * Removes a wrapping <figure> (and its <figcaption>) when present, then any
+ * remaining standalone <img> whose src is a data: URI. Posts that have NOT
+ * published yet keep the full base64 so a retry can still upload the image.
+ */
+function stripInlineDataImages(html: string): string {
+  if (!html || !html.includes("data:image")) return html;
+  // 1. Drop <figure> blocks whose <img> uses a data: URI (incl. figcaption).
+  let out = html.replace(
+    /<figure\b[^>]*>(?:(?!<\/figure>)[\s\S])*?<img\b[^>]*\bsrc\s*=\s*["']data:image\/[^"']*["'][\s\S]*?<\/figure>/gi,
+    "",
+  );
+  // 2. Drop any remaining standalone <img> with a data: URI src.
+  out = out.replace(
+    /<img\b[^>]*\bsrc\s*=\s*["']data:image\/[^"']*["'][^>]*>/gi,
+    "",
+  );
+  return out;
+}
+
+/**
  * Per-tick concurrency: how many blogs run in parallel inside a single
  * cron tick. Default 3 (safe vs. Anthropic 50 RPM and Google 60 RPM
  * when combined with 4 shards = 12 simultaneous publishes). Clamped to
@@ -471,12 +498,16 @@ async function runGenerateAndPublish(
       };
     }
 
-    // 6. Mark published, update blog's last-post tracking
+    // 6. Mark published, update blog's last-post tracking. Also re-store the
+    //    body WITHOUT its inline base64 image — the platform now hosts the
+    //    image, so the DB copy (used only for dashboard preview / reports)
+    //    doesn't need the ~150-300 KB blob. Cuts per-row storage ~10×.
     const publishedAt = new Date();
     await db
       .update(generatedPosts)
       .set({
         status: "published",
+        body: stripInlineDataImages(content.content),
         externalPostId: publish.postId != null ? String(publish.postId) : null,
         externalPostUrl: publish.postUrl ?? null,
         publishedAt,
