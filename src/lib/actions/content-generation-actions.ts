@@ -8,6 +8,7 @@ import { requireAdmin } from "@/lib/auth/helpers";
 import {
   generateContent,
   ideateTopic,
+  resolvePostLanguage,
   type GenerateOptions,
   type Tone,
 } from "@/lib/services/content-generator";
@@ -349,15 +350,21 @@ async function runGenerateAndPublish(
   // 3. Resolve topic + keywords (auto-ideate if not supplied). Pass the
   //    style profile so the topic anchors on this blog's unique
   //    primary-compounds + locked sub-niche.
+  // Resolve the vertical + post language ONCE so the topic and the
+  // article share a language. Bilingual (en_fr) verticals coin-flip to
+  // one concrete language for this post.
+  const verticalForPost = verticalForNiche(clientNiche);
+  const postLanguage = resolvePostLanguage(verticalForPost?.language);
+
   let topic = input.topic?.trim();
   let keywords = input.keywords ?? [];
 
   if (!topic) {
     const recentTitles = await getRecentTitles(blog.id);
-    const vertical = verticalForNiche(clientNiche);
     const ideated = await ideateTopic(clientNiche, recentTitles, {
-      verticalKey: vertical?.key ?? null,
+      verticalKey: verticalForPost?.key ?? null,
       styleProfile: styleProfile ?? undefined,
+      language: postLanguage,
     });
     topic = ideated.topic;
     if (keywords.length === 0) keywords = ideated.keywords;
@@ -384,7 +391,6 @@ async function runGenerateAndPublish(
     // 5. Generate content using the style profile loaded in step 2.
     //    Resolve vertical so the generator can pull recent news headlines
     //    as external-link sources for non-peptide posts.
-    const verticalForGen = verticalForNiche(clientNiche);
     const genOpts: GenerateOptions = {
       topic,
       keywords,
@@ -393,7 +399,9 @@ async function runGenerateAndPublish(
       niche: clientNiche,
       seoOptimized: true,
       styleProfile: styleProfile ?? undefined,
-      verticalKey: verticalForGen?.key ?? null,
+      verticalKey: verticalForPost?.key ?? null,
+      // Concrete language resolved once above (matches the topic).
+      language: postLanguage,
     };
     const content = await generateContent(genOpts);
 
