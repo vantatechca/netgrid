@@ -296,6 +296,17 @@ export interface GenerateOptions {
    * external news links for compliance.
    */
   verticalKey?: string | null;
+  /**
+   * Output language for the article. Comes from the vertical config's
+   * `language` field.
+   *   "en"    → English (default)
+   *   "fr"    → French (Québec-French phrasing for the QC verticals)
+   *   "en_fr" → bilingual vertical; defaults to English here (per-track
+   *             FR handling lives in the charity vertical's contentTracks)
+   * When undefined or "en", no language directive is added and Claude
+   * writes in English as before.
+   */
+  language?: "en" | "fr" | "en_fr";
 }
 
 export interface GeneratedContent {
@@ -1228,6 +1239,60 @@ function getNicheRequirements(niche: string): string {
   return requirements[key] || "";
 }
 
+/**
+ * Resolve a vertical's language setting into the CONCRETE language for
+ * a single post.
+ *
+ *   "fr"    → always French
+ *   "en"    → always English
+ *   "en_fr" → bilingual vertical: pick ONE language per post (50/50
+ *             coin flip). Each post is cleanly single-language; over
+ *             many posts the blog accumulates both — which is what
+ *             "bilingual" means for SEO (NOT mixing both in one post).
+ *
+ * Call this ONCE per generation at the action layer, then pass the
+ * resolved value to BOTH ideateTopic and generateContent so the topic
+ * and the article are in the same language.
+ */
+export function resolvePostLanguage(
+  language: "en" | "fr" | "en_fr" | null | undefined,
+): "en" | "fr" {
+  if (language === "fr") return "fr";
+  if (language === "en_fr") return Math.random() < 0.5 ? "fr" : "en";
+  return "en";
+}
+
+/**
+ * Build a language directive appended to the system prompt. Empty for
+ * English. For French it forces the ENTIRE JSON payload — title,
+ * content, excerpt, metaTitle, metaDescription, keywords — into Québec
+ * French. Callers should resolve "en_fr" to a concrete "en"/"fr" via
+ * resolvePostLanguage() before this is reached.
+ */
+function buildLanguageDirective(
+  language: GenerateOptions["language"],
+): string {
+  if (language === "fr") {
+    return `
+
+LANGUE / LANGUAGE — CRITICAL:
+- Write the ENTIRE article in FRENCH (français). This is a French-
+  language blog for a Québec audience.
+- Every JSON field must be in French: "title", "content", "excerpt",
+  "metaTitle", "metaDescription", AND the "keywords" array.
+- Use natural Québec French phrasing and vocabulary, not literal
+  English-to-French translation. Prices in CAD ($), dates in French
+  format, French punctuation conventions.
+- Industry/brand/technical terms with no common French equivalent may
+  stay in English (e.g. product names, "GLP-1", "shingles"), but the
+  surrounding sentence MUST be French.
+- Do NOT write whole sentences or paragraphs in English.`;
+  }
+  // "en", "en_fr" (should have been resolved already), or undefined →
+  // English, no directive.
+  return "";
+}
+
 function buildSystemPrompt(opts: GenerateOptions): string {
   const niche = getNicheContext(opts.niche);
   const brandVoice = opts.brandVoice || niche.defaultBrandVoice;
@@ -1333,6 +1398,8 @@ export async function ideateTopic(
      * peptide blog ended up starting with the same topic.
      */
     styleProfile?: StyleProfile;
+    /** Output language — French verticals get French topics + keywords. */
+    language?: "en" | "fr" | "en_fr";
   } = {},
 ): Promise<{ topic: string; keywords: string[] }> {
   const ctx = getNicheContext(niche);
@@ -1410,11 +1477,16 @@ export async function ideateTopic(
     focusLine = `- Stay tightly focused on the ${ctx.label} niche — do not drift into adjacent industries`;
   }
 
+  const languageClause =
+    opts.language === "fr"
+      ? `\n- Write the "topic" AND every "keywords" entry in FRENCH (français), Québec phrasing — this is a French-language blog`
+      : "";
+
   const system = `You generate fresh blog post topic ideas for a ${ctx.industry} niche site (${ctx.label}). Suggest topics that:
 ${focusLine}
 - Do NOT overlap with recent titles
 - Have clear search intent
-- Are specific (not generic listicles)
+- Are specific (not generic listicles)${languageClause}
 ${newsClause}
 
 Return JSON only:
@@ -1582,6 +1654,11 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
     }
   }
 
+  // Language directive — appended to the system prompt so French
+  // verticals (gym, roofing, tax lawyer, pest) generate French content
+  // and the title / excerpt / meta fields come back in French too.
+  const languageDirective = buildLanguageDirective(opts.language);
+
   let system: string;
   let user: string;
   let maxTokens: number;
@@ -1594,7 +1671,7 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
       // gets a topical value instead of the generic "General Content".
       nicheLabel: opts.niche,
     });
-    system = composed.systemPrompt;
+    system = composed.systemPrompt + languageDirective;
     user = composed.userPrompt;
     // Append the external-news-links clause (no-op for peptides — they
     // skip this entirely upstream).
@@ -1613,7 +1690,7 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
     // mid-string truncation for almost all posts.
     maxTokens = Math.min(8192, Math.round(opts.styleProfile.wordBandMax * 3.0));
   } else {
-    system = buildSystemPrompt(opts);
+    system = buildSystemPrompt(opts) + languageDirective;
     user = buildUserPrompt(opts);
     if (newsLinksClause) {
       user = user + newsLinksClause;
