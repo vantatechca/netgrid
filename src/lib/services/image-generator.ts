@@ -12,13 +12,17 @@ import type { SubNicheId } from "@/lib/content/types";
  *   and re-upload bytes to the platform's own media library, so the data
  *   URI only lives in our DB transiently.
  *
- *   No DALL-E / Pollinations / Picsum fallback — if Google fails, the
- *   caller (content-generator) catches the error and ships the post
- *   without a hero image rather than substituting an unrelated placeholder.
+ *   FALLBACK (Google-only): if the configured (paid) model is QUOTA-blocked
+ *   — e.g. Nano Banana Pro (gemini-3-pro-image) has NO free tier, limit: 0 —
+ *   we step down to a free-tier Google image model so the post still ships
+ *   with an on-topic image. No third-party providers. If BOTH Google models
+ *   fail, the caller ships the post without that image.
  *
  *   Required env:
  *     GOOGLE_API_KEY            — Google AI Studio API key
- *     (optional) GOOGLE_IMAGE_MODEL — override the default model identifier
+ *     (optional) GOOGLE_IMAGE_MODEL          — primary (paid) model id
+ *     (optional) GOOGLE_IMAGE_FALLBACK_MODEL — free-tier step-down model
+ *                                              (default gemini-2.5-flash-image)
  *
  *   Model identifiers (verify exact strings via the clipboard icon in
  *   AI Studio's "Image Generation" panel):
@@ -36,6 +40,12 @@ import type { SubNicheId } from "@/lib/content/types";
 const GOOGLE_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 const GOOGLE_DEFAULT_MODEL = "gemini-3-flash-image-preview";
 const GOOGLE_TIMEOUT_MS = 60_000;
+// Free-tier Google image model to step down to when the primary (paid)
+// model is quota-blocked. Nano Banana *Pro* (gemini-3-pro-image) has NO
+// free tier (limit: 0), so a free-tier key must fall back to a flash model
+// or it can never produce an image. Override via GOOGLE_IMAGE_FALLBACK_MODEL.
+const GOOGLE_FALLBACK_MODEL =
+  process.env.GOOGLE_IMAGE_FALLBACK_MODEL || "gemini-2.5-flash-image";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -109,6 +119,24 @@ const FREE_NICHE_VISUALS: Record<string, string> = {
   app_dev: "smartphone propped on a stand showing a mobile interface mid-prototype, sketched wireframes on paper beside it, soft natural light",
   construction: "wide shot of a high-rise construction site at golden hour, cranes silhouetted against the sky, documentary tone",
   loans: "documentary photo of a calculator, ledger, and pen on a wooden desk, hands writing visible only as silhouette, soft window light",
+
+  // ── Niche-specific fallback scenes for the cross-vertical niches ──
+  // These give every vertical a strictly on-topic static scene when the
+  // article-derived customScene isn't available (retry path, or
+  // summarizer returned null). Concrete environment + objects + lighting,
+  // no faces, no text.
+  gym_franchise:
+    "wide documentary shot of the interior of a brand-new fitness gym on opening day, rows of treadmills and weight racks, polished floors, large windows with morning light, a folded ribbon near the entrance, no people",
+  gym_subscription:
+    "documentary photo of a modern gym floor with cardio machines and free-weight racks, a membership sign-up desk in the foreground with a tablet and brochures, bright overhead lighting, no faces",
+  roofing:
+    "wide documentary shot of a residential pitched roof mid-replacement, new asphalt shingles partially installed, a ladder against the eaves and roofing tools on the deck, clear daylight, suburban house",
+  tax_lawyer:
+    "documentary photo of a law office desk with an open legal code book, printed tax documents, a fountain pen and reading glasses, a brass desk lamp, warm window light, no people",
+  pest_extermination:
+    "documentary photo of a pest-control technician's equipment on a residential kitchen floor — a sprayer canister, inspection flashlight, and clipboard, baseboard visible, natural daylight, no faces",
+  charity:
+    "wide documentary shot of a community food-bank sorting table stacked with boxed donations and canned goods, volunteers' hands packing a box (no faces), warm indoor light, hopeful tone",
 };
 
 const DEFAULT_VISUAL =
@@ -558,31 +586,86 @@ function bytesToDataUri(bytes: Buffer, mimeType: string): string {
   return `data:${mimeType};base64,${bytes.toString("base64")}`;
 }
 
+/** True when a Google error is a quota / billing / rate cap (vs. a safety
+ * block or bad request). Quota blocks are fixable by switching models;
+ * other failures are not, so we don't waste the free model on them. */
+function isGoogleQuotaError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message.toLowerCase();
+  return (
+    msg.includes("quota") ||
+    msg.includes("rate limit") ||
+    msg.includes("billing") ||
+    msg.includes("limit: 0") ||
+    msg.includes("http 429") ||
+    msg.includes("resource_exhausted")
+  );
+}
+
+/**
+ * Produce one image for the given variant. Google-only:
+ *   1. The configured (paid) model — GOOGLE_IMAGE_MODEL.
+ *   2. If that's QUOTA-blocked, step down to a free-tier Google model
+ *      (GOOGLE_FALLBACK_MODEL, default gemini-2.5-flash-image). Nano Banana
+ *      *Pro* (gemini-3-pro-image) has NO free tier — limit: 0 — so a
+ *      free-tier key must fall back to a flash model or it can never make
+ *      an image.
+ * Throws if both fail — the caller then runs its static-scene retry and,
+ * failing that, ships the post without this image.
+ */
+async function produceImage(
+  input: GenerateImageInput,
+  variant: "hero" | "body",
+): Promise<GeneratedImage> {
+  const prompt = buildImagePrompt({ ...input, variant });
+  const primaryModel = process.env.GOOGLE_IMAGE_MODEL || GOOGLE_DEFAULT_MODEL;
+
+  // Google model chain — primary, then a free-tier model when the primary
+  // is quota-blocked (deduped so we never call the same model twice).
+  const googleModels = [primaryModel];
+  if (GOOGLE_FALLBACK_MODEL && GOOGLE_FALLBACK_MODEL !== primaryModel) {
+    googleModels.push(GOOGLE_FALLBACK_MODEL);
+  }
+
+  let lastGoogleErr: unknown;
+  for (const model of googleModels) {
+    try {
+      const { bytes, mimeType } = await callGoogleImage(prompt, model);
+      return {
+        url: bytesToDataUri(bytes, mimeType),
+        provider: "google",
+        hosting: "data_uri",
+        promptUsed: prompt,
+        model,
+      };
+    } catch (err) {
+      lastGoogleErr = err;
+      // Only step down to the free model when the failure is a quota block.
+      // A safety-filter block or 400 won't be fixed by switching models.
+      if (!isGoogleQuotaError(err)) break;
+      console.warn(
+        `[image-generator] Google model "${model}" quota-blocked — stepping down to free model`,
+      );
+    }
+  }
+
+  // Both Google models failed — rethrow so the caller's existing
+  // static-scene retry / ship-image-less logic runs.
+  throw lastGoogleErr;
+}
+
 // ── Public API ─────────────────────────────────────────────────────────────
 
 /**
- * Generate a topic-aware hero image via Google Nano Banana. Throws on
- * failure — caller handles by shipping the post without a hero image.
- *
- * No fallback to other providers. If GOOGLE_API_KEY is missing or the
- * model rejects the prompt, the post ships image-less rather than
- * substituting an unrelated placeholder.
+ * Generate a topic-aware hero image. Tries the configured (paid) Google
+ * model first, then steps down to a free-tier Google model if the primary
+ * is quota-blocked. Throws only if both fail — the caller then ships the
+ * post without a hero image.
  */
 export async function generateHeroImage(
   input: GenerateImageInput,
 ): Promise<GeneratedImage> {
-  const prompt = buildImagePrompt({ ...input, variant: "hero" });
-  const model = process.env.GOOGLE_IMAGE_MODEL || GOOGLE_DEFAULT_MODEL;
-
-  const { bytes, mimeType } = await callGoogleImage(prompt, model);
-
-  return {
-    url: bytesToDataUri(bytes, mimeType),
-    provider: "google",
-    hosting: "data_uri",
-    promptUsed: prompt,
-    model,
-  };
+  return produceImage(input, "hero");
 }
 
 /**
@@ -593,24 +676,14 @@ export async function generateHeroImage(
  * doesn't look like a duplicate of the featured image. Stochastic
  * variation in Nano Banana further differentiates the two outputs.
  *
- * Throws on failure — caller decides whether to ship the post with just
- * a hero image.
+ * Tries the same Google model chain as the hero (paid model, then free-tier
+ * step-down on quota). Throws only if both fail — caller decides whether to
+ * ship the post with just a hero image.
  */
 export async function generateBodyImage(
   input: GenerateImageInput,
 ): Promise<GeneratedImage> {
-  const prompt = buildImagePrompt({ ...input, variant: "body" });
-  const model = process.env.GOOGLE_IMAGE_MODEL || GOOGLE_DEFAULT_MODEL;
-
-  const { bytes, mimeType } = await callGoogleImage(prompt, model);
-
-  return {
-    url: bytesToDataUri(bytes, mimeType),
-    provider: "google",
-    hosting: "data_uri",
-    promptUsed: prompt,
-    model,
-  };
+  return produceImage(input, "body");
 }
 
 /** Pretty-print the image-generation context for logs. */
