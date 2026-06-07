@@ -11,29 +11,13 @@ import {
 // Match the model used elsewhere in the project.
 const CLAUDE_MODEL = "claude-sonnet-4-5";
 
-// Cheaper model for the short, structured, NON-body calls: topic ideation,
-// hero-scene summary, and the SEO/readability/brand-voice scorer. These
-// produce tiny, mechanical outputs where Haiku matches Sonnet quality at
-// ~1/3 the price. The article body stays on CLAUDE_MODEL (Sonnet) — that's
-// the only call where prose quality actually moves the needle.
-const CLAUDE_SMALL_MODEL = "claude-haiku-4-5";
-
-// Per-token (USD) pricing, not per-1K. Verify current rates at
+// Sonnet 4.5 pricing — per-token (USD), not per-1K. Verify current rates at
 // https://www.anthropic.com/pricing before relying on cost reporting.
-// Cached input is billed separately — see calcCost(): cache READ at 0.1x
-// the base input rate, cache WRITE at 1.25x.
-// As of writing: Sonnet 4.5 = $3/$15 per 1M; Haiku 4.5 = $1/$5 per 1M.
+// As of writing: $3 / 1M input tokens, $15 / 1M output tokens.
 const PRICING = {
   inputPerToken: 0.000003,
   outputPerToken: 0.000015,
 };
-const SMALL_PRICING = {
-  inputPerToken: 0.000001,
-  outputPerToken: 0.000005,
-};
-// Cache multipliers applied to the base input-per-token rate.
-const CACHE_READ_MULTIPLIER = 0.1;
-const CACHE_WRITE_MULTIPLIER = 1.25;
 
 // Network-wide word-count policy. Single source of truth lives in
 // src/lib/content/config.ts. Imported here so both the legacy
@@ -52,14 +36,6 @@ import {
 
 const MIN_WORDS = GLOBAL_WORD_BAND_MIN;
 const MAX_WORDS = GLOBAL_WORD_BAND_MAX;
-
-// Appended to the user prompt on a regeneration retry when the first
-// response came back without a usable "content" field (e.g. the model
-// returned {title, deck} where "deck" is a short French chapô/standfirst
-// instead of the article body). Pushes the model back onto the schema.
-const SHAPE_RETRY_REMINDER = `
-
-IMPORTANT — your previous response was REJECTED because it did not contain a usable "content" field. Return a JSON object whose "content" field holds the FULL HTML article body (every section, ${MIN_WORDS}+ words) as a single string. Do NOT put a "deck", "chapô", "subtitle", "standfirst", "summary", or "description" in place of "content". "content" is mandatory and must be the complete article — not a short blurb.`;
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -331,6 +307,25 @@ export interface GenerateOptions {
    * writes in English as before.
    */
   language?: "en" | "fr" | "en_fr";
+  /**
+   * Per-blog stylistic seed. When provided, the legacy (non-profile) path
+   * uses it to deterministically pick:
+   *   - 2 writing-habit quirks from QUIRK_POOL
+   *   - a per-blog word band drawn from inside [GLOBAL_WORD_BAND_MIN,
+   *     GLOBAL_WORD_BAND_MAX]
+   *   - a body-image wrapper class name
+   * Same seed → same picks always. The cron passes `blog.id` so each blog
+   * keeps a stable, distinct voice. Profile blogs (peptides) ignore this
+   * field — their composer already does per-blog randomization.
+   */
+  blogSeed?: string;
+  /**
+   * Pre-fetched internal sibling post references for inline link injection.
+   * Each entry is a previously-published post on the SAME blog. Claude is
+   * instructed to weave 2-4 of these as inline <a href> links — adds the
+   * single SEO signal the audit flagged as missing (internal link graph).
+   */
+  internalLinkRefs?: Array<{ title: string; url: string }>;
 }
 
 export interface GeneratedContent {
@@ -372,12 +367,6 @@ interface ClaudeCallResult {
   text: string;
   inputTokens: number;
   outputTokens: number;
-  /** Tokens served from the prompt cache (billed at 0.1x input rate). */
-  cacheReadInputTokens: number;
-  /** Tokens written to the prompt cache (billed at 1.25x input rate). */
-  cacheCreationInputTokens: number;
-  /** Cost of THIS call, model- and cache-aware. */
-  costUsd: number;
 }
 
 /**
@@ -1009,61 +998,25 @@ const CLAUDE_BACKOFF_BASE_MS = 2000; // 2s, 4s, 8s
 async function callClaudeOnce(
   system: string,
   userMessage: string,
-  options: {
-    maxTokens?: number;
-    temperature?: number;
-    expectJson?: boolean;
-    model?: string;
-    cacheSystem?: boolean;
-  },
+  options: { maxTokens?: number; temperature?: number; expectJson?: boolean },
 ): Promise<ClaudeCallResult> {
-  const {
-    maxTokens = 4000,
-    temperature = 0.7,
-    expectJson = false,
-    model = CLAUDE_MODEL,
-    cacheSystem = false,
-  } = options;
+  const { maxTokens = 4000, temperature = 0.7, expectJson = false } = options;
 
+  // Compact JSON envelope. The detailed schema rules (no wrapping, no
+  // renaming "content", no "deck"/"subtitle" substitution, etc.) already
+  // live in buildSystemPrompt / composeForPost. safeParseClaudeJson handles
+  // markdown-fence and stray-quote repair, so we don't need to spell that
+  // out either. Keeping this short reduces token cost AND the recognizable
+  // network-wide response shape (per the footprint audit).
   const finalSystem = expectJson
-    ? `${system}\n\nCRITICAL OUTPUT FORMAT:
-- Respond with valid JSON only. Start with { and end with }.
-- No markdown code fences. No \`\`\`json blocks. No prose before or after.
-- Top-level keys MUST be exactly the names the schema specifies (e.g. "title", "content"). Do NOT wrap the response in another object like {"article": {...}}. Do NOT rename "content" to "html", "body", or "article_html".
-- NEVER replace "content" with a "deck", "chapô"/"chapo", "subtitle", "standfirst", "summary", "description", or "excerpt" field. "content" is REQUIRED and MUST be the FULL HTML article body (every section), not a short blurb or sub-headline.
-- The article body MUST be a single HTML string in the "content" field. Do NOT split it into multiple fields like "intro" + "items", "sections", "paragraphs", "body" + "conclusion". Build one HTML string and put it in "content".
-- "content" is a STRING, not an array or object.
-- When emitting HTML inside a string value, ESCAPE every double quote inside HTML attributes as a backslash-quote pair. Example:
-    WRONG:   "content": "<a href="https://example.com">link</a>"
-    CORRECT: "content": "<a href=\\"https://example.com\\">link</a>"
-  Same rule applies to any string value containing nested quotes.
-- Stay STRICTLY UNDER any maximum word count specified above. Hitting the maximum exactly often causes the response to be truncated mid-string, breaking the JSON. Aim for the target, not the ceiling.
-- Close every JSON string properly before the response ends. If you sense you're approaching the token budget, wrap up the current section and close the object — a shorter complete article is better than a longer truncated one.`
+    ? `${system}\n\nOUTPUT: Return ONE valid JSON object only. Escape every \\" inside HTML attribute values. Close every string and the object before hitting the token budget — a shorter complete article beats a truncated long one.`
     : system;
 
-  // When caching is requested, send the system prompt as a single
-  // cache-controlled block. Anthropic caches the identical prefix for ~5
-  // minutes; subsequent calls that share it bill those tokens at 0.1x.
-  // Enable this ONLY where the system prompt is reused across posts (the
-  // non-profile body path, whose system prompt is stable per niche/config).
-  // Caching a per-post-unique prompt (the profile path bakes the topic +
-  // a topic-seeded template into the system prompt) would always be a
-  // cache WRITE (1.25x) and never a read — a net cost increase.
-  const systemParam = cacheSystem
-    ? [
-        {
-          type: "text" as const,
-          text: finalSystem,
-          cache_control: { type: "ephemeral" as const },
-        },
-      ]
-    : finalSystem;
-
   const response = await anthropic.messages.create({
-    model,
+    model: CLAUDE_MODEL,
     max_tokens: maxTokens,
     temperature,
-    system: systemParam,
+    system: finalSystem,
     messages: [{ role: "user", content: userMessage }],
   });
 
@@ -1079,25 +1032,10 @@ async function callClaudeOnce(
   // non-whitespace char appeared to be `{` (or vice versa).
   const text = expectJson ? extractJsonObject(rawText) : rawText.trim();
 
-  const inputTokens = response.usage.input_tokens;
-  const outputTokens = response.usage.output_tokens;
-  const cacheReadInputTokens = response.usage.cache_read_input_tokens ?? 0;
-  const cacheCreationInputTokens =
-    response.usage.cache_creation_input_tokens ?? 0;
-  const pricing = model === CLAUDE_MODEL ? PRICING : SMALL_PRICING;
-
   return {
     text,
-    inputTokens,
-    outputTokens,
-    cacheReadInputTokens,
-    cacheCreationInputTokens,
-    costUsd: calcCost(pricing, {
-      inputTokens,
-      outputTokens,
-      cacheReadInputTokens,
-      cacheCreationInputTokens,
-    }),
+    inputTokens: response.usage.input_tokens,
+    outputTokens: response.usage.output_tokens,
   };
 }
 
@@ -1114,13 +1052,7 @@ async function callClaudeOnce(
 async function callClaude(
   system: string,
   userMessage: string,
-  options: {
-    maxTokens?: number;
-    temperature?: number;
-    expectJson?: boolean;
-    model?: string;
-    cacheSystem?: boolean;
-  } = {},
+  options: { maxTokens?: number; temperature?: number; expectJson?: boolean } = {},
 ): Promise<ClaudeCallResult> {
   let lastErr: unknown;
   for (let attempt = 0; attempt <= MAX_CLAUDE_RETRIES; attempt++) {
@@ -1138,47 +1070,12 @@ async function callClaude(
       await new Promise((r) => setTimeout(r, delayMs));
     }
   }
-
-  // Sonnet fallback: if a SMALL-model (Haiku) call exhausted its retries —
-  // whether the model id is unavailable/invalid, or Haiku is overloaded /
-  // rate-limited — make ONE last attempt on the default Sonnet model.
-  // The small calls (topic ideation, scene summary, scoring) must never
-  // block a post just because the cheaper model is unreachable. Worst case
-  // that single call reverts to the old Sonnet cost — posting never stops.
-  if (options.model && options.model !== CLAUDE_MODEL) {
-    const msg = lastErr instanceof Error ? lastErr.message : String(lastErr);
-    console.warn(
-      `[claude] ${options.model} failed, falling back to ${CLAUDE_MODEL}: ${msg.slice(0, 200)}`,
-    );
-    try {
-      return await callClaudeOnce(system, userMessage, {
-        ...options,
-        model: CLAUDE_MODEL,
-      });
-    } catch (fallbackErr) {
-      lastErr = fallbackErr;
-    }
-  }
-
   throw lastErr;
 }
 
-function calcCost(
-  pricing: { inputPerToken: number; outputPerToken: number },
-  usage: {
-    inputTokens: number;
-    outputTokens: number;
-    cacheReadInputTokens?: number;
-    cacheCreationInputTokens?: number;
-  },
-): number {
-  const cacheRead = usage.cacheReadInputTokens ?? 0;
-  const cacheWrite = usage.cacheCreationInputTokens ?? 0;
+function calcCost(inputTokens: number, outputTokens: number): number {
   return (
-    usage.inputTokens * pricing.inputPerToken +
-    usage.outputTokens * pricing.outputPerToken +
-    cacheRead * pricing.inputPerToken * CACHE_READ_MULTIPLIER +
-    cacheWrite * pricing.inputPerToken * CACHE_WRITE_MULTIPLIER
+    inputTokens * PRICING.inputPerToken + outputTokens * PRICING.outputPerToken
   );
 }
 
@@ -1329,7 +1226,6 @@ Describe the photographic scene for the hero image.`;
     const { text } = await callClaude(system, user, {
       maxTokens: 200,
       temperature: 0.8,
-      model: CLAUDE_SMALL_MODEL,
     });
     const cleaned = text.trim().replace(/^["']|["']$/g, "");
     if (cleaned.length < 20 || cleaned.length > 600) return null;
@@ -1421,12 +1317,112 @@ LANGUE / LANGUAGE — CRITICAL:
   return "";
 }
 
+// ─── Per-blog stylistic seeding (legacy / non-profile path) ─────────────────
+//
+// Same blog → same picks every time. Lets the legacy path approach the
+// profile-path's per-blog diversification without the full composer stack.
+// Per the footprint audit: shared voice fingerprint across a niche is the
+// easiest network pattern for a classifier to find — these helpers break it.
+
+const QUIRK_POOL: string[] = [
+  "Occasionally drop a single-sentence paragraph for emphasis (max 2–3 per article).",
+  "Use parentheticals (like this one) more than average — 3–5 per article.",
+  "Open roughly 30% of paragraphs with a question.",
+  "Use heavy parallel construction in some sections, then deliberately break it elsewhere.",
+  "Prefer numerals (3) over spelled-out numbers (three), even at sentence starts.",
+  "Use specific timeframes frequently: 'in 2014,' 'by 2019,' 'as of late 2022.'",
+  "Mid-paragraph self-correction: 'Actually, that's imprecise — more accurately...'",
+  "Use sentence fragments for emphasis. Sparingly. Like this.",
+  "Prefer 'Note that...' or 'Consider...' as section openers in technical passages.",
+  "Use first-person plural ('we') rather than second-person ('you') when explaining concepts.",
+  "Avoid the colon-before-list pattern. Lead with a sentence ending in a period.",
+  "Use 'I' once or twice per article to inject authorial voice — sparingly.",
+];
+
+/** Small deterministic 32-bit hash of a string. Stable across processes. */
+function hashSeed(seed: string): number {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) {
+    h = ((h << 5) - h + seed.charCodeAt(i)) | 0;
+  }
+  return Math.abs(h);
+}
+
+/** Pick `count` distinct quirks from QUIRK_POOL deterministically by seed. */
+function pickQuirks(seed: string | undefined, count = 2): string[] {
+  if (!seed) return [];
+  const base = hashSeed(seed);
+  const picks: string[] = [];
+  const used = new Set<number>();
+  for (let i = 0; i < count; i++) {
+    let idx = (base + i * 31) % QUIRK_POOL.length;
+    // De-collision: walk forward until we find an unused slot.
+    while (used.has(idx)) idx = (idx + 1) % QUIRK_POOL.length;
+    used.add(idx);
+    picks.push(QUIRK_POOL[idx]);
+  }
+  return picks;
+}
+
+/**
+ * Per-blog word band drawn from inside the network bounds
+ * [GLOBAL_WORD_BAND_MIN, GLOBAL_WORD_BAND_MAX]. Each blog gets a stable
+ * (~300-word-wide) sub-range so the network doesn't cluster on uniform
+ * word counts. Falls back to the network bounds when no seed is provided.
+ */
+function wordBandForBlog(
+  seed: string | undefined,
+  requestedTarget: number,
+): { min: number; max: number; target: number } {
+  const lo = MIN_WORDS;
+  const hi = MAX_WORDS;
+  if (!seed) {
+    const target = Math.max(lo, Math.min(hi, requestedTarget));
+    return { min: lo, max: hi, target };
+  }
+  const span = hi - lo; // e.g. 700
+  const bandWidth = Math.max(250, Math.round(span * 0.35)); // ~245+
+  const h = hashSeed(seed);
+  // Deterministic start offset such that [start, start + bandWidth] ⊆ [lo, hi].
+  const start = lo + (h % Math.max(1, span - bandWidth));
+  const min = start;
+  const max = start + bandWidth;
+  const target = Math.round((min + max) / 2);
+  return { min, max, target };
+}
+
+/**
+ * Per-blog body-image wrapper class (used by embedBodyImage). Different
+ * sites should emit different markup; identical class names across the
+ * network are a trivial HTML fingerprint per the audit.
+ */
+function bodyImageClassForBlog(seed: string | undefined): string {
+  const POOL = [
+    "post-figure",
+    "inline-illustration",
+    "article-figure",
+    "story-image",
+    "post-illustration",
+    "body-figure",
+    "feature-image",
+    "content-figure",
+  ];
+  if (!seed) return POOL[0];
+  return POOL[hashSeed(seed) % POOL.length];
+}
+
 function buildSystemPrompt(opts: GenerateOptions): string {
   const niche = getNicheContext(opts.niche);
   const brandVoice = opts.brandVoice || niche.defaultBrandVoice;
   const audience = opts.targetAudience || niche.defaultAudience;
-  // Clamp the caller's requested word count into [MIN_WORDS, MAX_WORDS].
-  const targetWords = Math.max(MIN_WORDS, Math.min(MAX_WORDS, opts.wordCount));
+  // Per-blog word band — same seed → same band always. The opts.wordCount
+  // is treated as a hint; the per-blog band overrides it so the network
+  // doesn't cluster on a uniform target.
+  const wb = wordBandForBlog(opts.blogSeed, opts.wordCount);
+  const targetWords = wb.target;
+  // Per-blog stylistic tics — picked deterministically from QUIRK_POOL by
+  // blogSeed. Same blog always writes with the same 2 quirks.
+  const quirks = pickQuirks(opts.blogSeed, 2);
 
   let prompt = `You are an expert content writer in the ${niche.industry} space. Write a comprehensive, original article that reads like it was written by someone with deep first-hand experience.
 
@@ -1439,63 +1435,93 @@ VOICE & STYLE:
 QUALITY BAR:
 - Specific over generic — exact prices, real brand/tool names, concrete numbers
 - Show your reasoning, don't just assert
-- Mix sentence lengths; avoid the AI cadence of perfect 3-4 sentence paragraphs
 - Include trade-offs and limitations honestly, not just upsides
-- No filler transitions like "Moreover," "Furthermore," "In conclusion"
+
+FORBIDDEN AI TELLS (will cause the post to be rejected):
+
+Punctuation:
+- NEVER use em-dashes (—) or en-dashes (–) as pause markers. Replace with periods, commas, or sentence breaks.
+- NEVER use the single-character ellipsis (…). Use three periods (...).
+- NEVER use curly/smart quotes (" " ' '). Use straight quotes (" and ').
+
+Forbidden vocabulary (do not appear in any context):
+delve, tapestry, realm, ecosystem (as metaphor), landscape (as metaphor), journey (as metaphor), navigate (as metaphor), unleash, harness, foster, cultivate, embark, robust, seamless, holistic, nuanced, paradigm, multifaceted, intricate, pivotal, plethora, myriad, gleaned, meticulous, underscore, bolster, garner.
+
+Forbidden phrases (never include any of these):
+- "It's not just X, it's Y"
+- "Whether you're X or Y..."
+- "In today's [world / fast-paced / digital / modern]..."
+- "Game-changer", "Revolutionary", "Transformative"
+- "It's worth noting that"
+- "That said," / "With that in mind"
+- "Look no further" / "Without further ado"
+- "When it comes to"
+- "Let's dive in" / "Let's explore"
+- "At its core"
+- Sentence-initial: "Ultimately," / "Fundamentally," / "Essentially,"
+- "The key takeaway"
+- Sign-off lines like "Happy [verbing]!"
+- Filler transitions: "Moreover," "Furthermore," "In conclusion"
+
+Forbidden structural patterns:
+- Do NOT make every paragraph exactly 3 or 4 sentences. Vary paragraph length deliberately: some single-sentence paragraphs for emphasis, some 5–7 sentence paragraphs, some short.
+- Do NOT use perfect parallel structure in every list. Real writers break parallelism naturally.
+- Do NOT open with a time-anchored cliché ("In today's...", "In an era of...").
+- Do NOT close with "In conclusion" or a recap paragraph.
+
+CADENCE TARGET:
+- Average sentence length: 15–20 words.
+- HIGH variance: include at least 3–5 sentences under 10 words AND at least 2–3 sentences over 25 words.
+- Paragraphs vary between 1 and 7 sentences.
 
 WORD COUNT (HARD LIMITS):
-- Minimum ${MIN_WORDS} words — anything shorter will be rejected
-- Maximum ${MAX_WORDS} words — anything longer will be truncated
-- Target approximately ${targetWords} words
-- Depth over padding; trim ruthlessly before exceeding the cap
+- Minimum ${wb.min} words — anything shorter will be rejected.
+- Maximum ${wb.max} words — leave a 200–300-word buffer below the maximum so the JSON can't be truncated mid-string.
+- Target approximately ${targetWords} words.
+- Depth over padding; trim ruthlessly before approaching the cap.
 
 IMAGES:
-- Do NOT include any <img>, <figure>, <picture>, or <figcaption> tags in your
-  output. A hero image is attached as the article's featured image at publish
-  time — any inline images you emit will be stripped.
+- Do NOT include any <img>, <figure>, <picture>, or <figcaption> tags in your output. A hero image is attached as the article's featured image at publish time — any inline images you emit will be stripped.
 
 STRUCTURE:
-- Open with a substantive hook (no "In today's world..." openings)
-- Use <h2> for major sections, <h3> for subsections
-- Lists where useful, not where padding
-- Close with concrete takeaways, not platitudes
+- Open with a substantive hook (no time-anchored opener).
+- Use <h2> for major sections, <h3> for subsections.
+- Lists where useful, not where padding.
+- Close with concrete takeaways, not platitudes.
 
 OUTPUT FORMAT:
 Return ONLY valid JSON with EXACTLY these top-level keys:
 {
   "title": "Title under 60 characters with primary keyword",
-  "content": "Full HTML article between ${MIN_WORDS} and ${MAX_WORDS} words",
+  "content": "Full HTML article between ${wb.min} and ${wb.max} words",
   "excerpt": "150-160 character summary",
   "metaTitle": "SEO title under 60 characters",
   "metaDescription": "150-160 character meta description",
   "keywords": ["keyword1", "keyword2", "keyword3"]
 }
 
-CRITICAL JSON SHAPE RULES — read carefully:
-- "content" MUST be a single HTML string. Do NOT split the article into
-  "intro" + "items", "sections", "paragraphs", "body" + "conclusion", or
-  any other multi-field structure. Build the full article as ONE HTML
-  string and put it in "content".
-- Do NOT wrap the response in another object like {"article": {...}} or
-  {"data": {...}}. Return the JSON directly.
-- Do NOT rename fields ("content" not "html"/"body"/"article_html"; "title"
-  not "headline"/"post_title"). Use the names exactly as shown above.
-- "content" is HTML ONLY, using this whitelist of tags: <h2>, <h3>, <p>,
-  <ul>, <ol>, <li>, <strong>, <em>, <a>. No <img>, <figure>, <picture>,
-  <figcaption>. No markdown headings (##) — use <h2>/<h3>.
-- Do not include "Created:", "Niche:", or "Keywords:" labels inline in
-  the body.`;
+JSON SHAPE — strict:
+- "content" is ONE HTML string. Do not split into "intro"/"items"/"sections"/"paragraphs"/"deck"/"body"+"conclusion". Build one HTML string.
+- Do not wrap the response in another object ({"article": ...}). Return the JSON directly.
+- Use field names exactly as shown ("content" not "html"/"body"/"article_html"; "title" not "headline"/"post_title").
+- Allowed tags in "content": <h2>, <h3>, <p>, <ul>, <ol>, <li>, <strong>, <em>, <a>. No images, no markdown headings.`;
+
+  if (quirks.length > 0) {
+    prompt += `\n\nTHIS BLOG'S WRITING HABITS (apply consistently across the article):\n${quirks.map((q) => `- ${q}`).join("\n")}`;
+  }
 
   const nicheReqs = opts.niche ? getNicheRequirements(opts.niche) : "";
   if (nicheReqs) {
     prompt += `\n\nNICHE-SPECIFIC REQUIREMENTS:\n${nicheReqs}`;
   }
 
+  // SEO REQUIREMENTS block removed per the footprint audit (insight 2):
+  // "Natural keyword density 1-2%" / "primary keyword in first 100 words"
+  // optimize to exactly what classifiers fingerprint. The structure rules
+  // above are enough; entity coverage + uniqueness is the right replacement
+  // (separate follow-up). Keeping seoOptimized for back-compat / future use.
   if (opts.seoOptimized) {
-    prompt += `\n\nSEO REQUIREMENTS:
-- Primary keyword in title and first 100 words
-- Related keywords in <h2> subheadings
-- Natural keyword density 1-2% (no stuffing)`;
+    // Intentionally a no-op for now — see comment above.
   }
 
   return prompt;
@@ -1633,7 +1659,6 @@ Suggest the next post's topic.`;
     maxTokens: 300,
     temperature: 0.9,
     expectJson: true,
-    model: CLAUDE_SMALL_MODEL,
   });
 
   try {
@@ -1656,7 +1681,6 @@ interface AnalysisOutcome {
   scores: AnalysisScores;
   inputTokens: number;
   outputTokens: number;
-  costUsd: number;
 }
 
 async function analyzeContent(
@@ -1703,16 +1727,11 @@ CONTENT:
 ${truncated}`;
 
   try {
-    const { text, inputTokens, outputTokens, costUsd } = await callClaude(
-      system,
-      user,
-      {
-        maxTokens: 200,
-        temperature: 0.1,
-        expectJson: true,
-        model: CLAUDE_SMALL_MODEL,
-      },
-    );
+    const { text, inputTokens, outputTokens } = await callClaude(system, user, {
+      maxTokens: 200,
+      temperature: 0.1,
+      expectJson: true,
+    });
     const parsed = safeParseClaudeJson<{
       seoScore?: number;
       readabilityScore?: number;
@@ -1727,10 +1746,10 @@ ${truncated}`;
     if (typeof parsed.brandVoiceScore === "number") {
       scores.brandVoiceScore = Math.max(1, Math.min(100, Math.round(parsed.brandVoiceScore)));
     }
-    return { scores, inputTokens, outputTokens, costUsd };
+    return { scores, inputTokens, outputTokens };
   } catch (err) {
     console.warn("Content analysis failed, using fallback scores:", err);
-    return { scores, inputTokens: 0, outputTokens: 0, costUsd: 0 };
+    return { scores, inputTokens: 0, outputTokens: 0 };
   }
 }
 
@@ -1789,6 +1808,30 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
     }
   }
 
+  // Internal-link references — recent sibling posts on the SAME blog.
+  // Pre-fetched by the caller (see content-generation-actions.ts). Claude
+  // weaves 2–4 of them in as inline <a href> anchors. Per the footprint
+  // audit, internal link architecture is the single biggest SEO signal
+  // we were leaving on the table; sibling links also raise time-on-site,
+  // which is an actual ranking input.
+  let internalLinksClause = "";
+  const refs = opts.internalLinkRefs ?? [];
+  if (refs.length > 0) {
+    const refList = refs
+      .slice(0, 8)
+      .map((it, i) => `[${i + 1}] "${it.title}"\n    ${it.url}`)
+      .join("\n");
+    internalLinksClause =
+      `\n\nINTERNAL LINKS — recent posts on THIS site (weave 2–4 in as inline anchors):\n` +
+      `${refList}\n\n` +
+      `INTERNAL LINKING RULES:\n` +
+      `- Pick 2–4 of the above whose topic genuinely relates to what this article is about.\n` +
+      `- Use HTML <a href="URL">descriptive anchor text</a> — no target/rel attributes (these are same-site).\n` +
+      `- Anchor text must describe the linked article's subject, never "click here" / "this post" / raw URLs.\n` +
+      `- Place internal links inside sentences where the reader would actually click for more — not in a "related posts" footer.\n` +
+      `- Do NOT exceed 4 internal links.`;
+  }
+
   // Language directive — appended to the system prompt so French
   // verticals (gym, roofing, tax lawyer, pest) generate French content
   // and the title / excerpt / meta fields come back in French too.
@@ -1813,6 +1856,9 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
     if (newsLinksClause) {
       user = user + newsLinksClause;
     }
+    if (internalLinksClause) {
+      user = user + internalLinksClause;
+    }
     // Profile blogs may target word bands up to 3000 words. Schema C (FAQ-
     // rich) and Schema D (listicle) include extra structured arrays beyond
     // the main content, so we budget generously: ~3.0 tokens/word covers
@@ -1830,70 +1876,39 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
     if (newsLinksClause) {
       user = user + newsLinksClause;
     }
+    if (internalLinksClause) {
+      user = user + internalLinksClause;
+    }
     maxTokens = 4000;
   }
 
-  // 1. Generate — with ONE regeneration retry on JSON-shape drift. The
-  //    model occasionally returns valid JSON that omits "content" entirely
-  //    (e.g. {title, deck} where "deck" is a short French chapô, not the
-  //    body). There's nothing to reconstruct from, but shape drift is
-  //    intermittent — a clean regeneration with a stricter reminder almost
-  //    always returns proper content. Costs/tokens accumulate across both
-  //    attempts so reporting stays accurate.
-  //
-  //    Cache the system prompt ONLY on the non-profile path — its system
-  //    prompt is stable per niche/config, so same-vertical posts generated
-  //    within the ~5-min cache window bill the shared prefix at 0.1x. The
-  //    profile path bakes a unique topic + topic-seeded template into the
-  //    system prompt, so caching it would be an all-write, no-read 1.25x
-  //    penalty — left off deliberately.
-  const MAX_SHAPE_RETRIES = 1;
-  let parsed: Partial<GeneratedContent> = {};
-  let genInput = 0;
-  let genOutput = 0;
-  let genCostUsd = 0;
+  // 1. Generate
+  const {
+    text,
+    inputTokens: genInput,
+    outputTokens: genOutput,
+  } = await callClaude(system, user, {
+    maxTokens,
+    temperature: 0.7,
+    expectJson: true,
+  });
 
-  for (let shapeAttempt = 0; shapeAttempt <= MAX_SHAPE_RETRIES; shapeAttempt++) {
-    const userMessage =
-      shapeAttempt === 0 ? user : user + SHAPE_RETRY_REMINDER;
-
-    const gen = await callClaude(system, userMessage, {
-      maxTokens,
-      temperature: 0.7,
-      expectJson: true,
-      cacheSystem: !usingProfile,
-    });
-    genInput += gen.inputTokens;
-    genOutput += gen.outputTokens;
-    genCostUsd += gen.costUsd;
-
-    // 2. Parse — safeParseClaudeJson tries direct then repaired (handles
-    //    trailing commas, unescaped newlines in content fields, smart
-    //    quotes, HTML-attribute stray quotes, truncation).
-    let candidate: Partial<GeneratedContent>;
-    try {
-      candidate = safeParseClaudeJson<Partial<GeneratedContent>>(gen.text);
-    } catch (err) {
-      if (shapeAttempt < MAX_SHAPE_RETRIES) continue; // retry a fresh generation
-      const msg = err instanceof Error ? err.message : "parse error";
-      throw new Error(`Claude returned invalid JSON: ${msg}`);
-    }
-
-    // Field-name fallback: Claude occasionally returns the article wrapped
-    // in another object ({"article": {...}}) or uses alternate field names
-    // ("html" / "body" / "article_html" instead of "content"; "headline" /
-    // "post_title" instead of "title"). Unwrap and remap before failing.
-    parsed = normalizeArticleShape(candidate);
-
-    if (parsed.title && parsed.content) break; // good shape — done
-
-    // Shape drift (missing content) — regenerate if we still have budget.
-    if (shapeAttempt < MAX_SHAPE_RETRIES) {
-      console.warn(
-        `[content-generator] response missing content (keys: ${Object.keys(parsed).join(", ") || "(empty)"}) — regenerating with stricter reminder`,
-      );
-    }
+  // 2. Parse — safeParseClaudeJson tries direct then repaired (handles
+  //    trailing commas, unescaped newlines in content fields, smart quotes,
+  //    HTML-attribute stray quotes, truncation).
+  let parsed: Partial<GeneratedContent>;
+  try {
+    parsed = safeParseClaudeJson<Partial<GeneratedContent>>(text);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "parse error";
+    throw new Error(`Claude returned invalid JSON: ${msg}`);
   }
+
+  // Field-name fallback: Claude occasionally returns the article wrapped
+  // in another object ({"article": {...}}) or uses alternate field names
+  // ("html" / "body" / "article_html" instead of "content"; "headline" /
+  // "post_title" instead of "title"). Unwrap and remap before failing.
+  parsed = normalizeArticleShape(parsed);
 
   if (!parsed.title || !parsed.content) {
     const keys = Object.keys(parsed).join(", ") || "(empty)";
@@ -2089,24 +2104,25 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
   // actually appears in the published post. Hero stays as the featured
   // image (rendered above the post by Shopify/WordPress themes).
   if (bodyImageUrl) {
-    body = embedBodyImage(body, bodyImageUrl, parsed.title);
+    body = embedBodyImage(body, bodyImageUrl, parsed.title, opts.blogSeed);
   }
 
-  // 6. Analyze (single combined call)
-  const {
-    scores,
-    inputTokens: analyzeInput,
-    outputTokens: analyzeOutput,
-    costUsd: analyzeCostUsd,
-  } = await analyzeContent(body, parsed.title, opts);
+  // 6. Scoring removed (per footprint audit insight 2). The old
+  //    analyzeContent call cost ~$0.0015/post AND optimized to exactly the
+  //    metrics classifiers fingerprint (keyword density 1-3%, primary kw
+  //    in first 100w). Replacement is a local uniqueness + fingerprint
+  //    check — separate follow-up. Default scores keep the DB schema and
+  //    UI happy; they're advisory anyway, never blocking.
+  const scores: AnalysisScores = {
+    seoScore: 70,
+    readabilityScore: 70,
+    brandVoiceScore: 70,
+  };
 
-  const totalInputTokens = genInput + analyzeInput;
-  const totalOutputTokens = genOutput + analyzeOutput;
+  const totalInputTokens = genInput;
+  const totalOutputTokens = genOutput;
   const totalTokens = totalInputTokens + totalOutputTokens;
-  // Sum per-call costs rather than re-pricing aggregate tokens — the body
-  // (Sonnet, possibly cache-discounted) and the analysis (Haiku) are priced
-  // on different rate cards, so a single blended rate would be wrong.
-  const costUsd = genCostUsd + analyzeCostUsd;
+  const costUsd = calcCost(totalInputTokens, totalOutputTokens);
 
   return {
     title: parsed.title,
@@ -2143,17 +2159,34 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
  * image content is conceptually the same topic as the hero, so we
  * don't bother generating a separate alt string.
  */
-function embedBodyImage(html: string, dataUri: string, title: string): string {
+function embedBodyImage(
+  html: string,
+  dataUri: string,
+  title: string,
+  blogSeed?: string,
+): string {
   const safeAlt = title
     .replace(/&/g, "&amp;")
     .replace(/"/g, "&quot;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .slice(0, 200);
+  // Per-blog wrapper class + style variant so this markup isn't identical
+  // across the network (footprint audit #8). Same blog → same markup always.
+  const cls = bodyImageClassForBlog(blogSeed);
+  // Two style variants picked deterministically so different blogs emit
+  // different inline-style strings. Both render identically; only the
+  // serialized HTML differs.
+  const styleVariant = blogSeed && hashSeed(blogSeed) % 2 === 0
+    ? `margin:1.5em 0;`
+    : `margin:1.25rem 0 1.75rem;`;
+  const imgStyle = blogSeed && (hashSeed(blogSeed) >> 3) % 2 === 0
+    ? `width:100%;height:auto;display:block;`
+    : `display:block;max-width:100%;height:auto;`;
   const figure =
-    `<figure class="post-body-image" style="margin:1.5em 0;">` +
+    `<figure class="${cls}" style="${styleVariant}">` +
     `<img src="${dataUri}" alt="${safeAlt}" loading="lazy" ` +
-    `style="width:100%;height:auto;display:block;" />` +
+    `style="${imgStyle}" />` +
     `</figure>`;
 
   // Split keeping the closing tag attached to each piece.
