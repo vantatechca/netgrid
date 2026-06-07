@@ -104,33 +104,6 @@ const MAX_BLOGS_PER_CRON_RUN = Number(
 );
 
 /**
- * Strip inline base64 `data:` image tags from an HTML body. Run on the
- * STORED copy only AFTER a successful publish: by then the images live on
- * the platform's own media library (WP/Shopify re-host them at publish
- * time), so the DB copy doesn't need the ~150-300 KB base64 blob that
- * `embedBodyImage` inlined. Removing it keeps each generated_posts row at
- * ~text size (~25 KB) instead of ~250 KB — a ~10× storage reduction.
- *
- * Removes a wrapping <figure> (and its <figcaption>) when present, then any
- * remaining standalone <img> whose src is a data: URI. Posts that have NOT
- * published yet keep the full base64 so a retry can still upload the image.
- */
-function stripInlineDataImages(html: string): string {
-  if (!html || !html.includes("data:image")) return html;
-  // 1. Drop <figure> blocks whose <img> uses a data: URI (incl. figcaption).
-  let out = html.replace(
-    /<figure\b[^>]*>(?:(?!<\/figure>)[\s\S])*?<img\b[^>]*\bsrc\s*=\s*["']data:image\/[^"']*["'][\s\S]*?<\/figure>/gi,
-    "",
-  );
-  // 2. Drop any remaining standalone <img> with a data: URI src.
-  out = out.replace(
-    /<img\b[^>]*\bsrc\s*=\s*["']data:image\/[^"']*["'][^>]*>/gi,
-    "",
-  );
-  return out;
-}
-
-/**
  * Per-tick concurrency: how many blogs run in parallel inside a single
  * cron tick. Default 3 (safe vs. Anthropic 50 RPM and Google 60 RPM
  * when combined with 4 shards = 12 simultaneous publishes). Clamped to
@@ -322,6 +295,40 @@ async function getRecentTitles(blogId: string, limit = 20): Promise<string[]> {
   return rows.map((r) => r.title).filter((t): t is string => Boolean(t));
 }
 
+/**
+ * Pull the most recent published sibling posts on the same blog whose
+ * platform URL is known — used by the content generator to weave inline
+ * <a href> internal links into the article body. Per the footprint audit,
+ * internal linking is the single SEO signal we were leaving on the table.
+ */
+async function getInternalLinkRefs(
+  blogId: string,
+  limit = 8,
+): Promise<Array<{ title: string; url: string }>> {
+  const rows = await db
+    .select({
+      title: generatedPosts.title,
+      url: generatedPosts.externalPostUrl,
+    })
+    .from(generatedPosts)
+    .where(
+      and(
+        eq(generatedPosts.blogId, blogId),
+        eq(generatedPosts.status, "published"),
+        isNotNull(generatedPosts.externalPostUrl),
+        isNotNull(generatedPosts.title),
+      ),
+    )
+    .orderBy(desc(generatedPosts.publishedAt))
+    .limit(limit);
+  return rows
+    .filter(
+      (r): r is { title: string; url: string } =>
+        Boolean(r.title) && Boolean(r.url),
+    )
+    .map((r) => ({ title: r.title, url: r.url }));
+}
+
 // ─── Core: generate + publish for one blog ──────────────────────────────────
 
 async function runGenerateAndPublish(
@@ -418,6 +425,10 @@ async function runGenerateAndPublish(
     // 5. Generate content using the style profile loaded in step 2.
     //    Resolve vertical so the generator can pull recent news headlines
     //    as external-link sources for non-peptide posts.
+    //    Pre-fetch sibling posts on this blog so the generator can weave
+    //    internal links into the article (Stage 1 of the footprint audit
+    //    fixes — the single biggest SEO signal we were missing).
+    const internalLinkRefs = await getInternalLinkRefs(blog.id, 8);
     const genOpts: GenerateOptions = {
       topic,
       keywords,
@@ -429,6 +440,10 @@ async function runGenerateAndPublish(
       verticalKey: verticalForPost?.key ?? null,
       // Concrete language resolved once above (matches the topic).
       language: postLanguage,
+      // Stable per-blog seed → deterministic quirks, word band, body-image
+      // markup class. Same blog always writes with the same tics.
+      blogSeed: blog.id,
+      internalLinkRefs,
     };
     const content = await generateContent(genOpts);
 
@@ -498,16 +513,12 @@ async function runGenerateAndPublish(
       };
     }
 
-    // 6. Mark published, update blog's last-post tracking. Also re-store the
-    //    body WITHOUT its inline base64 image — the platform now hosts the
-    //    image, so the DB copy (used only for dashboard preview / reports)
-    //    doesn't need the ~150-300 KB blob. Cuts per-row storage ~10×.
+    // 6. Mark published, update blog's last-post tracking
     const publishedAt = new Date();
     await db
       .update(generatedPosts)
       .set({
         status: "published",
-        body: stripInlineDataImages(content.content),
         externalPostId: publish.postId != null ? String(publish.postId) : null,
         externalPostUrl: publish.postUrl ?? null,
         publishedAt,
