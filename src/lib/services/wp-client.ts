@@ -230,8 +230,11 @@ export async function createPost(
     const client = createClient(wpUrl, username, appPassword);
 
     // Upload the featured image up-front (best-effort — if it fails we still
-    // publish the post, just without a featured image).
+    // publish the post, just without a featured image). We keep BOTH the
+    // media id (for featured_media / og:image / listings) AND the public
+    // source URL (to embed inline at the top of the post body — see below).
     let featuredMediaId: number | undefined;
+    let featuredSourceUrl: string | undefined;
     if (input.featuredImageUrl) {
       try {
         const uploaded = await uploadMediaFromUrl(
@@ -242,6 +245,7 @@ export async function createPost(
           { filename: input.title, altText: input.title },
         );
         featuredMediaId = uploaded.id;
+        featuredSourceUrl = uploaded.sourceUrl;
       } catch (err) {
         console.warn(
           "[wp.createPost] featured image upload failed, continuing without it:",
@@ -255,13 +259,33 @@ export async function createPost(
     // small enough that shared hosts with PHP post_max_size = 2M don't
     // reject the request — and avoids embedding huge base64 into the
     // editor where it would slow Gutenberg / Classic editor loads.
-    const rewrittenBody = await rewriteBodyDataUrisToWpUrls(
+    let rewrittenBody = await rewriteBodyDataUrisToWpUrls(
       wpUrl,
       username,
       appPassword,
       input.content,
       input.title,
     );
+
+    // Embed the hero image at the TOP of the post body. Many WordPress
+    // themes don't render featured_media on single posts (it only shows
+    // in archives/listings), so the post would look imageless to a
+    // reader. Prepending the hero as a <figure> guarantees it's visible
+    // in the post content itself. featured_media is still set below for
+    // og:image, RSS, and theme listings.
+    if (featuredSourceUrl) {
+      const safeAlt = (input.title || "")
+        .replace(/&/g, "&amp;")
+        .replace(/"/g, "&quot;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .slice(0, 200);
+      const heroFigure =
+        `<figure class="post-hero-image" style="margin:0 0 1.5em;">` +
+        `<img src="${featuredSourceUrl}" alt="${safeAlt}" ` +
+        `style="width:100%;height:auto;display:block;" /></figure>`;
+      rewrittenBody = heroFigure + rewrittenBody;
+    }
 
     const wpStatus = (input.status ?? "publish") === "publish" ? "publish" : "draft";
     const res = await client.post<WpPost>("/wp-json/wp/v2/posts", {
@@ -293,6 +317,68 @@ export async function createPost(
  * Requires the authenticated user to have the `upload_files` capability
  * (admins/editors do by default; authors do; contributors do NOT).
  */
+/**
+ * Upload (idempotently) the IndexNow key file to the WordPress media library.
+ *
+ * IndexNow requires the key file to be reachable at a URL on the same host
+ * as the post URLs we submit. WP doesn't let us write to the document root,
+ * but the media library URL — `/wp-content/uploads/YYYY/MM/{key}.txt` — IS
+ * on the blog's domain, and IndexNow's spec explicitly allows the key file
+ * in a subdirectory as long as we pass that exact URL in keyLocation.
+ *
+ * Flow:
+ *   1. Search `/wp-json/wp/v2/media?search={key}` for an existing upload.
+ *      WP returns matches by filename — if we've deployed before, the
+ *      original `{key}.txt` (or a `-1` variant) is found.
+ *   2. If found, return its `source_url`.
+ *   3. Else POST the key string as `text/plain` to `/wp-json/wp/v2/media`
+ *      with `Content-Disposition: attachment; filename="{key}.txt"`.
+ *   4. Return the new `source_url`.
+ *
+ * Failures are non-fatal — the caller logs and skips the IndexNow ping.
+ */
+export async function uploadIndexNowKeyFile(
+  wpUrl: string,
+  username: string,
+  appPassword: string,
+  key: string,
+): Promise<string> {
+  const client = createClient(wpUrl, username, appPassword);
+  const filename = `${key}.txt`;
+
+  // 1. Idempotency check — has the file already been uploaded?
+  try {
+    const search = await client.get<Array<{ source_url: string; title?: { rendered?: string } }>>(
+      `/wp-json/wp/v2/media`,
+      { params: { search: key, per_page: 5 } },
+    );
+    const hit = (search.data || []).find((m) =>
+      typeof m.source_url === "string" && m.source_url.includes(`${key}`),
+    );
+    if (hit && typeof hit.source_url === "string") {
+      return hit.source_url;
+    }
+  } catch {
+    // Search failure isn't fatal — proceed to upload. Worst case we create
+    // a `{key}-1.txt` duplicate on repeat deploys, which still works.
+  }
+
+  // 2. Upload as plain text. WP accepts arbitrary text/* types in /media.
+  const uploadRes = await client.post<{ id: number; source_url: string }>(
+    `/wp-json/wp/v2/media`,
+    Buffer.from(key, "utf-8"),
+    {
+      headers: {
+        "Content-Type": "text/plain",
+        "Content-Disposition": `attachment; filename="${filename}"`,
+      },
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
+    },
+  );
+  return uploadRes.data.source_url;
+}
+
 export async function uploadMediaFromUrl(
   wpUrl: string,
   username: string,

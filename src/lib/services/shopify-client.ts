@@ -227,6 +227,88 @@ async function fetchImageAsBase64(url: string): Promise<{
 }
 
 /**
+/**
+ * Ensure (idempotently) that an IndexNow key file is reachable on the
+ * shop's domain. Shopify doesn't let arbitrary files live at the document
+ * root, but a Page at `/pages/{handle}` IS on the shop's domain and
+ * IndexNow accepts a subpath as keyLocation.
+ *
+ * Strategy:
+ *   1. Search Pages by handle ("indexnow-key"). If found and body contains
+ *      the key, return its URL — no work needed.
+ *   2. Else create the page with the key embedded in body_html and a
+ *      `noindex` meta hint so it doesn't surface in search.
+ *
+ * Returns the absolute URL of the page on the shop's domain, suitable for
+ * passing as IndexNow's `keyLocation`. Throws on hard failure; caller
+ * decides whether to skip the ping or surface the error.
+ */
+export async function ensureIndexNowKeyPage(
+  creds: ShopifyCreds,
+  key: string,
+  apiVersion: string = DEFAULT_API_VERSION,
+): Promise<string> {
+  const host = normalizeStoreUrl(creds.storeUrl);
+  const client = await createClient(creds, apiVersion);
+  const handle = "indexnow-key";
+
+  // 1. Idempotency — does a page with this handle already exist?
+  type ShopifyPage = {
+    id: number;
+    handle: string;
+    body_html: string;
+    published_at: string | null;
+  };
+  try {
+    const search = await client.get<{ pages: ShopifyPage[] }>(`/pages.json`, {
+      params: { handle, fields: "id,handle,body_html,published_at" },
+    });
+    const existing = (search.data.pages || []).find((p) => p.handle === handle);
+    if (existing && typeof existing.body_html === "string" && existing.body_html.includes(key)) {
+      return `https://${host}/pages/${handle}`;
+    }
+    // Page exists but body is stale (different key) — overwrite it below
+    // via PUT instead of creating a duplicate.
+    if (existing) {
+      await client.put(`/pages/${existing.id}.json`, {
+        page: {
+          id: existing.id,
+          body_html: buildIndexNowPageBody(key),
+          published: true,
+        },
+      });
+      return `https://${host}/pages/${handle}`;
+    }
+  } catch {
+    // Search failure isn't fatal — try create.
+  }
+
+  // 2. Create the page. body_html includes the key as a literal token so
+  //    IndexNow's verifier finds it via substring match.
+  await client.post(`/pages.json`, {
+    page: {
+      title: "IndexNow Verification",
+      handle,
+      body_html: buildIndexNowPageBody(key),
+      published: true,
+    },
+  });
+
+  return `https://${host}/pages/${handle}`;
+}
+
+/** Page body containing the key as a literal token plus a robots noindex. */
+function buildIndexNowPageBody(key: string): string {
+  // The key appears verbatim inside <code> so IndexNow's GET sees the
+  // exact string. The meta hint discourages indexing of this admin page.
+  return (
+    `<meta name="robots" content="noindex,nofollow">` +
+    `<p>This page exists for IndexNow verification only.</p>` +
+    `<pre><code>${key}</code></pre>`
+  );
+}
+
+/**
  * Verify Shopify credentials by hitting the shop info endpoint.
  */
 export async function testConnection(

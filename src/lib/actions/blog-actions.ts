@@ -14,6 +14,8 @@ import {
   generateContent,
   ideateTopic,
   resolvePostLanguage,
+  postLanguageForDomain,
+  estimateImageCostUsd,
   type GenerateOptions,
   type Tone,
 } from "@/lib/services/content-generator";
@@ -54,6 +56,7 @@ import type {
 } from "@/lib/types";
 import { publishPost as platformPublishPost } from "@/lib/services/platform-client";
 import * as wp from "@/lib/services/wp-client";
+import { pingIndexNowFireAndForget } from "@/lib/services/index-now-pinger";
 import { revalidatePath } from "next/cache";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -635,11 +638,18 @@ export async function generateBlogPost(
     );
   }
 
-  // Resolve the vertical + post language ONCE so topic ideation and
+    // Resolve the vertical + post language ONCE so topic ideation and
   // article generation are in the SAME language. For bilingual (en_fr)
-  // verticals this coin-flips to one concrete language for this post.
+  // verticals this coin-flips to one concrete language for this post —
+  // but only for .ca blogs. The TLD policy:
+  //   .com  → English ONLY (override regardless of vertical config)
+  //   .ca + everything else → use the vertical's language (bilingual
+  //         verticals continue to alternate per post)
   const verticalForPost = verticalForNiche(blog.niche);
-  const postLanguage = resolvePostLanguage(verticalForPost?.language);
+  const postLanguage = postLanguageForDomain(
+    verticalForPost?.language,
+    blog.domain,
+  );
 
   // 3. Topic — explicit or ideated from recent titles + style profile
   let topic = input.topic?.trim() || "";
@@ -696,40 +706,152 @@ export async function generateBlogPost(
   revalidatePath(`/blogs/${input.blogId}`);
   revalidatePath(`/blogs/${input.blogId}/posts`);
 
-  let result;
-  try {
-    // Resolve the blog's vertical so the generator can pull recent
-    // news headlines as external-link sources for non-peptide posts.
-    const opts: GenerateOptions = {
-      topic,
-      keywords,
-      wordCount: input.wordCount ?? 700,
-      tone: input.tone ?? "professional",
-      niche: blog.niche,
-      brandVoice: input.brandVoice,
-      targetAudience: input.targetAudience,
-      seoOptimized: input.seoOptimized ?? true,
-      styleProfile: styleProfile ?? undefined,
-      verticalKey: verticalForPost?.key ?? null,
-      // Concrete language resolved once above (matches the topic's language).
-      language: postLanguage,
-    };
-    result = await generateContent(opts);
-  } catch (err) {
-    const message =
-      err instanceof Error ? err.message : "Content generation failed";
-    await db
-      .update(generatedPosts)
-      .set({
-        status: "failed",
-        failureReason: message,
-        updatedAt: new Date(),
-      })
-      .where(eq(generatedPosts.id, pending.id));
+    // Build the generation options once — only `topic` and `keywords` change
+  // between attempts when we fall back to a fresh ideated topic.
+  const buildOpts = (t: string, kw: string[]): GenerateOptions => ({
+    topic: t,
+    keywords: kw,
+    wordCount: input.wordCount ?? 700,
+    tone: input.tone ?? "professional",
+    niche: blog.niche,
+    brandVoice: input.brandVoice,
+    targetAudience: input.targetAudience,
+    seoOptimized: input.seoOptimized ?? true,
+    styleProfile: styleProfile ?? undefined,
+    verticalKey: verticalForPost?.key ?? null,
+    language: postLanguage,
+  });
 
-    revalidatePath(`/blogs/${input.blogId}/posts`);
-    return { success: false, message };
+  // Generation with topic-level recovery.
+  let result;
+  const MAX_TOPIC_ATTEMPTS = 2;
+  let currentTopic = topic;
+  let currentKeywords = keywords;
+  const failedAttempts: Array<{ topic: string; error: string }> = [];
+
+  for (let attempt = 1; attempt <= MAX_TOPIC_ATTEMPTS; attempt++) {
+    try {
+      console.info(
+        `[generateBlogPost] attempt ${attempt}/${MAX_TOPIC_ATTEMPTS} for ${blog.domain}: "${currentTopic}"`,
+      );
+      result = await generateContent(buildOpts(currentTopic, currentKeywords));
+      if (attempt > 1) {
+        console.info(
+          `[generateBlogPost] recovered on attempt ${attempt} with new topic`,
+        );
+      }
+      break;
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Content generation failed";
+      failedAttempts.push({ topic: currentTopic, error: message });
+      console.warn(
+        `[generateBlogPost] attempt ${attempt} failed for "${currentTopic}": ${message.slice(0, 200)}`,
+      );
+
+      if (attempt === MAX_TOPIC_ATTEMPTS) {
+        const combined = failedAttempts
+          .map((a) => `"${a.topic}": ${a.error}`)
+          .join(" | ");
+        await db
+          .update(generatedPosts)
+          .set({
+            status: "failed",
+            failureReason: `All ${MAX_TOPIC_ATTEMPTS} topic attempts failed — ${combined}`,
+            updatedAt: new Date(),
+          })
+          .where(eq(generatedPosts.id, pending.id));
+        revalidatePath(`/blogs/${input.blogId}/posts`);
+        return {
+          success: false,
+          message: `Generation failed on ${MAX_TOPIC_ATTEMPTS} different topics. Last error: ${message}`,
+        };
+      }
+
+      try {
+        const recent = await db
+          .select({ title: generatedPosts.title })
+          .from(generatedPosts)
+          .where(eq(generatedPosts.blogId, input.blogId))
+          .orderBy(desc(generatedPosts.createdAt))
+          .limit(20);
+        const recentTitles = [
+          currentTopic,
+          ...recent
+            .map((r) => r.title)
+            .filter((t): t is string => Boolean(t)),
+        ];
+        const newIdea = await ideateTopic(blog.niche, recentTitles, {
+          verticalKey: verticalForPost?.key ?? null,
+          styleProfile: styleProfile ?? undefined,
+          language: postLanguage,
+        });
+        if (!newIdea.topic || newIdea.topic.trim() === currentTopic.trim()) {
+          throw new Error("Re-ideation returned an empty or duplicate topic");
+        }
+        currentTopic = newIdea.topic;
+        currentKeywords = newIdea.keywords.length > 0
+          ? newIdea.keywords
+          : currentKeywords;
+        await db
+          .update(generatedPosts)
+          .set({
+            topic: currentTopic,
+            keywords: currentKeywords,
+            updatedAt: new Date(),
+          })
+          .where(eq(generatedPosts.id, pending.id));
+        console.info(
+          `[generateBlogPost] re-ideated topic: "${currentTopic}"`,
+        );
+      } catch (ideationErr) {
+        const ideationMsg =
+          ideationErr instanceof Error
+            ? ideationErr.message
+            : "Re-ideation failed";
+        await db
+          .update(generatedPosts)
+          .set({
+            status: "failed",
+            failureReason: `Generation failed for "${currentTopic}": ${message}; re-ideation also failed: ${ideationMsg}`,
+            updatedAt: new Date(),
+          })
+          .where(eq(generatedPosts.id, pending.id));
+        revalidatePath(`/blogs/${input.blogId}/posts`);
+        return {
+          success: false,
+          message: `Both generation and re-ideation failed: ${message}; ${ideationMsg}`,
+        };
+      }
+    }
   }
+
+  if (!result) {
+    // Unreachable in practice (the loop either breaks with a result or
+    // returns inside the failure branches) but TypeScript needs the guard.
+    return { success: false, message: "Generation pipeline exited without a result" };
+  }
+
+  // Cost log — per-post breakdown so the operator can spot drift fast.
+  // text = Claude (Sonnet body + Haiku ideate/scene/etc., cache-aware).
+  // images = estimated from GOOGLE_IMAGE_MODEL × #images actually produced
+  // (Gemini doesn't report billable tokens, so this is a heuristic).
+  {
+    const textCost = Number(result.costUsd) || 0;
+    const imageCount =
+      (result.heroImageUrl ? 1 : 0) + (result.bodyImageUrl ? 1 : 0);
+    const perImage = estimateImageCostUsd();
+    const imageCost = imageCount * perImage;
+    const total = textCost + imageCost;
+    console.info(
+      `[cost] ${blog.domain}: text=$${textCost.toFixed(4)} ` +
+        `(${result.tokensUsed} tok), ` +
+        `images=$${imageCost.toFixed(4)} (${imageCount}× @ $${perImage.toFixed(2)}), ` +
+        `total=$${total.toFixed(4)}`,
+    );
+  }
+
+  // 5. Persist generated content (incl. scrubber report when present)
 
   // 5. Persist generated content (incl. scrubber report when present)
   await db
@@ -864,6 +986,7 @@ export async function publishGeneratedPost(
       .where(eq(generatedPosts.id, generatedPostId));
 
     // Stamp last-post fields on the blog row so dashboards stay fresh.
+        // Stamp last-post fields on the blog row so dashboards stay fresh.
     await db
       .update(blogs)
       .set({
@@ -875,6 +998,31 @@ export async function publishGeneratedPost(
 
     revalidatePath(`/blogs/${post.blogId}`);
     revalidatePath("/blogs");
+
+    // IndexNow ping — fire-and-forget. Auto-deploys the key file on the
+    // blog's domain via the platform's API on first publish, then POSTs
+    // to api.indexnow.org. Covers Bing, Yandex, Seznam, Naver, Yep,
+    // DuckDuckGo in one call. No-op when INDEXNOW_KEY is unset.
+    console.info(
+      `[indexnow] step 7 reached: postUrl=${result.postUrl ?? "(empty!)"}`,
+    );
+    if (result.postUrl) {
+      const [fullBlog] = await db
+        .select()
+        .from(blogs)
+        .where(eq(blogs.id, post.blogId));
+      if (fullBlog) {
+        pingIndexNowFireAndForget(fullBlog, result.postUrl);
+      } else {
+        console.warn(
+          `[indexnow] SKIP — could not reload blog row for ping`,
+        );
+      }
+    } else {
+      console.warn(
+        `[indexnow] SKIP — publish.postUrl is empty (platform returned no URL)`,
+      );
+    }
   } else {
     await db
       .update(generatedPosts)

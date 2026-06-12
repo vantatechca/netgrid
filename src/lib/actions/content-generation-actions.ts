@@ -9,6 +9,8 @@ import {
   generateContent,
   ideateTopic,
   resolvePostLanguage,
+  postLanguageForDomain,
+  estimateImageCostUsd,
   type GenerateOptions,
   type Tone,
 } from "@/lib/services/content-generator";
@@ -18,6 +20,7 @@ import {
 } from "@/lib/actions/style-profile-actions";
 import { publishPost, type PlatformBlog } from "@/lib/services/platform-client";
 import { verticalForNiche } from "@/lib/content/verticals";
+import { pingIndexNowFireAndForget } from "@/lib/services/index-now-pinger";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -102,33 +105,6 @@ const MIN_HOURS_BETWEEN_POSTS = 6;
 const MAX_BLOGS_PER_CRON_RUN = Number(
   process.env.MAX_BLOGS_PER_CRON_RUN || "50",
 );
-
-/**
- * Strip inline base64 `data:` image tags from an HTML body. Run on the
- * STORED copy only AFTER a successful publish: by then the images live on
- * the platform's own media library (WP/Shopify re-host them at publish
- * time), so the DB copy doesn't need the ~150-300 KB base64 blob that
- * `embedBodyImage` inlined. Removing it keeps each generated_posts row at
- * ~text size (~25 KB) instead of ~250 KB — a ~10× storage reduction.
- *
- * Removes a wrapping <figure> (and its <figcaption>) when present, then any
- * remaining standalone <img> whose src is a data: URI. Posts that have NOT
- * published yet keep the full base64 so a retry can still upload the image.
- */
-function stripInlineDataImages(html: string): string {
-  if (!html || !html.includes("data:image")) return html;
-  // 1. Drop <figure> blocks whose <img> uses a data: URI (incl. figcaption).
-  let out = html.replace(
-    /<figure\b[^>]*>(?:(?!<\/figure>)[\s\S])*?<img\b[^>]*\bsrc\s*=\s*["']data:image\/[^"']*["'][\s\S]*?<\/figure>/gi,
-    "",
-  );
-  // 2. Drop any remaining standalone <img> with a data: URI src.
-  out = out.replace(
-    /<img\b[^>]*\bsrc\s*=\s*["']data:image\/[^"']*["'][^>]*>/gi,
-    "",
-  );
-  return out;
-}
 
 /**
  * Per-tick concurrency: how many blogs run in parallel inside a single
@@ -322,6 +298,40 @@ async function getRecentTitles(blogId: string, limit = 20): Promise<string[]> {
   return rows.map((r) => r.title).filter((t): t is string => Boolean(t));
 }
 
+/**
+ * Pull the most recent published sibling posts on the same blog whose
+ * platform URL is known — used by the content generator to weave inline
+ * <a href> internal links into the article body. Per the footprint audit,
+ * internal linking is the single SEO signal we were leaving on the table.
+ */
+async function getInternalLinkRefs(
+  blogId: string,
+  limit = 8,
+): Promise<Array<{ title: string; url: string }>> {
+  const rows = await db
+    .select({
+      title: generatedPosts.title,
+      url: generatedPosts.externalPostUrl,
+    })
+    .from(generatedPosts)
+    .where(
+      and(
+        eq(generatedPosts.blogId, blogId),
+        eq(generatedPosts.status, "published"),
+        isNotNull(generatedPosts.externalPostUrl),
+        isNotNull(generatedPosts.title),
+      ),
+    )
+    .orderBy(desc(generatedPosts.publishedAt))
+    .limit(limit);
+  return rows
+    .filter(
+      (r): r is { title: string; url: string } =>
+        Boolean(r.title) && Boolean(r.url),
+    )
+    .map((r) => ({ title: r.title, url: r.url }));
+}
+
 // ─── Core: generate + publish for one blog ──────────────────────────────────
 
 async function runGenerateAndPublish(
@@ -381,7 +391,12 @@ async function runGenerateAndPublish(
   // article share a language. Bilingual (en_fr) verticals coin-flip to
   // one concrete language for this post.
   const verticalForPost = verticalForNiche(clientNiche);
-  const postLanguage = resolvePostLanguage(verticalForPost?.language);
+  // TLD policy: .com → English only; .ca + everything else → the
+  // vertical's configured language (bilingual verticals alternate per post).
+  const postLanguage = postLanguageForDomain(
+    verticalForPost?.language,
+    blog.domain,
+  );
 
   let topic = input.topic?.trim();
   let keywords = input.keywords ?? [];
@@ -418,19 +433,126 @@ async function runGenerateAndPublish(
     // 5. Generate content using the style profile loaded in step 2.
     //    Resolve vertical so the generator can pull recent news headlines
     //    as external-link sources for non-peptide posts.
-    const genOpts: GenerateOptions = {
-      topic,
-      keywords,
+    //    Pre-fetch sibling posts on this blog so the generator can weave
+    //    internal links into the article (Stage 1 of the footprint audit
+    //    fixes — the single biggest SEO signal we were missing).
+    const internalLinkRefs = await getInternalLinkRefs(blog.id, 8);
+
+    // Build genOpts as a function so the topic-recovery loop below can
+    // reuse it with a fresh ideated topic on failure.
+    const buildGenOpts = (t: string, kw: string[]): GenerateOptions => ({
+      topic: t,
+      keywords: kw,
       wordCount: input.wordCount ?? 1000,
       tone: input.tone ?? "professional",
       niche: clientNiche,
       seoOptimized: true,
       styleProfile: styleProfile ?? undefined,
       verticalKey: verticalForPost?.key ?? null,
-      // Concrete language resolved once above (matches the topic).
       language: postLanguage,
-    };
-    const content = await generateContent(genOpts);
+      blogSeed: blog.id,
+      internalLinkRefs,
+    });
+
+    // Generation with topic-level recovery. Some subjects fail
+    // repeatedly — Claude can refuse certain peptide names (returns no
+    // text content), or persist in shape-drift even after the inner
+    // shape retry. Rather than fail the post, re-ideate a fresh topic
+    // that excludes the failing one and try once more.
+    const MAX_TOPIC_ATTEMPTS = 2;
+    let currentTopic = topic;
+    let currentKeywords = keywords;
+    let content: Awaited<ReturnType<typeof generateContent>> | undefined;
+    const topicFailures: Array<{ topic: string; error: string }> = [];
+
+    for (let attempt = 1; attempt <= MAX_TOPIC_ATTEMPTS; attempt++) {
+      try {
+        console.info(
+          `[runGenerateAndPublish] attempt ${attempt}/${MAX_TOPIC_ATTEMPTS} for ${blog.domain}: "${currentTopic}"`,
+        );
+        content = await generateContent(
+          buildGenOpts(currentTopic, currentKeywords),
+        );
+        if (attempt > 1) {
+          console.info(
+            `[runGenerateAndPublish] recovered on attempt ${attempt} with new topic`,
+          );
+        }
+        break;
+      } catch (genErr) {
+        const msg =
+          genErr instanceof Error ? genErr.message : "Generation failed";
+        topicFailures.push({ topic: currentTopic, error: msg });
+        console.warn(
+          `[runGenerateAndPublish] attempt ${attempt} failed for "${currentTopic}": ${msg.slice(0, 200)}`,
+        );
+
+        if (attempt === MAX_TOPIC_ATTEMPTS) {
+          // Out of budget — rethrow so the outer catch marks the row
+          // failed with the combined error message.
+          const combined = topicFailures
+            .map((a) => `"${a.topic}": ${a.error}`)
+            .join(" | ");
+          throw new Error(
+            `All ${MAX_TOPIC_ATTEMPTS} topic attempts failed — ${combined}`,
+          );
+        }
+
+        // Re-ideate, excluding the failed topic. If ideation itself
+        // throws, fall through to the outer catch.
+        const recent = await getRecentTitles(blog.id);
+        const newIdea = await ideateTopic(
+          clientNiche,
+          [currentTopic, ...recent],
+          {
+            verticalKey: verticalForPost?.key ?? null,
+            styleProfile: styleProfile ?? undefined,
+            language: postLanguage,
+          },
+        );
+        if (!newIdea.topic || newIdea.topic.trim() === currentTopic.trim()) {
+          throw new Error("Re-ideation returned an empty or duplicate topic");
+        }
+        currentTopic = newIdea.topic;
+        currentKeywords =
+          newIdea.keywords.length > 0 ? newIdea.keywords : currentKeywords;
+        // Reflect the new topic on the pending row so the dashboard
+        // shows what the recovery attempt is actually writing about.
+        await db
+          .update(generatedPosts)
+          .set({
+            topic: currentTopic,
+            keywords: currentKeywords,
+            updatedAt: new Date(),
+          })
+          .where(eq(generatedPosts.id, generatedPostId));
+        console.info(
+          `[runGenerateAndPublish] re-ideated topic: "${currentTopic}"`,
+        );
+      }
+    }
+    if (!content) {
+      // Loop guarantees content is set or we throw. Defensive guard.
+      throw new Error(
+        "Generation loop exited without content (this should be unreachable)",
+      );
+    }
+
+    // Cost log — per-post breakdown so the operator can spot drift fast.
+    {
+      const textCost = Number(content.costUsd) || 0;
+      const imageCount =
+        (content.heroImageUrl ? 1 : 0) + (content.bodyImageUrl ? 1 : 0);
+      const perImage = estimateImageCostUsd();
+      const imageCost = imageCount * perImage;
+      const total = textCost + imageCost;
+      console.info(
+        `[cost] ${blog.domain}: text=$${textCost.toFixed(4)} ` +
+          `(${content.tokensUsed} tok), ` +
+          `images=$${imageCost.toFixed(4)} (${imageCount}× @ $${perImage.toFixed(2)}), ` +
+          `total=$${total.toFixed(4)}`,
+      );
+    }
 
     await db
       .update(generatedPosts)
@@ -498,16 +620,12 @@ async function runGenerateAndPublish(
       };
     }
 
-    // 6. Mark published, update blog's last-post tracking. Also re-store the
-    //    body WITHOUT its inline base64 image — the platform now hosts the
-    //    image, so the DB copy (used only for dashboard preview / reports)
-    //    doesn't need the ~150-300 KB blob. Cuts per-row storage ~10×.
+    // 6. Mark published, update blog's last-post tracking
     const publishedAt = new Date();
     await db
       .update(generatedPosts)
       .set({
         status: "published",
-        body: stripInlineDataImages(content.content),
         externalPostId: publish.postId != null ? String(publish.postId) : null,
         externalPostUrl: publish.postUrl ?? null,
         publishedAt,
@@ -523,6 +641,20 @@ async function runGenerateAndPublish(
         updatedAt: publishedAt,
       })
       .where(eq(blogs.id, blog.id));
+
+    // 7. Push notification — IndexNow ping covers Bing, Yandex, Seznam,
+    //    Naver, Yep, and DuckDuckGo in one POST. Fire-and-forget: the
+    //    publish has already succeeded, so a slow/failed engine ping must
+    //    not roll back or delay anything. No-op when INDEXNOW_KEY is unset.
+    //    The first publish per blog also auto-deploys the IndexNow key
+    //    file to the blog's domain via the platform's API (WP REST media
+    //    upload / Shopify Pages create) — no manual setup required.
+    //    Subsequent publishes hit an in-memory cache.
+    //    Google has no IndexNow equivalent and discovers posts via its
+    //    natural sitemap crawl (Yoast/RankMath/Shopify defaults).
+    if (publish.postUrl) {
+      pingIndexNowFireAndForget(blog, publish.postUrl);
+    }
 
     return {
       success: true,
