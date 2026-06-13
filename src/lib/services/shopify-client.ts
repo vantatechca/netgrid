@@ -893,6 +893,35 @@ export async function createArticle(
       apiVersion,
     );
 
+    // SEO metafields. Shopify's Online Store theme renders these as the
+    // article's <title> and <meta name="description">:
+    //   namespace "global", key "title_tag"        → SEO title
+    //   namespace "global", key "description_tag"   → SEO meta description
+    // Without them the theme falls back to the raw article title and no
+    // meta description at all (the "meta description is missing" audit error).
+    const metafields: Array<{
+      namespace: string;
+      key: string;
+      value: string;
+      type: string;
+    }> = [];
+    if (input.metaTitle && input.metaTitle.trim()) {
+      metafields.push({
+        namespace: "global",
+        key: "title_tag",
+        value: input.metaTitle.trim(),
+        type: "single_line_text_field",
+      });
+    }
+    if (input.metaDescription && input.metaDescription.trim()) {
+      metafields.push({
+        namespace: "global",
+        key: "description_tag",
+        value: input.metaDescription.trim(),
+        type: "single_line_text_field",
+      });
+    }
+
     const res = await client.post<{ article: ShopifyArticle }>(
       `/blogs/${targetBlogId}/articles.json`,
       {
@@ -903,6 +932,7 @@ export async function createArticle(
           tags: input.tags?.join(", "),
           published,
           ...(imagePayload && { image: imagePayload }),
+          ...(metafields.length > 0 && { metafields }),
         },
       },
     );

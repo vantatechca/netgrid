@@ -1088,7 +1088,12 @@ function convertMarkdownToHtml(content: string): string {
     .replace(/^####\s+(.+)$/gm, "<h4>$1</h4>")
     .replace(/^###\s+(.+)$/gm, "<h3>$1</h3>")
     .replace(/^##\s+(.+)$/gm, "<h2>$1</h2>")
-    .replace(/^#\s+(.+)$/gm, "<h1>$1</h1>")
+    // A single `#` would be the page H1, but the platform (Shopify/WP theme)
+    // already renders the post *title* as the page's sole <h1>. Emitting
+    // another <h1> in the body creates a duplicate-H1 SEO error, so we map
+    // `#` to <h2> instead. demoteH1ToH2() below is the belt-and-suspenders
+    // catch for any literal <h1> Claude writes directly as HTML.
+    .replace(/^#\s+(.+)$/gm, "<h2>$1</h2>")
     .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
     .replace(/(?<!\*)\*([^*]+?)\*(?!\*)/g, "<em>$1</em>");
 }
@@ -1152,6 +1157,69 @@ function countWordsInHtml(html: string): number {
 function generateExcerpt(content: string): string {
   const text = content.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
   return text.length > 160 ? text.substring(0, 157) + "..." : text;
+}
+
+/**
+ * Demote every <h1> in the body to <h2>. The platform renders the post
+ * TITLE as the page's single <h1>; any <h1> inside the body produces the
+ * "Too many H1 headings" audit error. Runs on both the legacy and profile
+ * paths so no generation route can leak a body H1.
+ *
+ * Preserves attributes on the opening tag (rare, but harmless) by only
+ * swapping the tag name.
+ */
+function demoteH1ToH2(html: string): string {
+  return html
+    .replace(/<h1(\s[^>]*)?>/gi, "<h2$1>")
+    .replace(/<\/h1\s*>/gi, "</h2>");
+}
+
+/**
+ * Trim a string to at most `max` characters without cutting a word in
+ * half. Backs off to the last word boundary when one exists in the last
+ * ~40% of the budget, then strips any dangling separator/punctuation.
+ */
+function truncateAtWord(s: string, max: number): string {
+  if (s.length <= max) return s;
+  const slice = s.slice(0, max);
+  const lastSpace = slice.lastIndexOf(" ");
+  const cut = lastSpace > max * 0.6 ? slice.slice(0, lastSpace) : slice;
+  return cut.replace(/[\s,;:.\-|]+$/, "").trim();
+}
+
+/**
+ * Normalize the SEO meta TITLE (the <title> / title-tag) to the spec the
+ * SEO audit enforces:
+ *   - collapse whitespace
+ *   - use a vertical bar " | " instead of a spaced hyphen " - " as the
+ *     separator between distinct phrases (Seobility / Google best practice)
+ *   - cap at 60 chars (optimal 55-65, hard ceiling ~70) on a word boundary
+ * Falls back to the article title when Claude omitted metaTitle.
+ */
+function normalizeMetaTitle(
+  raw: string | null | undefined,
+  fallback: string,
+): string {
+  let t = (raw || fallback || "").replace(/\s+/g, " ").trim();
+  t = t.replace(/\s+-\s+/g, " | ");
+  if (t.length > 60) t = truncateAtWord(t, 60);
+  return t;
+}
+
+/**
+ * Normalize the SEO meta DESCRIPTION to the audit spec:
+ *   - collapse whitespace
+ *   - cap at 160 chars on a word boundary (Google truncates beyond ~160)
+ * We never pad shorts — a shorter accurate description beats filler.
+ * Falls back to a body-derived excerpt when Claude omitted metaDescription.
+ */
+function normalizeMetaDescription(
+  raw: string | null | undefined,
+  fallback: string,
+): string {
+  let d = (raw || fallback || "").replace(/\s+/g, " ").trim();
+  if (d.length > 160) d = truncateAtWord(d, 160);
+  return d;
 }
 
 // Hero-image URL generation lives in image-generator.ts. The composer here
@@ -1998,6 +2066,9 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
   if (body.includes("#")) body = convertMarkdownToHtml(body);
   body = sanitizeMetadata(body);
   body = stripClaudeImages(body);
+  // Guarantee the body carries no <h1> — the platform title is the page's
+  // sole H1. Prevents the "Too many H1 headings" SEO error.
+  body = demoteH1ToH2(body);
 
   if (!usingProfile) {
     body = capWordCount(body, MAX_WORDS);
@@ -2181,8 +2252,11 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
     title: parsed.title,
     content: body,
     excerpt: parsed.excerpt || generateExcerpt(body),
-    metaTitle: parsed.metaTitle || parsed.title,
-    metaDescription: parsed.metaDescription || generateExcerpt(body),
+    metaTitle: normalizeMetaTitle(parsed.metaTitle, parsed.title),
+    metaDescription: normalizeMetaDescription(
+      parsed.metaDescription,
+      generateExcerpt(body),
+    ),
     keywords: parsed.keywords && parsed.keywords.length > 0 ? parsed.keywords : opts.keywords,
     wordCount,
     seoScore: scores.seoScore,

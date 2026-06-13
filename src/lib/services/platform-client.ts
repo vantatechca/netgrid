@@ -3,6 +3,7 @@ import type {
   Platform,
   PublishPostInput,
   PublishPostResult,
+  SeoPlugin,
 } from "@/lib/types";
 import * as wp from "./wp-client";
 import * as shopify from "./shopify-client";
@@ -19,6 +20,8 @@ export interface PlatformBlog {
   wpUrl?: string | null;
   wpUsername?: string | null;
   wpAppPassword?: string | null;
+  /** Which SEO plugin (if any) is installed — routes meta title/description. */
+  seoPlugin?: SeoPlugin | null;
 
   // Shopify (both auth modes supported)
   shopifyAuthMode?: "legacy_token" | "client_credentials" | null;
@@ -188,5 +191,7 @@ export async function publishPost(
   if (!blog.wpUrl || !blog.wpUsername || !blog.wpAppPassword) {
     return { success: false, message: "WordPress credentials are incomplete." };
   }
-  return wp.createPost(blog.wpUrl, blog.wpUsername, blog.wpAppPassword, input);
+  return wp.createPost(blog.wpUrl, blog.wpUsername, blog.wpAppPassword, input, {
+    seoPlugin: blog.seoPlugin ?? "none",
+  });
 }

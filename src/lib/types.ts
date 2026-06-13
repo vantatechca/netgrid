@@ -69,6 +69,20 @@ export interface PublishPostInput {
   status?: "draft" | "publish";
   tags?: string[];
   featuredImageUrl?: string;
+  /**
+   * SEO meta title (title tag). Written to the platform's SEO fields:
+   * Shopify → article metafield `global.title_tag`; WordPress → Yoast /
+   * RankMath title (routed by the blog's seoPlugin). Falls back to `title`
+   * for rendering when absent.
+   */
+  metaTitle?: string;
+  /**
+   * SEO meta description. Written to the platform's SEO fields: Shopify →
+   * article metafield `global.description_tag`; WordPress → Yoast /
+   * RankMath description. When absent, the platform falls back to an
+   * excerpt or auto-generated snippet.
+   */
+  metaDescription?: string;
 }
 
 export interface PublishPostResult {
