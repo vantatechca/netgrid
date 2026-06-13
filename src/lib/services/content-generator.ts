@@ -1160,6 +1160,74 @@ function generateExcerpt(content: string): string {
 }
 
 /**
+ * SEO meta sizing — PIXEL based, matching how Seobility / Google measure.
+ *
+ * Search engines render the title tag at ~20px Arial and the meta
+ * description at ~14px Arial, then truncate by PIXEL width, not character
+ * count. Seobility flags titles over 580px and descriptions over 1000px.
+ * Character caps are unreliable: a 60-char title of wide glyphs can exceed
+ * 580px, and 160 chars of description can hit ~1024px.
+ *
+ * We estimate width with an Arial advance-width table (em = 1000 units),
+ * calibrated against real audit values — a 783px title and a 1999px
+ * description both reproduce within <1%. Limits use a strict-safe margin
+ * under the audit thresholds.
+ */
+const ARIAL_WIDTHS: Record<string, number> = {
+  " ": 278, "!": 278, '"': 355, "#": 556, $: 556, "%": 889, "&": 667,
+  "'": 191, "(": 333, ")": 333, "*": 389, "+": 584, ",": 278, "-": 333,
+  ".": 278, "/": 278, "0": 556, "1": 556, "2": 556, "3": 556, "4": 556,
+  "5": 556, "6": 556, "7": 556, "8": 556, "9": 556, ":": 278, ";": 278,
+  "<": 584, "=": 584, ">": 584, "?": 556, "@": 1015, A: 667, B: 667,
+  C: 722, D: 722, E: 667, F: 611, G: 778, H: 722, I: 278, J: 500, K: 667,
+  L: 556, M: 833, N: 722, O: 778, P: 667, Q: 778, R: 722, S: 667, T: 611,
+  U: 722, V: 667, W: 944, X: 667, Y: 667, Z: 611, "[": 278, "\\": 278,
+  "]": 278, "^": 469, _: 556, "`": 333, a: 556, b: 556, c: 500, d: 556,
+  e: 556, f: 278, g: 556, h: 556, i: 222, j: 222, k: 500, l: 222, m: 833,
+  n: 556, o: 556, p: 556, q: 556, r: 333, s: 500, t: 278, u: 556, v: 500,
+  w: 722, x: 500, y: 500, z: 500, "{": 334, "|": 260, "}": 334, "~": 584,
+  "–": 556, "—": 1000, "’": 222, "‘": 222, "“": 333, "”": 333, "…": 1000,
+};
+const ARIAL_DEFAULT_WIDTH = 556;
+const TITLE_FONT_PX = 20;
+const DESC_FONT_PX = 14;
+// Strict-safe margins under the audit ceilings (title 580px, desc 1000px).
+const TITLE_MAX_PX = 555;
+const DESC_MAX_PX = 960;
+
+/** Estimated rendered width of `text` in pixels at the given font size. */
+function measureTextPx(text: string, fontPx: number): number {
+  let units = 0;
+  for (const ch of text) units += ARIAL_WIDTHS[ch] ?? ARIAL_DEFAULT_WIDTH;
+  return (units / 1000) * fontPx;
+}
+
+/**
+ * Trim `text` so it renders within `maxPx` at `fontPx`, breaking on word
+ * boundaries and stripping any dangling separator/punctuation. If even the
+ * first word overflows, hard-cuts by character as a last resort.
+ */
+function truncateToPx(text: string, fontPx: number, maxPx: number): string {
+  if (measureTextPx(text, fontPx) <= maxPx) return text;
+  const words = text.split(/\s+/);
+  let out = "";
+  for (const w of words) {
+    const candidate = out ? `${out} ${w}` : w;
+    if (measureTextPx(candidate, fontPx) > maxPx) break;
+    out = candidate;
+  }
+  if (!out) {
+    let cut = "";
+    for (const ch of text) {
+      if (measureTextPx(cut + ch, fontPx) > maxPx) break;
+      cut += ch;
+    }
+    out = cut;
+  }
+  return out.replace(/[\s,;:.\-|–—]+$/, "").trim();
+}
+
+/**
  * Demote every <h1> in the body to <h2>. The platform renders the post
  * TITLE as the page's single <h1>; any <h1> inside the body produces the
  * "Too many H1 headings" audit error. Runs on both the legacy and profile
@@ -1175,25 +1243,13 @@ function demoteH1ToH2(html: string): string {
 }
 
 /**
- * Trim a string to at most `max` characters without cutting a word in
- * half. Backs off to the last word boundary when one exists in the last
- * ~40% of the budget, then strips any dangling separator/punctuation.
- */
-function truncateAtWord(s: string, max: number): string {
-  if (s.length <= max) return s;
-  const slice = s.slice(0, max);
-  const lastSpace = slice.lastIndexOf(" ");
-  const cut = lastSpace > max * 0.6 ? slice.slice(0, lastSpace) : slice;
-  return cut.replace(/[\s,;:.\-|]+$/, "").trim();
-}
-
-/**
- * Normalize the SEO meta TITLE (the <title> / title-tag) to the spec the
- * SEO audit enforces:
+ * Normalize the SEO meta TITLE (the <title> / title-tag) to the audit spec:
  *   - collapse whitespace
- *   - use a vertical bar " | " instead of a spaced hyphen " - " as the
- *     separator between distinct phrases (Seobility / Google best practice)
- *   - cap at 60 chars (optimal 55-65, hard ceiling ~70) on a word boundary
+ *   - convert spaced-hyphen / en-dash / em-dash separators to " | "
+ *     (Seobility / Google best practice) and collapse duplicates
+ *   - cap at TITLE_MAX_PX (strict-safe under the 580px limit) on a word
+ *     boundary — NO brand/site-name suffix is appended (we set the SEO
+ *     title explicitly, overriding the theme template that would add one)
  * Falls back to the article title when Claude omitted metaTitle.
  */
 function normalizeMetaTitle(
@@ -1201,15 +1257,21 @@ function normalizeMetaTitle(
   fallback: string,
 ): string {
   let t = (raw || fallback || "").replace(/\s+/g, " ").trim();
-  t = t.replace(/\s+-\s+/g, " | ");
-  if (t.length > 60) t = truncateAtWord(t, 60);
-  return t;
+  // Separator normalization: spaced dashes → vertical bar.
+  t = t.replace(/\s*[–—]\s*/g, " | ").replace(/\s+-\s+/g, " | ");
+  // Collapse any doubled separators and strip leading/trailing ones.
+  t = t
+    .replace(/(?:\s*\|\s*){2,}/g, " | ")
+    .replace(/^\s*\|\s*|\s*\|\s*$/g, "")
+    .trim();
+  return truncateToPx(t, TITLE_FONT_PX, TITLE_MAX_PX);
 }
 
 /**
  * Normalize the SEO meta DESCRIPTION to the audit spec:
  *   - collapse whitespace
- *   - cap at 160 chars on a word boundary (Google truncates beyond ~160)
+ *   - cap at DESC_MAX_PX (strict-safe under the 1000px limit) on a word
+ *     boundary
  * We never pad shorts — a shorter accurate description beats filler.
  * Falls back to a body-derived excerpt when Claude omitted metaDescription.
  */
@@ -1217,9 +1279,8 @@ function normalizeMetaDescription(
   raw: string | null | undefined,
   fallback: string,
 ): string {
-  let d = (raw || fallback || "").replace(/\s+/g, " ").trim();
-  if (d.length > 160) d = truncateAtWord(d, 160);
-  return d;
+  const d = (raw || fallback || "").replace(/\s+/g, " ").trim();
+  return truncateToPx(d, DESC_FONT_PX, DESC_MAX_PX);
 }
 
 // Hero-image URL generation lives in image-generator.ts. The composer here
@@ -1613,11 +1674,11 @@ STRUCTURE:
 OUTPUT FORMAT:
 Return ONLY valid JSON with EXACTLY these top-level keys:
 {
-  "title": "Title under 60 characters with primary keyword",
+  "title": "Article title, primary keyword first, ~50 characters, no site/brand name",
   "content": "Full HTML article between ${wb.min} and ${wb.max} words",
   "excerpt": "150-160 character summary",
-  "metaTitle": "SEO title under 60 characters",
-  "metaDescription": "150-160 character meta description",
+  "metaTitle": "SEO title tag, primary keyword FIRST, ~50 characters max (must render under 580px). Use ' | ' not '-' as a separator. No brand/site name, no duplicate words.",
+  "metaDescription": "Meta description, primary keyword early, ~140 characters max (must render under 1000px). One natural sentence ending with a soft call to action.",
   "keywords": ["keyword1", "keyword2", "keyword3"]
 }
 

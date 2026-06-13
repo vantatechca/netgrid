@@ -21,8 +21,8 @@ export const SCHEMAS: Record<SchemaId, SchemaSpec> = {
   "title":            "string, ≤60 chars, includes primary keyword",
   "content":          "HTML using only tags from the assigned tag set",
   "excerpt":          "150-160 char summary, plain text",
-  "metaTitle":        "string, ≤60 chars",
-  "metaDescription":  "string, 150-160 chars",
+  "metaTitle":        "string, primary keyword first, ~50 chars, ' | ' separator not '-', no brand name",
+  "metaDescription":  "string, ~140 chars, primary keyword early, one sentence with a soft call to action",
   "keywords":         ["3-7 keyword strings, no duplicates"]
 }`,
   },
@@ -35,8 +35,8 @@ export const SCHEMAS: Record<SchemaId, SchemaSpec> = {
   "deck":             "string, ≤140 chars, subtitle/standfirst",
   "content":          "HTML: opens with a lead callout <p><strong>…</strong></p>, then body. Allowed tags from tag set only.",
   "excerpt":          "150-160 char summary",
-  "metaTitle":        "string, ≤60 chars",
-  "metaDescription":  "string, 150-160 chars",
+  "metaTitle":        "string, primary keyword first, ~50 chars, ' | ' separator not '-', no brand name",
+  "metaDescription":  "string, ~140 chars, primary keyword early, one sentence with a soft call to action",
   "keywords":         ["3-7 keywords"]
 }`,
   },
@@ -49,8 +49,8 @@ export const SCHEMAS: Record<SchemaId, SchemaSpec> = {
   "content":          "HTML body, then a section <h2>Common questions</h2> followed by an <h3>/answer-paragraph pattern.",
   "faq":              [{ "question": "string", "answer": "string, 60-180 words" }],
   "excerpt":          "150-160 char summary",
-  "metaTitle":        "string, ≤60 chars",
-  "metaDescription":  "string, 150-160 chars",
+  "metaTitle":        "string, primary keyword first, ~50 chars, ' | ' separator not '-', no brand name",
+  "metaDescription":  "string, ~140 chars, primary keyword early, one sentence with a soft call to action",
   "keywords":         ["3-7 keywords"]
 }`,
   },
@@ -64,8 +64,8 @@ export const SCHEMAS: Record<SchemaId, SchemaSpec> = {
   "items":            [{ "heading": "string ≤80 chars", "body": "string, 120-260 words, plain HTML paragraphs/lists" }],
   "content":          "Concatenated full-article HTML (intro + items rendered)",
   "excerpt":          "150-160 char summary",
-  "metaTitle":        "string, ≤60 chars",
-  "metaDescription":  "string, 150-160 chars",
+  "metaTitle":        "string, primary keyword first, ~50 chars, ' | ' separator not '-', no brand name",
+  "metaDescription":  "string, ~140 chars, primary keyword early, one sentence with a soft call to action",
   "keywords":         ["3-7 keywords"]
 }`,
   },
