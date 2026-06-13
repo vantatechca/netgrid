@@ -261,6 +261,35 @@ export const NICHES: Record<string, NicheConfig> = {
       "Charity operations, fundraising, donor stewardship, news-cycle advocacy. Two parallel editorial tracks (charity-branded news + independent advocacy w/ CASL disclosure) are configured at the vertical level.",
   },
 
+  online_casino: {
+    key: "online_casino",
+    name: "Online Casino & Casino Games",
+    subNicheIds: [32],
+    voiceIds: CROSS_NICHE_VOICE_POOL,
+    // Casino content carries the same responsible-gambling posture as the
+    // existing sports-betting `gambling` niche — reuse the same compliance
+    // phrase IDs (41-44) so the disclaimers stay consistent across the
+    // gambling family.
+    useCompliancePhrases: true,
+    compliancePhraseIds: [41, 42, 43, 44],
+    useSubjectCanon: true,
+    placementHint: "BOTTOM",
+    description:
+      "Online casino content — slots, table games (blackjack/roulette/baccarat), poker, live dealer, casino welcome bonuses, wagering requirements, RTP analysis. Distinct from the sports-betting `gambling` niche; reuses its responsible-gambling disclaimer set.",
+  },
+
+  real_estate: {
+    key: "real_estate",
+    name: "Real Estate & Property",
+    subNicheIds: [33],
+    voiceIds: CROSS_NICHE_VOICE_POOL,
+    useCompliancePhrases: false,
+    compliancePhraseIds: [],
+    useSubjectCanon: true,
+    description:
+      "Residential and commercial real estate — home buying / selling, mortgages, rental markets, investment property, agent / brokerage operations, neighbourhood market reports. Concrete pricing + market-data vocabulary; distinct from generic `loans` (which covers personal finance broadly).",
+  },
+
   // Universal fallback — used when a client's niche string doesn't match
   // any other registered key. The blog's actual niche label (e.g.
   // "gym marketing", "real estate", "dental practice") gets passed
