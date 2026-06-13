@@ -225,6 +225,7 @@ export async function createPost(
   username: string,
   appPassword: string,
   input: PublishPostInput,
+  options: { seoPlugin?: SeoPlugin } = {},
 ): Promise<PublishPostResult> {
   try {
     const client = createClient(wpUrl, username, appPassword);
@@ -296,17 +297,86 @@ export async function createPost(
       ...(featuredMediaId !== undefined && { featured_media: featuredMediaId }),
     });
 
+    // Write SEO meta title/description to whichever plugin the site runs.
+    // Best-effort: a meta-write failure must not fail an otherwise-published
+    // post. Sites with no SEO plugin can't accept head meta via REST, so we
+    // skip them (the theme controls <title> and emits no meta description).
+    const metaWritten = await writeWpSeoMeta(
+      wpUrl,
+      username,
+      appPassword,
+      res.data.id,
+      input,
+      options.seoPlugin ?? "none",
+    );
+
     return {
       success: true,
       message: `Post "${res.data.title.rendered}" ${
         wpStatus === "publish" ? "published" : "saved as draft"
-      }${featuredMediaId ? " with featured image" : ""}`,
+      }${featuredMediaId ? " with featured image" : ""}${
+        metaWritten ? " (SEO meta set)" : ""
+      }`,
       postId: res.data.id,
       postUrl: res.data.link,
     };
   } catch (error) {
     return { success: false, message: formatError(error) };
   }
+}
+
+/**
+ * Write the SEO meta title/description to whichever SEO plugin the site
+ * runs, after the post has been created. Returns true when meta was written.
+ *
+ * Routing:
+ *   - "rankmath" → /rankmath/v1/updateMeta (rank_math_* fields)
+ *   - "yoast"    → post update with yoast_wpseo_* meta
+ *   - "none"     → no-op (a plugin-less site has no REST surface to accept
+ *                  a head meta description; the theme owns <title>)
+ *
+ * The first tag (if any) is used as the focus keyword. Best-effort: any
+ * failure is logged and swallowed so it never fails an already-published post.
+ */
+async function writeWpSeoMeta(
+  wpUrl: string,
+  username: string,
+  appPassword: string,
+  postId: number,
+  input: PublishPostInput,
+  seoPlugin: SeoPlugin,
+): Promise<boolean> {
+  const metaTitle = input.metaTitle?.trim();
+  const metaDescription = input.metaDescription?.trim();
+  if (!metaTitle && !metaDescription) return false;
+  if (seoPlugin === "none") return false;
+
+  const focusKw = input.tags?.[0]?.trim();
+
+  try {
+    if (seoPlugin === "rankmath") {
+      await updateRankMathMeta(wpUrl, username, appPassword, postId, {
+        ...(metaTitle && { rank_math_title: metaTitle }),
+        ...(metaDescription && { rank_math_description: metaDescription }),
+        ...(focusKw && { rank_math_focus_keyword: focusKw }),
+      });
+      return true;
+    }
+    if (seoPlugin === "yoast") {
+      await updateYoastMeta(wpUrl, username, appPassword, postId, {
+        ...(metaTitle && { yoast_wpseo_title: metaTitle }),
+        ...(metaDescription && { yoast_wpseo_metadesc: metaDescription }),
+        ...(focusKw && { yoast_wpseo_focuskw: focusKw }),
+      });
+      return true;
+    }
+  } catch (err) {
+    console.warn(
+      "[wp.createPost] SEO meta write failed (post still published):",
+      err instanceof Error ? err.message : err,
+    );
+  }
+  return false;
 }
 
 /**

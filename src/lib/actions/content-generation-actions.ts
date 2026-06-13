@@ -583,6 +583,9 @@ async function runGenerateAndPublish(
       wpUrl: blog.wpUrl,
       wpUsername: blog.wpUsername,
       wpAppPassword: blog.wpAppPassword,
+      // SEO plugin routes WordPress meta title/description to Yoast vs
+      // RankMath at publish time. Detected during connection test.
+      seoPlugin: blog.seoPlugin,
       // Shopify — pass *all* auth fields so buildShopifyCreds picks the right
       // mode. Omitting shopifyAuthMode/clientId/clientSecret made client-
       // credentials blogs fail with "Client ID and Client Secret are required".
@@ -599,7 +602,9 @@ async function runGenerateAndPublish(
       excerpt: content.excerpt,
       status: "publish",
       tags: content.keywords,
-      featuredImageUrl: content.heroImageUrl, 
+      featuredImageUrl: content.heroImageUrl,
+      metaTitle: content.metaTitle,
+      metaDescription: content.metaDescription,
     });
 
     if (!publish.success) {
