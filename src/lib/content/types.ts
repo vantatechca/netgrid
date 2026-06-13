@@ -18,7 +18,9 @@ export type SubNicheId =
   | 28  // tax_lawyer
   | 29  // pest_extermination
   | 30  // charity
-  | 31; // gym_subscription (long-term membership comparisons)
+  | 31  // gym_subscription (long-term membership comparisons)
+  | 32  // online_casino (casino games — slots / poker / blackjack)
+  | 33; // real_estate (residential + commercial property)
 
 export type ArchetypeId =
   | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12;
