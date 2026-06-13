@@ -4,6 +4,13 @@ import { runScrubber, runScrubberLite, type ScrubberReport } from "@/lib/content
 import type { StyleProfile } from "@/lib/content/types";
 import { SUB_NICHES } from "@/lib/content/libraries/sub-niches";
 import {
+  truncateToPx,
+  TITLE_FONT_PX,
+  DESC_FONT_PX,
+  TITLE_TARGET_PX,
+  DESC_TARGET_PX,
+} from "@/lib/seo/text-width";
+import {
   generateBodyImage,
   generateHeroImage,
 } from "@/lib/services/image-generator";
@@ -1159,73 +1166,9 @@ function generateExcerpt(content: string): string {
   return text.length > 160 ? text.substring(0, 157) + "..." : text;
 }
 
-/**
- * SEO meta sizing — PIXEL based, matching how Seobility / Google measure.
- *
- * Search engines render the title tag at ~20px Arial and the meta
- * description at ~14px Arial, then truncate by PIXEL width, not character
- * count. Seobility flags titles over 580px and descriptions over 1000px.
- * Character caps are unreliable: a 60-char title of wide glyphs can exceed
- * 580px, and 160 chars of description can hit ~1024px.
- *
- * We estimate width with an Arial advance-width table (em = 1000 units),
- * calibrated against real audit values — a 783px title and a 1999px
- * description both reproduce within <1%. Limits use a strict-safe margin
- * under the audit thresholds.
- */
-const ARIAL_WIDTHS: Record<string, number> = {
-  " ": 278, "!": 278, '"': 355, "#": 556, $: 556, "%": 889, "&": 667,
-  "'": 191, "(": 333, ")": 333, "*": 389, "+": 584, ",": 278, "-": 333,
-  ".": 278, "/": 278, "0": 556, "1": 556, "2": 556, "3": 556, "4": 556,
-  "5": 556, "6": 556, "7": 556, "8": 556, "9": 556, ":": 278, ";": 278,
-  "<": 584, "=": 584, ">": 584, "?": 556, "@": 1015, A: 667, B: 667,
-  C: 722, D: 722, E: 667, F: 611, G: 778, H: 722, I: 278, J: 500, K: 667,
-  L: 556, M: 833, N: 722, O: 778, P: 667, Q: 778, R: 722, S: 667, T: 611,
-  U: 722, V: 667, W: 944, X: 667, Y: 667, Z: 611, "[": 278, "\\": 278,
-  "]": 278, "^": 469, _: 556, "`": 333, a: 556, b: 556, c: 500, d: 556,
-  e: 556, f: 278, g: 556, h: 556, i: 222, j: 222, k: 500, l: 222, m: 833,
-  n: 556, o: 556, p: 556, q: 556, r: 333, s: 500, t: 278, u: 556, v: 500,
-  w: 722, x: 500, y: 500, z: 500, "{": 334, "|": 260, "}": 334, "~": 584,
-  "–": 556, "—": 1000, "’": 222, "‘": 222, "“": 333, "”": 333, "…": 1000,
-};
-const ARIAL_DEFAULT_WIDTH = 556;
-const TITLE_FONT_PX = 20;
-const DESC_FONT_PX = 14;
-// Strict-safe margins under the audit ceilings (title 580px, desc 1000px).
-const TITLE_MAX_PX = 555;
-const DESC_MAX_PX = 960;
-
-/** Estimated rendered width of `text` in pixels at the given font size. */
-export function measureTextPx(text: string, fontPx: number): number {
-  let units = 0;
-  for (const ch of text) units += ARIAL_WIDTHS[ch] ?? ARIAL_DEFAULT_WIDTH;
-  return (units / 1000) * fontPx;
-}
-
-/**
- * Trim `text` so it renders within `maxPx` at `fontPx`, breaking on word
- * boundaries and stripping any dangling separator/punctuation. If even the
- * first word overflows, hard-cuts by character as a last resort.
- */
-function truncateToPx(text: string, fontPx: number, maxPx: number): string {
-  if (measureTextPx(text, fontPx) <= maxPx) return text;
-  const words = text.split(/\s+/);
-  let out = "";
-  for (const w of words) {
-    const candidate = out ? `${out} ${w}` : w;
-    if (measureTextPx(candidate, fontPx) > maxPx) break;
-    out = candidate;
-  }
-  if (!out) {
-    let cut = "";
-    for (const ch of text) {
-      if (measureTextPx(cut + ch, fontPx) > maxPx) break;
-      cut += ch;
-    }
-    out = cut;
-  }
-  return out.replace(/[\s,;:.\-|–—]+$/, "").trim();
-}
+// SEO meta sizing is PIXEL based (see @/lib/seo/text-width). We normalize TO
+// the strict-safe write targets (TITLE_TARGET_PX / DESC_TARGET_PX) so what we
+// generate clears the audit ceilings (580px / 1000px) with headroom.
 
 /**
  * Demote every <h1> in the body to <h2>. The platform renders the post
@@ -1247,19 +1190,12 @@ export function hasH1(html: string): boolean {
   return /<h1(\s[^>]*)?>/i.test(html);
 }
 
-// Pixel budgets exposed so the backfill and (later) the in-app scorer can
-// share the exact same limits the generator enforces.
-export const SEO_TITLE_FONT_PX = TITLE_FONT_PX;
-export const SEO_DESC_FONT_PX = DESC_FONT_PX;
-export const SEO_TITLE_MAX_PX = 580; // hard audit ceiling
-export const SEO_DESC_MAX_PX = 1000; // hard audit ceiling
-
 /**
  * Normalize the SEO meta TITLE (the <title> / title-tag) to the audit spec:
  *   - collapse whitespace
  *   - convert spaced-hyphen / en-dash / em-dash separators to " | "
  *     (Seobility / Google best practice) and collapse duplicates
- *   - cap at TITLE_MAX_PX (strict-safe under the 580px limit) on a word
+ *   - cap at TITLE_TARGET_PX (strict-safe under the 580px limit) on a word
  *     boundary — NO brand/site-name suffix is appended (we set the SEO
  *     title explicitly, overriding the theme template that would add one)
  * Falls back to the article title when Claude omitted metaTitle.
@@ -1276,13 +1212,13 @@ export function normalizeMetaTitle(
     .replace(/(?:\s*\|\s*){2,}/g, " | ")
     .replace(/^\s*\|\s*|\s*\|\s*$/g, "")
     .trim();
-  return truncateToPx(t, TITLE_FONT_PX, TITLE_MAX_PX);
+  return truncateToPx(t, TITLE_FONT_PX, TITLE_TARGET_PX);
 }
 
 /**
  * Normalize the SEO meta DESCRIPTION to the audit spec:
  *   - collapse whitespace
- *   - cap at DESC_MAX_PX (strict-safe under the 1000px limit) on a word
+ *   - cap at DESC_TARGET_PX (strict-safe under the 1000px limit) on a word
  *     boundary
  * We never pad shorts — a shorter accurate description beats filler.
  * Falls back to a body-derived excerpt when Claude omitted metaDescription.
@@ -1292,7 +1228,7 @@ export function normalizeMetaDescription(
   fallback: string,
 ): string {
   const d = (raw || fallback || "").replace(/\s+/g, " ").trim();
-  return truncateToPx(d, DESC_FONT_PX, DESC_MAX_PX);
+  return truncateToPx(d, DESC_FONT_PX, DESC_TARGET_PX);
 }
 
 // Hero-image URL generation lives in image-generator.ts. The composer here

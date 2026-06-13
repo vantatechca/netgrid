@@ -4,6 +4,15 @@
  * Returns a structured ScanResult ready to be persisted.
  */
 
+import {
+  measureTitlePx,
+  measureDescriptionPx,
+  TITLE_MAX_PX,
+  DESC_MAX_PX,
+  TITLE_MIN_PX,
+  DESC_MIN_PX,
+} from "@/lib/seo/text-width";
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export type IssueSeverity = "critical" | "warning" | "notice";
@@ -148,23 +157,23 @@ function analyzeWpPost(post: WpPost): RawIssue[] {
       autoFixable: true,
       fixPayload: { type: "wp_meta_title", postId: post.id, pageUrl: url },
     });
-  } else if (metaTitle.length < 30) {
+  } else if (measureTitlePx(metaTitle) < TITLE_MIN_PX) {
     issues.push({
       pageUrl: url,
       category: "meta",
       severity: "warning",
       title: "Meta title too short",
-      description: `Meta title is ${metaTitle.length} characters. Aim for 50–60.`,
+      description: `Meta title renders at ${Math.round(measureTitlePx(metaTitle))}px. Aim for ${TITLE_MIN_PX}–${TITLE_MAX_PX}px.`,
       autoFixable: true,
       fixPayload: { type: "wp_meta_title", postId: post.id, currentTitle: metaTitle, pageUrl: url },
     });
-  } else if (metaTitle.length > 65) {
+  } else if (measureTitlePx(metaTitle) > TITLE_MAX_PX) {
     issues.push({
       pageUrl: url,
       category: "meta",
       severity: "warning",
       title: "Meta title too long",
-      description: `Meta title is ${metaTitle.length} characters. Keep it under 65 to avoid truncation.`,
+      description: `Meta title renders at ${Math.round(measureTitlePx(metaTitle))}px. Keep it under ${TITLE_MAX_PX}px to avoid truncation.`,
       autoFixable: true,
       fixPayload: { type: "wp_meta_title", postId: post.id, currentTitle: metaTitle, pageUrl: url },
     });
@@ -182,22 +191,22 @@ function analyzeWpPost(post: WpPost): RawIssue[] {
       autoFixable: true,
       fixPayload: { type: "wp_meta_description", postId: post.id, pageUrl: url },
     });
-  } else if (metaDesc.length < 70) {
+  } else if (measureDescriptionPx(metaDesc) < DESC_MIN_PX) {
     issues.push({
       pageUrl: url,
       category: "meta",
       severity: "warning",
       title: "Meta description too short",
-      description: `Meta description is ${metaDesc.length} characters. Aim for 120–160.`,
+      description: `Meta description renders at ${Math.round(measureDescriptionPx(metaDesc))}px. Aim for ${DESC_MIN_PX}–${DESC_MAX_PX}px.`,
       autoFixable: false,
     });
-  } else if (metaDesc.length > 165) {
+  } else if (measureDescriptionPx(metaDesc) > DESC_MAX_PX) {
     issues.push({
       pageUrl: url,
       category: "meta",
       severity: "warning",
       title: "Meta description too long",
-      description: `Meta description is ${metaDesc.length} characters — will be truncated in SERPs.`,
+      description: `Meta description renders at ${Math.round(measureDescriptionPx(metaDesc))}px — will be truncated in SERPs.`,
       autoFixable: true,
       fixPayload: { type: "wp_meta_description", postId: post.id, currentDesc: metaDesc, pageUrl: url },
     });

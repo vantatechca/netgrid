@@ -4,6 +4,13 @@ import { seoIssues, blogs, clients } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { generateSeoFix } from "@/lib/services/claude-client";
 import * as wp from "@/lib/services/wp-client";
+import {
+  truncateToPx,
+  TITLE_FONT_PX,
+  DESC_FONT_PX,
+  TITLE_TARGET_PX,
+  DESC_TARGET_PX,
+} from "@/lib/seo/text-width";
 
 export interface AutoFixResult {
   issueId: string;
@@ -166,7 +173,11 @@ export async function autoFixIssue(issueId: string): Promise<AutoFixResult> {
         issueType: "meta_description",
         issueDescription: issue.description || issue.title,
       });
-      const trimmed = newValue.replace(/\s+/g, " ").trim().slice(0, 160);
+      const trimmed = truncateToPx(
+        newValue.replace(/\s+/g, " ").trim(),
+        DESC_FONT_PX,
+        DESC_TARGET_PX,
+      );
       await applyMetaDescription(blog, post.id, trimmed);
       await markApplied(issueId, `meta description: ${trimmed}`);
       return { issueId, applied: true, message: `Meta description set on post ${post.id}` };
@@ -182,7 +193,11 @@ export async function autoFixIssue(issueId: string): Promise<AutoFixResult> {
         issueType: "meta_title",
         issueDescription: issue.description || issue.title,
       });
-      const trimmed = newValue.replace(/\s+/g, " ").trim().slice(0, 60);
+      const trimmed = truncateToPx(
+        newValue.replace(/\s+/g, " ").trim(),
+        TITLE_FONT_PX,
+        TITLE_TARGET_PX,
+      );
       await applyMetaTitle(blog, post.id, trimmed);
       await markApplied(issueId, `meta title: ${trimmed}`);
       return { issueId, applied: true, message: `Meta title set on post ${post.id}` };
@@ -201,10 +216,11 @@ export async function autoFixIssue(issueId: string): Promise<AutoFixResult> {
         issueType,
         issueDescription: issue.description || issue.title,
       });
-      const trimmed = newValue
-        .replace(/\s+/g, " ")
-        .trim()
-        .slice(0, kind === "og_title" ? 60 : 160);
+      const cleaned = newValue.replace(/\s+/g, " ").trim();
+      const trimmed =
+        kind === "og_title"
+          ? truncateToPx(cleaned, TITLE_FONT_PX, TITLE_TARGET_PX)
+          : truncateToPx(cleaned, DESC_FONT_PX, DESC_TARGET_PX);
       if (kind === "og_title") {
         await applyMetaTitle(blog, post.id, trimmed);
       } else {

@@ -1,5 +1,11 @@
 import { SEO_WEIGHTS } from "@/lib/constants";
 import type { CrawlPageResult } from "./seo-crawler";
+import {
+  TITLE_MAX_PX,
+  DESC_MAX_PX,
+  TITLE_MIN_PX,
+  DESC_MIN_PX,
+} from "@/lib/seo/text-width";
 
 export interface BlogSeoScore {
   overall: number;
@@ -95,13 +101,16 @@ function scoreMetaCategory(page: CrawlPageResult): number {
   let score = 100;
   const m = page.meta ?? ({} as Partial<CrawlPageResult["meta"]>);
 
+  // Pixel-based sizing, matching how Google/Seobility truncate (titles over
+  // 580px, descriptions over 1000px are flagged) — not character counts.
   if (!m.title) score -= 25;
-  else if ((m.titleLength ?? 0) < 30 || (m.titleLength ?? 0) > 60) score -= 10;
+  else if ((m.titlePx ?? 0) < TITLE_MIN_PX || (m.titlePx ?? 0) > TITLE_MAX_PX)
+    score -= 10;
 
   if (!m.metaDescription) score -= 25;
   else if (
-    (m.metaDescriptionLength ?? 0) < 120 ||
-    (m.metaDescriptionLength ?? 0) > 160
+    (m.metaDescriptionPx ?? 0) < DESC_MIN_PX ||
+    (m.metaDescriptionPx ?? 0) > DESC_MAX_PX
   )
     score -= 10;
 
