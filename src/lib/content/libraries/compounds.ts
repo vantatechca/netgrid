@@ -238,6 +238,18 @@ export const COMPOUND_CANON: Record<SubNicheId, CompoundCanonEntry> = {
     primary: ["membership pricing", "contract terms", "cancellation policy", "annual fees", "auto-renewal"],
     adjacent: ["personal training cost", "class pass models", "boutique vs big-box", "freeze and pause options", "couple and family plans"],
   },
+  32: {
+    subNiche: 32,
+    mode: "primary",
+    primary: ["online slots", "blackjack", "roulette", "live dealer", "casino bonuses"],
+    adjacent: ["video poker", "baccarat", "wagering requirements", "RTP percentages", "house edge", "responsible gambling"],
+  },
+  33: {
+    subNiche: 33,
+    mode: "primary",
+    primary: ["home buying", "mortgages", "rental market", "investment property", "market reports"],
+    adjacent: ["closing costs", "cap rate", "1031 exchange", "commercial leasing", "neighbourhood comps", "agent commissions"],
+  },
 };
 
 /**
