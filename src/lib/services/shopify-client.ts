@@ -960,3 +960,109 @@ export async function createArticle(
     return { success: false, message: formatError(error) };
   }
 }
+
+/**
+ * Resolve the numeric blog id for a store. Prefers a cached handle (one
+ * /blogs.json call), falls back to the first blog. Used by the SEO backfill
+ * so we resolve once per blog instead of per article.
+ */
+export async function resolveBlogId(
+  creds: ShopifyCreds,
+  blogHandle?: string | null,
+  apiVersion: string = DEFAULT_API_VERSION,
+): Promise<{ blogId: string; blogHandle: string } | null> {
+  const blogs = await listBlogs(creds, apiVersion);
+  if (blogs.length === 0) return null;
+  const target =
+    (blogHandle && blogs.find((b) => b.handle === blogHandle)) || blogs[0];
+  return { blogId: String(target.id), blogHandle: target.handle };
+}
+
+/** Fetch a single article (includes body_html) by blog + article id. */
+export async function getArticle(
+  creds: ShopifyCreds,
+  blogId: string,
+  articleId: string | number,
+  apiVersion: string = DEFAULT_API_VERSION,
+): Promise<ShopifyArticle | null> {
+  try {
+    const client = await createClient(creds, apiVersion);
+    const res = await client.get<{ article: ShopifyArticle }>(
+      `/blogs/${blogId}/articles/${articleId}.json`,
+    );
+    return res.data.article;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Update an existing article's body and/or SEO metafields. Used by the SEO
+ * backfill to retroactively fix already-published posts:
+ *   - bodyHtml         → replace body_html (e.g. after demoting body H1s)
+ *   - metaTitle        → global.title_tag metafield (<title>)
+ *   - metaDescription  → global.description_tag metafield (meta description)
+ *
+ * Only the provided fields are sent. Shopify upserts metafields by
+ * namespace+key, so re-running is idempotent.
+ */
+export async function updateArticle(
+  creds: ShopifyCreds,
+  blogId: string,
+  articleId: string | number,
+  input: {
+    bodyHtml?: string;
+    metaTitle?: string;
+    metaDescription?: string;
+    blogHandle?: string;
+  },
+  apiVersion: string = DEFAULT_API_VERSION,
+): Promise<PublishPostResult> {
+  try {
+    const client = await createClient(creds, apiVersion, PUBLISH_TIMEOUT_MS);
+
+    const metafields: Array<{
+      namespace: string;
+      key: string;
+      value: string;
+      type: string;
+    }> = [];
+    if (input.metaTitle && input.metaTitle.trim()) {
+      metafields.push({
+        namespace: "global",
+        key: "title_tag",
+        value: input.metaTitle.trim(),
+        type: "single_line_text_field",
+      });
+    }
+    if (input.metaDescription && input.metaDescription.trim()) {
+      metafields.push({
+        namespace: "global",
+        key: "description_tag",
+        value: input.metaDescription.trim(),
+        type: "single_line_text_field",
+      });
+    }
+
+    const article: Record<string, unknown> = { id: Number(articleId) };
+    if (input.bodyHtml !== undefined) article.body_html = input.bodyHtml;
+    if (metafields.length > 0) article.metafields = metafields;
+
+    const res = await client.put<{ article: ShopifyArticle }>(
+      `/blogs/${blogId}/articles/${articleId}.json`,
+      { article },
+    );
+    const a = res.data.article;
+    const storeHost = normalizeStoreUrl(creds.storeUrl);
+    return {
+      success: true,
+      message: `Article "${a.title}" updated`,
+      postId: a.id,
+      postUrl: input.blogHandle
+        ? `https://${storeHost}/blogs/${input.blogHandle}/${a.handle}`
+        : `https://${storeHost}/blogs/${a.handle}`,
+    };
+  } catch (error) {
+    return { success: false, message: formatError(error) };
+  }
+}
