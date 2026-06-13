@@ -81,12 +81,18 @@ export const SUB_NICHES: Record<SubNicheId, SubNiche> = {
   // sub-niche 26 (gym openings) so the two verticals get genuinely
   // different style profiles + topic angles.
   31: { id: 31, key: "gym_subscription_general", name: "Gym Memberships & Subscriptions", targetPct: 0, targetBlogs: 0 },
+  // Casino-side complement to the sports-betting `gambling` niche (15).
+  // Covers slots, table games, poker, live dealer, casino bonuses.
+  32: { id: 32, key: "online_casino_general", name: "Online Casino & Casino Games", targetPct: 0, targetBlogs: 0 },
+  // Brand-new vertical: residential + commercial real estate, mortgages,
+  // market reports, agent / brokerage content.
+  33: { id: 33, key: "real_estate_general", name: "Real Estate & Property", targetPct: 0, targetBlogs: 0 },
 };
 
 export const SUB_NICHE_IDS: SubNicheId[] = [
   1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
   14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-  25, 26, 27, 28, 29, 30, 31,
+  25, 26, 27, 28, 29, 30, 31, 32, 33,
 ];
 /** Peptide-only sub-niche IDs (the original distribution). */
 export const PEPTIDE_SUB_NICHE_IDS: SubNicheId[] = [
