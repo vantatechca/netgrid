@@ -195,3 +195,103 @@ export async function publishPost(
     seoPlugin: blog.seoPlugin ?? "none",
   });
 }
+
+// ─── SEO backfill (retroactively fix already-published posts) ────────────────
+
+/**
+ * Resolve the Shopify numeric blog id once, so a backfill loop doesn't hit
+ * /blogs.json per post. Returns null for non-Shopify blogs or bad creds.
+ */
+export async function resolveShopifyBlogId(
+  blog: PlatformBlog,
+): Promise<{ blogId: string; blogHandle: string } | null> {
+  if (resolvePlatform(blog) !== "shopify") return null;
+  const built = buildShopifyCreds(blog);
+  if (!built.ok) return null;
+  return shopify.resolveBlogId(built.creds, blog.shopifyBlogHandle);
+}
+
+/**
+ * Fetch a published post's LIVE body HTML (with platform media URLs already
+ * in place). The backfill reads this, demotes duplicate H1s, and writes it
+ * back — avoiding any data: URI re-upload. Returns null on failure.
+ */
+export async function fetchLivePostBody(
+  blog: PlatformBlog,
+  externalPostId: string,
+  shopifyBlogId?: string,
+): Promise<string | null> {
+  const platform = resolvePlatform(blog);
+
+  if (platform === "shopify") {
+    const built = buildShopifyCreds(blog);
+    if (!built.ok) return null;
+    const blogId =
+      shopifyBlogId ??
+      (await shopify.resolveBlogId(built.creds, blog.shopifyBlogHandle))?.blogId;
+    if (!blogId) return null;
+    const article = await shopify.getArticle(built.creds, blogId, externalPostId);
+    return article?.body_html ?? null;
+  }
+
+  if (!blog.wpUrl || !blog.wpUsername || !blog.wpAppPassword) return null;
+  return wp.getPostContentById(
+    blog.wpUrl,
+    blog.wpUsername,
+    blog.wpAppPassword,
+    Number(externalPostId),
+  );
+}
+
+/**
+ * Push SEO fixes to an already-published post: optionally a new body (after
+ * H1 demotion) plus the pixel-capped meta title/description. Idempotent on
+ * both platforms.
+ */
+export async function backfillPostSeo(
+  blog: PlatformBlog,
+  externalPostId: string,
+  input: {
+    bodyHtml?: string;
+    metaTitle?: string;
+    metaDescription?: string;
+    focusKeyword?: string;
+  },
+  shopifyBlogId?: string,
+): Promise<PublishPostResult> {
+  const platform = resolvePlatform(blog);
+
+  if (platform === "shopify") {
+    const built = buildShopifyCreds(blog);
+    if (!built.ok) return { success: false, message: built.message };
+    const resolved = shopifyBlogId
+      ? { blogId: shopifyBlogId, blogHandle: blog.shopifyBlogHandle ?? undefined }
+      : await shopify.resolveBlogId(built.creds, blog.shopifyBlogHandle);
+    if (!resolved) {
+      return { success: false, message: "No Shopify blog found to update." };
+    }
+    return shopify.updateArticle(built.creds, resolved.blogId, externalPostId, {
+      bodyHtml: input.bodyHtml,
+      metaTitle: input.metaTitle,
+      metaDescription: input.metaDescription,
+      blogHandle: resolved.blogHandle ?? undefined,
+    });
+  }
+
+  if (!blog.wpUrl || !blog.wpUsername || !blog.wpAppPassword) {
+    return { success: false, message: "WordPress credentials are incomplete." };
+  }
+  return wp.updatePostSeo(
+    blog.wpUrl,
+    blog.wpUsername,
+    blog.wpAppPassword,
+    Number(externalPostId),
+    {
+      content: input.bodyHtml,
+      metaTitle: input.metaTitle,
+      metaDescription: input.metaDescription,
+      focusKeyword: input.focusKeyword,
+    },
+    blog.seoPlugin ?? "none",
+  );
+}

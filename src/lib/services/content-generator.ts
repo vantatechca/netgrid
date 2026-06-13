@@ -1196,7 +1196,7 @@ const TITLE_MAX_PX = 555;
 const DESC_MAX_PX = 960;
 
 /** Estimated rendered width of `text` in pixels at the given font size. */
-function measureTextPx(text: string, fontPx: number): number {
+export function measureTextPx(text: string, fontPx: number): number {
   let units = 0;
   for (const ch of text) units += ARIAL_WIDTHS[ch] ?? ARIAL_DEFAULT_WIDTH;
   return (units / 1000) * fontPx;
@@ -1236,11 +1236,23 @@ function truncateToPx(text: string, fontPx: number, maxPx: number): string {
  * Preserves attributes on the opening tag (rare, but harmless) by only
  * swapping the tag name.
  */
-function demoteH1ToH2(html: string): string {
+export function demoteH1ToH2(html: string): string {
   return html
     .replace(/<h1(\s[^>]*)?>/gi, "<h2$1>")
     .replace(/<\/h1\s*>/gi, "</h2>");
 }
+
+/** True when the HTML contains at least one <h1> tag. */
+export function hasH1(html: string): boolean {
+  return /<h1(\s[^>]*)?>/i.test(html);
+}
+
+// Pixel budgets exposed so the backfill and (later) the in-app scorer can
+// share the exact same limits the generator enforces.
+export const SEO_TITLE_FONT_PX = TITLE_FONT_PX;
+export const SEO_DESC_FONT_PX = DESC_FONT_PX;
+export const SEO_TITLE_MAX_PX = 580; // hard audit ceiling
+export const SEO_DESC_MAX_PX = 1000; // hard audit ceiling
 
 /**
  * Normalize the SEO meta TITLE (the <title> / title-tag) to the audit spec:
@@ -1252,7 +1264,7 @@ function demoteH1ToH2(html: string): string {
  *     title explicitly, overriding the theme template that would add one)
  * Falls back to the article title when Claude omitted metaTitle.
  */
-function normalizeMetaTitle(
+export function normalizeMetaTitle(
   raw: string | null | undefined,
   fallback: string,
 ): string {
@@ -1275,7 +1287,7 @@ function normalizeMetaTitle(
  * We never pad shorts — a shorter accurate description beats filler.
  * Falls back to a body-derived excerpt when Claude omitted metaDescription.
  */
-function normalizeMetaDescription(
+export function normalizeMetaDescription(
   raw: string | null | undefined,
   fallback: string,
 ): string {

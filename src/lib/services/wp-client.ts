@@ -306,7 +306,11 @@ export async function createPost(
       username,
       appPassword,
       res.data.id,
-      input,
+      {
+        metaTitle: input.metaTitle,
+        metaDescription: input.metaDescription,
+        focusKeyword: input.tags?.[0],
+      },
       options.seoPlugin ?? "none",
     );
 
@@ -343,15 +347,15 @@ async function writeWpSeoMeta(
   username: string,
   appPassword: string,
   postId: number,
-  input: PublishPostInput,
+  meta: { metaTitle?: string; metaDescription?: string; focusKeyword?: string },
   seoPlugin: SeoPlugin,
 ): Promise<boolean> {
-  const metaTitle = input.metaTitle?.trim();
-  const metaDescription = input.metaDescription?.trim();
+  const metaTitle = meta.metaTitle?.trim();
+  const metaDescription = meta.metaDescription?.trim();
   if (!metaTitle && !metaDescription) return false;
   if (seoPlugin === "none") return false;
 
-  const focusKw = input.tags?.[0]?.trim();
+  const focusKw = meta.focusKeyword?.trim();
 
   try {
     if (seoPlugin === "rankmath") {
@@ -377,6 +381,74 @@ async function writeWpSeoMeta(
     );
   }
   return false;
+}
+
+/**
+ * Fetch the rendered content HTML of a post by id. Used by the SEO backfill
+ * to read the live body (with media-library URLs already in place) so it can
+ * demote duplicate H1s without touching images. Returns null on failure.
+ */
+export async function getPostContentById(
+  wpUrl: string,
+  username: string,
+  appPassword: string,
+  postId: number,
+): Promise<string | null> {
+  try {
+    const client = createClient(wpUrl, username, appPassword);
+    const res = await client.get<WpPost>(`/wp-json/wp/v2/posts/${postId}`, {
+      params: { context: "edit", _fields: "id,content" },
+      validateStatus: () => true,
+    });
+    if (res.status >= 400) return null;
+    // context=edit exposes content.raw; fall back to rendered.
+    const content = res.data.content as { rendered?: string; raw?: string };
+    return content?.raw ?? content?.rendered ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Backfill an existing post's SEO fields: optionally replace the body
+ * (after H1 demotion) and write the meta title/description to the site's
+ * SEO plugin. Mirrors what createPost now does at publish time. Best-effort
+ * on the meta write; a content update failure is surfaced in the result.
+ */
+export async function updatePostSeo(
+  wpUrl: string,
+  username: string,
+  appPassword: string,
+  postId: number,
+  input: { content?: string; metaTitle?: string; metaDescription?: string; focusKeyword?: string },
+  seoPlugin: SeoPlugin,
+): Promise<PublishPostResult> {
+  try {
+    if (input.content !== undefined) {
+      await updatePost(wpUrl, username, appPassword, postId, {
+        content: input.content,
+      });
+    }
+    const metaWritten = await writeWpSeoMeta(
+      wpUrl,
+      username,
+      appPassword,
+      postId,
+      {
+        metaTitle: input.metaTitle,
+        metaDescription: input.metaDescription,
+        focusKeyword: input.focusKeyword,
+      },
+      seoPlugin,
+    );
+    return {
+      success: true,
+      message: `Post ${postId} updated${metaWritten ? " (SEO meta set)" : ""}`,
+      postId,
+    };
+  } catch (error) {
+    return { success: false, message: formatError(error) };
+  }
 }
 
 /**
