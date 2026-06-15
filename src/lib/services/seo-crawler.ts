@@ -1,6 +1,14 @@
 import axios from "axios";
 import * as cheerio from "cheerio";
 import { CRAWLER_DEFAULTS } from "@/lib/constants";
+import {
+  measureTitlePx,
+  measureDescriptionPx,
+  TITLE_MAX_PX,
+  DESC_MAX_PX,
+  TITLE_MIN_PX,
+  DESC_MIN_PX,
+} from "@/lib/seo/text-width";
 
 export interface CrawlPageResult {
   url: string;
@@ -16,8 +24,12 @@ export interface CrawlPageResult {
 interface MetaAnalysis {
   title: string | null;
   titleLength: number;
+  /** Rendered title width in pixels (~20px Arial) — what Seobility measures. */
+  titlePx: number;
   metaDescription: string | null;
   metaDescriptionLength: number;
+  /** Rendered meta-description width in pixels (~14px Arial). */
+  metaDescriptionPx: number;
   hasCanonical: boolean;
   canonicalUrl: string | null;
   hasOgTitle: boolean;
@@ -94,13 +106,23 @@ function analyzeMeta($: cheerio.CheerioAPI): MetaAnalysis {
 
   const issues: string[] = [];
 
+  // Measure in pixels (what Google/Seobility truncate by), not characters.
+  const titlePx = title ? measureTitlePx(title) : 0;
+  const metaDescriptionPx = metaDescription
+    ? measureDescriptionPx(metaDescription)
+    : 0;
+
   if (!title) issues.push("Missing title tag");
-  else if (title.length < 30) issues.push("Title tag too short (under 30 chars)");
-  else if (title.length > 60) issues.push("Title tag too long (over 60 chars)");
+  else if (titlePx < TITLE_MIN_PX)
+    issues.push(`Title tag too short (${Math.round(titlePx)}px, under ${TITLE_MIN_PX}px)`);
+  else if (titlePx > TITLE_MAX_PX)
+    issues.push(`Title tag too long (${Math.round(titlePx)}px, over ${TITLE_MAX_PX}px)`);
 
   if (!metaDescription) issues.push("Missing meta description");
-  else if (metaDescription.length < 120) issues.push("Meta description too short (under 120 chars)");
-  else if (metaDescription.length > 160) issues.push("Meta description too long (over 160 chars)");
+  else if (metaDescriptionPx < DESC_MIN_PX)
+    issues.push(`Meta description too short (${Math.round(metaDescriptionPx)}px, under ${DESC_MIN_PX}px)`);
+  else if (metaDescriptionPx > DESC_MAX_PX)
+    issues.push(`Meta description too long (${Math.round(metaDescriptionPx)}px, over ${DESC_MAX_PX}px)`);
 
   if (!canonical) issues.push("Missing canonical tag");
   if (!ogTitle) issues.push("Missing Open Graph title");
@@ -110,8 +132,10 @@ function analyzeMeta($: cheerio.CheerioAPI): MetaAnalysis {
   return {
     title,
     titleLength: title?.length || 0,
+    titlePx,
     metaDescription,
     metaDescriptionLength: metaDescription?.length || 0,
+    metaDescriptionPx,
     hasCanonical: !!canonical,
     canonicalUrl: canonical,
     hasOgTitle: !!ogTitle,
