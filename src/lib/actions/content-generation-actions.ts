@@ -396,6 +396,7 @@ async function runGenerateAndPublish(
   const postLanguage = postLanguageForDomain(
     verticalForPost?.language,
     blog.domain,
+    clientNiche,
   );
 
   let topic = input.topic?.trim();

@@ -649,6 +649,7 @@ export async function generateBlogPost(
   const postLanguage = postLanguageForDomain(
     verticalForPost?.language,
     blog.domain,
+    blog.niche,
   );
 
   // 3. Topic — explicit or ideated from recent titles + style profile

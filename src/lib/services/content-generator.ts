@@ -44,6 +44,26 @@ import {
 const MIN_WORDS = GLOBAL_WORD_BAND_MIN;
 const MAX_WORDS = GLOBAL_WORD_BAND_MAX;
 
+// One retry per topic on shape drift ({title} only, {title, deck}, etc.).
+// 1 = 2 total attempts. Second attempt is a stripped-down last chance.
+const MAX_SHAPE_RETRIES = 1;
+
+/** Appended to the user prompt on the retry attempt. */
+const SHAPE_RETRY_REMINDER = `
+
+Your previous response was missing the article body. Please write the full piece this time and return it as the "content" field of the JSON. Sample shape:
+
+{
+  "title": "...",
+  "content": "<p>Opening paragraph...</p><h2>Section heading</h2><p>...</p><h2>Next section</h2><p>...</p>",
+  "excerpt": "...",
+  "metaTitle": "...",
+  "metaDescription": "...",
+  "keywords": ["...", "...", "..."]
+}
+
+The "content" field should hold the article body itself — opening, sections with <h2> headings, paragraphs, lists where useful, and a closing. Target roughly ${MIN_WORDS}+ words. Write naturally; this is consumer-information content.`;
+
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // ─── Niche contexts ─────────────────────────────────────────────────────────
@@ -75,12 +95,12 @@ const NICHE_CONTEXTS: Record<string, NicheContext> = {
     keyTopics: ["BPC-157", "TB-500", "peptide protocols", "growth hormone", "tissue repair", "clinical research"],
   },
   gambling: {
-    label: "Gambling & Sports Betting",
-    industry: "Sports Betting",
-    defaultAudience: "Casual bettors to sharp players seeking statistical analysis",
+    label: "Gambling, Sports Betting & Online Casino",
+    industry: "Gambling & Casino",
+    defaultAudience: "Casual bettors, sharp players, and casino players seeking statistical analysis",
     defaultBrandVoice: "analytical, data-driven, responsible",
-    contentStyle: "Statistical analysis over hot takes, acknowledge most bettors lose, responsible gambling framework, real odds examples",
-    keyTopics: ["closing line value", "expected value", "bankroll management", "line movement", "betting strategy", "+EV spots"],
+    contentStyle: "Statistical analysis over hot takes, acknowledge the house edge and that most players lose long-term, responsible gambling framework, real odds AND RTP examples across sportsbook and casino",
+    keyTopics: ["closing line value", "expected value", "bankroll management", "line movement", "betting strategy", "+EV spots", "RTP", "house edge", "online slots", "blackjack", "roulette", "live dealer", "wagering requirements", "casino bonuses"],
   },
   apps_marketing: {
     label: "Apps Marketing & Reviews",
@@ -214,15 +234,21 @@ const DEFAULT_NICHE: NicheContext = {
 };
 
 /**
- * Normalize a free-text niche string to one of the canonical NICHE_CONTEXTS keys.
- *
- * Admins type values like "Peptides", "PEPTIDES", "Web Dev", or "payment_processing"
- * — we lowercase, trim, and convert spaces/hyphens to underscores so any
- * reasonable input maps to the right context.
+ * Niche aliases — keys that resolve to another canonical niche. online_casino
+ * is folded into the single "gambling" niche, which now covers BOTH sportsbook
+ * and casino content. Any blog row still stored as "online_casino" keeps
+ * working and is treated as gambling everywhere (context, requirements,
+ * language).
  */
+const NICHE_ALIASES: Record<string, string> = {
+  online_casino: "gambling",
+};
+
 export function normalizeNicheKey(niche: string | null | undefined): string | null {
   if (!niche) return null;
-  return niche.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  const key = niche.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (!key) return null;
+  return NICHE_ALIASES[key] ?? key;
 }
 
 /**
@@ -1319,7 +1345,7 @@ function getNicheRequirements(niche: string): string {
   const key = normalizeNicheKey(niche) ?? "";
   const requirements: Record<string, string> = {
     peptides: `Reference actual published studies. Use proper terminology with explanations. Cite dosage ranges from research, not anecdotes. Acknowledge limitations and unknowns. Distinguish between animal studies, human trials, and theoretical applications. Include medical disclaimers. Never recommend sources or suppliers. Be clear about regulatory status.`,
-    gambling: `Use real odds examples and specific numbers. Reference statistical concepts accurately (EV, variance, ROI, CLV). Acknowledge most bettors lose long-term. Include responsible gambling framework naturally. Never promote betting as guaranteed income. Quantify when possible.`,
+    gambling: `Cover BOTH sports betting and online casino under one roof. SPORTS BETTING: use real odds examples and specific numbers, reference statistical concepts accurately (EV, variance, ROI, CLV), acknowledge most bettors lose long-term. ONLINE CASINO: use real RTP percentages (95-97% slots, ~99.5% blackjack basic strategy, 98.65% European roulette), reference actual game providers (Pragmatic Play, NetEnt, Evolution, Microgaming), be precise about wagering requirements (35x bonus + deposit, max bet caps, game contribution percentages), acknowledge the house edge openly and never frame casino games as positive-EV. Include a responsible gambling framework naturally (deposit limits, self-exclusion). Distinguish regulated jurisdictions (UKGC, MGA, Ontario AGCO, Loto-Québec) from offshore operators. Never promote gambling as guaranteed income and never recommend operators to bypass regulation.`,
     web_dev: `Reference actual tools and versions (React 18, Node 20 LTS). Address real trade-offs. Include both happy path and common issues. Compare modern vs legacy approaches honestly. Mention browser compatibility when relevant.`,
     payment_processing: `Use correct terminology (interchange, acquirer, PSP, basis points). Cite actual fee structures with real numbers. Include hidden fees and contract terms. Address compliance requirements (PCI DSS). Acknowledge regional regulatory differences.`,
     loans: `Use correct financial terminology (APR, LTV, DTI). Show total cost of loan, not just monthly payment. Address predatory lending red flags. Include qualification requirements honestly. Distinguish between loan types and their implications.`,
@@ -1385,25 +1411,36 @@ export function estimateImageCostUsd(): number {
 }
 
 /**
- * TLD-aware language resolution. Operator policy:
- *
- *   .com  → English ONLY, regardless of vertical config. .com sites
- *           target the US / international audience; we never write
- *           French for them even if the vertical is bilingual.
- *   .ca   → use the vertical's configured language (calls
- *           resolvePostLanguage). For bilingual (en_fr) verticals this
- *           coin-flips per post — English on some posts, French on
- *           others, never mixed within a single post.
- *   other → same as .ca (fall through to resolvePostLanguage).
- *
- * Domain is matched case-insensitively against the last dot segment so
- * "Example.COM", "blog.example.com", and "example.com" all behave the
- * same. Protocol / path noise is stripped before matching.
+ * Niche keys whose blogs publish in French regardless of TLD or vertical
+ * config. Highest-priority override in postLanguageForDomain. Both
+ * gambling sub-niches (sportsbook + online casino) are operator-locked
+ * to French for the Quebec market.
+ */
+const FRENCH_ONLY_NICHE_KEYS = new Set(["gambling", "online_casino"]);
+
+/**
+ * Language resolution, in priority order — first match wins:
+ *   1. Niche in FRENCH_ONLY_NICHE_KEYS → ALWAYS French (gambling family).
+ *   2. Domain ends in .com            → ALWAYS English (US / international).
+ *   3. Otherwise                       → vertical's configured language
+ *      via resolvePostLanguage. en_fr verticals coin-flip per post; each
+ *      post is single-language, never mixed.
  */
 export function postLanguageForDomain(
   verticalLanguage: "en" | "fr" | "en_fr" | null | undefined,
   domain: string,
+  niche?: string | null,
 ): "en" | "fr" {
+  // 1. Niche override — gambling family always French.
+  const normalizedNiche = (niche || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  if (FRENCH_ONLY_NICHE_KEYS.has(normalizedNiche)) {
+    return "fr";
+  }
+
+  // 2. TLD override — .com forces English.
   const cleanDomain = (domain || "")
     .trim()
     .toLowerCase()
@@ -1413,6 +1450,8 @@ export function postLanguageForDomain(
   if (cleanDomain.endsWith(".com")) {
     return "en";
   }
+
+  // 3. Default — vertical's configured language.
   return resolvePostLanguage(verticalLanguage);
 }
 
@@ -2012,62 +2051,107 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
     maxTokens = 4000;
   }
 
-  // 1. Generate
-  const {
-    text,
-    inputTokens: genInput,
-    outputTokens: genOutput,
-  } = await callClaude(system, user, {
-    maxTokens,
-    temperature: 0.7,
-    expectJson: true,
-  });
+    // 1. Generate — with ONE shape-retry on missing content. First attempt
+  //    uses the full styled prompt; the retry swaps in a minimal
+  //    consumer-information prompt because the full styled prompt is
+  //    exactly what tends to trigger the {title}-only refusal pattern.
+  //    The retry sacrifices per-blog voice continuity to actually get the
+  //    article body back.
+  let parsed: Partial<GeneratedContent> = {};
+  let genInput = 0;
+  let genOutput = 0;
+  let lastShapeKeys = "(empty)";
+  let lastShapePreview = "";
 
-  // 2. Parse — safeParseClaudeJson tries direct then repaired (handles
-  //    trailing commas, unescaped newlines in content fields, smart quotes,
-  //    HTML-attribute stray quotes, truncation).
-  let parsed: Partial<GeneratedContent>;
-  try {
-    parsed = safeParseClaudeJson<Partial<GeneratedContent>>(text);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "parse error";
-    throw new Error(`Claude returned invalid JSON: ${msg}`);
-  }
+  for (let shapeAttempt = 0; shapeAttempt <= MAX_SHAPE_RETRIES; shapeAttempt++) {
+    const attemptSystem =
+      shapeAttempt === 0
+        ? system
+        : `You are writing a consumer-information article for an adult audience. The topic and target language come from the user message below. Treat the topic analytically and informatively. Write the full article naturally — multiple sections with <h2> headings, paragraphs, lists where useful.
 
-  // Field-name fallback: Claude occasionally returns the article wrapped
-  // in another object ({"article": {...}}) or uses alternate field names
-  // ("html" / "body" / "article_html" instead of "content"; "headline" /
-  // "post_title" instead of "title"). Unwrap and remap before failing.
-  parsed = normalizeArticleShape(parsed);
+Return ONE JSON object with these fields:
+{
+  "title": "...",
+  "content": "<p>opening paragraph...</p><h2>section heading</h2><p>...</p><h2>next section</h2><p>...</p>",
+  "excerpt": "150-160 character summary",
+  "metaTitle": "SEO title under 60 chars",
+  "metaDescription": "150-160 char meta description",
+  "keywords": ["...", "...", "..."]
+}
 
-  if (!parsed.title || !parsed.content) {
-    const keys = Object.keys(parsed).join(", ") || "(empty)";
-    // Include a short value preview per key so an unseen shape variant
-    // is easy to triage from logs. Skip large values to keep the error
-    // message under the log truncation limit.
-    const preview = Object.entries(parsed)
+The "content" field is the full HTML article body — at least ${MIN_WORDS} words. Use <p>, <h2>, <h3>, <ul>, <ol>, <li>, <strong>, <em>, <a> tags only. Escape \\" inside HTML attribute values.${languageDirective}`;
+
+    const attemptUser =
+      shapeAttempt === 0 ? user : user + SHAPE_RETRY_REMINDER;
+
+    if (shapeAttempt > 0) {
+      console.info(
+        `[content-generator] retry attempt ${shapeAttempt + 1} using simplified fallback prompt`,
+      );
+    }
+
+    const gen = await callClaude(attemptSystem, attemptUser, {
+      maxTokens,
+      // 0.5 (down from 0.7). Lower variance reduces the chance the
+      // sampler picks a hedging trajectory that returns {title} only.
+      temperature: 0.5,
+      expectJson: true,
+    });
+    genInput += gen.inputTokens;
+    genOutput += gen.outputTokens;
+
+    // 2. Parse — safeParseClaudeJson tries direct then repaired.
+    let candidate: Partial<GeneratedContent>;
+    try {
+      candidate = safeParseClaudeJson<Partial<GeneratedContent>>(gen.text);
+    } catch (err) {
+      if (shapeAttempt < MAX_SHAPE_RETRIES) {
+        console.warn(
+          `[content-generator] attempt ${shapeAttempt + 1} produced invalid JSON — retrying`,
+        );
+        continue;
+      }
+      const msg = err instanceof Error ? err.message : "parse error";
+      throw new Error(`Claude returned invalid JSON: ${msg}`);
+    }
+
+    parsed = normalizeArticleShape(candidate);
+
+    if (parsed.title && parsed.content) {
+      if (shapeAttempt > 0) {
+        console.info(
+          `[content-generator] shape recovered on attempt ${shapeAttempt + 1}`,
+        );
+      }
+      break;
+    }
+
+    lastShapeKeys = Object.keys(parsed).join(", ") || "(empty)";
+    lastShapePreview = Object.entries(parsed)
       .slice(0, 8)
       .map(([k, v]) => {
-        if (typeof v === "string") {
-          return `${k}=str(${v.length}ch)`;
-        }
-        if (Array.isArray(v)) {
-          return `${k}=arr(${v.length})`;
-        }
-        if (v && typeof v === "object") {
-          return `${k}=obj{${Object.keys(v).slice(0, 4).join(",")}}`;
-        }
+        if (typeof v === "string") return `${k}=str(${v.length}ch)`;
+        if (Array.isArray(v)) return `${k}=arr(${v.length})`;
+        if (v && typeof v === "object") return `${k}=obj{${Object.keys(v).slice(0, 4).join(",")}}`;
         return `${k}=${typeof v}`;
       })
       .join(" ");
+
+    if (shapeAttempt < MAX_SHAPE_RETRIES) {
+      console.warn(
+        `[content-generator] attempt ${shapeAttempt + 1} missing content (keys: ${lastShapeKeys}) — retrying with stripped prompt`,
+      );
+    }
+  }
+
+  if (!parsed.title || !parsed.content) {
     throw new Error(
-      `Claude response missing required fields (title, content). ` +
-        `Returned keys: ${keys}. Shape: ${preview}. ` +
+      `Claude response missing required fields (title, content) after ${MAX_SHAPE_RETRIES + 1} attempts. ` +
+        `Returned keys: ${lastShapeKeys}. Shape: ${lastShapePreview}. ` +
         `Reconstruction did not match any known variant — extend ` +
         `reconstructContentFromParts() in content-generator.ts.`,
     );
   }
-
   // 3. Format + sanitize, strip any Claude-emitted images (they'd be broken).
   //    Word-count enforcement here is the legacy hard MIN_WORDS check; for
   //    profile blogs the scrubber's Layer 1F handles word-band checks.
