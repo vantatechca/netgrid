@@ -83,11 +83,18 @@ export const COMPOUND_CANON: Record<SubNicheId, CompoundCanonEntry> = {
   },
 
   // 15 - Gambling
+    // 15 - Gambling (sports betting + online casino — one combined niche)
   15: {
     subNiche: 15,
     mode: "primary",
-    primary: ["NFL betting", "NBA betting", "MLB betting", "soccer betting", "tennis betting"],
-    adjacent: ["closing line value", "expected value", "bankroll management", "responsible gambling"],
+    primary: [
+      "NFL betting", "NBA betting", "MLB betting", "soccer betting", "tennis betting",
+      "online slots", "blackjack", "roulette", "live dealer", "casino bonuses",
+    ],
+    adjacent: [
+      "closing line value", "expected value", "bankroll management", "responsible gambling",
+      "wagering requirements", "RTP percentages", "house edge", "baccarat", "video poker",
+    ],
   },
 
   // 16 - Apps & software
