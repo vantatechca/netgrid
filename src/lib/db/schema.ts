@@ -86,6 +86,11 @@ export const clients = pgTable("clients", {
   niche: varchar("niche", { length: 255 }),
   totalBlogsTarget: integer("total_blogs_target").default(0),
   notesInternal: text("notes_internal"),
+  // Call-to-action button appended to the bottom of every published post for
+  // this client (link to their main site / contact / registration page).
+  ctaEnabled: boolean("cta_enabled").default(false).notNull(),
+  ctaLabel: varchar("cta_label", { length: 80 }),
+  ctaUrl: varchar("cta_url", { length: 1000 }),
   status: clientStatusEnum("status").default("onboarding"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),

@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const createClientSchema = z.object({
+const clientFields = z.object({
   name: z
     .string()
     .min(1, "Client name is required")
@@ -33,10 +33,40 @@ export const createClientSchema = z.object({
     .optional(),
   notesInternal: z.string().optional().or(z.literal("")),
   status: z.enum(["onboarding", "active", "paused", "churned"]).optional(),
+  // Call-to-action button appended to the bottom of every published post for
+  // this client (e.g. a link to their main website / contact / registration).
+  ctaEnabled: z.boolean().optional(),
+  ctaLabel: z
+    .string()
+    .max(80, "Button text must be 80 characters or less")
+    .optional()
+    .or(z.literal("")),
+  ctaUrl: z
+    .string()
+    .url("Enter a valid URL (https://…)")
+    .max(1000)
+    .optional()
+    .or(z.literal("")),
 });
+
+// When the action button is enabled, both the label and URL are required.
+const ctaComplete = (d: {
+  ctaEnabled?: boolean;
+  ctaLabel?: string;
+  ctaUrl?: string;
+}) =>
+  !d.ctaEnabled ||
+  ((d.ctaLabel ?? "").trim() !== "" && (d.ctaUrl ?? "").trim() !== "");
+
+const ctaRefineOpts = {
+  message: "Button text and URL are required when the action button is enabled",
+  path: ["ctaUrl"] as string[],
+};
+
+export const createClientSchema = clientFields.refine(ctaComplete, ctaRefineOpts);
 
 export type CreateClientInput = z.infer<typeof createClientSchema>;
 
-export const updateClientSchema = createClientSchema.partial();
+export const updateClientSchema = clientFields.partial().refine(ctaComplete, ctaRefineOpts);
 
 export type UpdateClientInput = z.infer<typeof updateClientSchema>;

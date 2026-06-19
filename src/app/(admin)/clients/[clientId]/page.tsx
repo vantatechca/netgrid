@@ -128,6 +128,9 @@ export default async function ClientDetailPage({
             niche: client.niche ?? "",
             totalBlogsTarget: client.totalBlogsTarget ?? 0,
             notesInternal: client.notesInternal ?? "",
+            ctaEnabled: client.ctaEnabled ?? false,
+            ctaLabel: client.ctaLabel ?? "",
+            ctaUrl: client.ctaUrl ?? "",
             status:
               (client.status as
                 | "onboarding"

@@ -344,6 +344,9 @@ async function runGenerateAndPublish(
     .select({
       blog: blogs,
       clientNiche: clients.niche,
+      ctaEnabled: clients.ctaEnabled,
+      ctaLabel: clients.ctaLabel,
+      ctaUrl: clients.ctaUrl,
     })
     .from(blogs)
     .innerJoin(clients, eq(blogs.clientId, clients.id))
@@ -352,6 +355,7 @@ async function runGenerateAndPublish(
 
   if (!row) throw new Error(`Blog ${input.blogId} not found`);
   const { blog, clientNiche } = row;
+  const cta = clientCta(row.ctaEnabled, row.ctaLabel, row.ctaUrl);
 
   if (!blogHasCredentials(blog)) {
     throw new Error(
@@ -461,6 +465,7 @@ async function runGenerateAndPublish(
       blogSeed: blog.id,
       internalLinkRefs,
       knowledgeSummaries: knowledge.summaries,
+      cta,
     });
 
     // Generation with topic-level recovery. Some subjects fail
@@ -709,6 +714,16 @@ export async function generateAndPublishForBlog(
   return runGenerateAndPublish(input);
 }
 
+/** Resolve a client's CTA columns into a generation-ready CTA (or undefined). */
+function clientCta(
+  enabled: boolean | null,
+  label: string | null,
+  url: string | null,
+): { label: string; url: string } | undefined {
+  if (!enabled || !label?.trim() || !url?.trim()) return undefined;
+  return { label: label.trim(), url: url.trim() };
+}
+
 /** Build the platform credential bundle from a blog row. */
 function toPlatformBlog(blog: typeof blogs.$inferSelect): PlatformBlog {
   return {
@@ -777,6 +792,7 @@ export async function regenerateAndUpdatePost(
     blogSeed: blog.id,
     internalLinkRefs,
     knowledgeSummaries: ctx.knowledge.summaries,
+    cta: ctx.cta,
   });
 
   // Push the fresh body + meta to the SAME live post (same URL).
@@ -843,13 +859,20 @@ export async function regenerateAndUpdatePost(
  */
 async function resolveIdeationContext(blogId: string) {
   const [row] = await db
-    .select({ blog: blogs, clientNiche: clients.niche })
+    .select({
+      blog: blogs,
+      clientNiche: clients.niche,
+      ctaEnabled: clients.ctaEnabled,
+      ctaLabel: clients.ctaLabel,
+      ctaUrl: clients.ctaUrl,
+    })
     .from(blogs)
     .innerJoin(clients, eq(blogs.clientId, clients.id))
     .where(eq(blogs.id, blogId))
     .limit(1);
   if (!row) throw new Error(`Blog ${blogId} not found`);
   const { blog, clientNiche } = row;
+  const cta = clientCta(row.ctaEnabled, row.ctaLabel, row.ctaUrl);
 
   let styleProfile = await getStyleProfileForBlog(blog.id);
   if (!styleProfile) {
@@ -874,6 +897,7 @@ async function resolveIdeationContext(blogId: string) {
     verticalKey: verticalForPost?.key ?? null,
     language,
     knowledge,
+    cta,
   };
 }
 

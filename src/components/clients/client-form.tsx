@@ -2,7 +2,7 @@
 
 import { useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { useForm } from "react-hook-form";
+import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
   createClientSchema,
@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
@@ -29,6 +30,8 @@ export function ClientForm({ mode, defaultValues }: ClientFormProps) {
   const {
     register,
     handleSubmit,
+    control,
+    watch,
     formState: { errors },
   } = useForm({
     resolver: zodResolver(createClientSchema),
@@ -40,8 +43,13 @@ export function ClientForm({ mode, defaultValues }: ClientFormProps) {
       niche: defaultValues?.niche ?? "",
       totalBlogsTarget: defaultValues?.totalBlogsTarget ?? 0,
       notesInternal: defaultValues?.notesInternal ?? "",
+      ctaEnabled: defaultValues?.ctaEnabled ?? false,
+      ctaLabel: defaultValues?.ctaLabel ?? "",
+      ctaUrl: defaultValues?.ctaUrl ?? "",
     },
   });
+
+  const ctaEnabled = !!watch("ctaEnabled");
 
   function onSubmit(data: CreateClientInput) {
     startTransition(async () => {
@@ -176,6 +184,70 @@ export function ClientForm({ mode, defaultValues }: ClientFormProps) {
               {...register("notesInternal")}
             />
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Action button (CTA) */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Action Button</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between rounded-md border p-3">
+            <div className="pr-4">
+              <Label htmlFor="ctaEnabled" className="text-sm">
+                Add an action button to this client&apos;s posts
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                Appends a button to the bottom of every published post — links
+                to the client&apos;s main site, contact, or registration page.
+              </p>
+            </div>
+            <Controller
+              control={control}
+              name="ctaEnabled"
+              render={({ field }) => (
+                <Switch
+                  id="ctaEnabled"
+                  checked={!!field.value}
+                  onCheckedChange={field.onChange}
+                />
+              )}
+            />
+          </div>
+
+          {ctaEnabled && (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="ctaLabel">Button text</Label>
+                <Input
+                  id="ctaLabel"
+                  placeholder="Visit our site"
+                  {...register("ctaLabel")}
+                  aria-invalid={!!errors.ctaLabel}
+                />
+                {errors.ctaLabel && (
+                  <p className="text-sm text-destructive">
+                    {errors.ctaLabel.message}
+                  </p>
+                )}
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="ctaUrl">Button link (URL)</Label>
+                <Input
+                  id="ctaUrl"
+                  placeholder="https://example.com/register"
+                  {...register("ctaUrl")}
+                  aria-invalid={!!errors.ctaUrl}
+                />
+                {errors.ctaUrl && (
+                  <p className="text-sm text-destructive">
+                    {errors.ctaUrl.message}
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 
