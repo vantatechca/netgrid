@@ -1232,6 +1232,44 @@ export function hasH1(html: string): boolean {
   return /<h1(\s[^>]*)?>/i.test(html);
 }
 
+/** Normalize heading text for duplicate comparison. */
+function normalizeHeadingText(inner: string): string {
+  return inner
+    .replace(/<[^>]+>/g, "") // strip nested tags
+    .replace(/&[a-z]+;/gi, " ") // entities → space
+    .replace(/[^\p{L}\p{N}\s]/gu, "") // drop punctuation
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * Remove duplicate heading TEXT from the body (Seobility "duplicate heading
+ * texts" warning). Keeps the first occurrence of each heading; for any later
+ * heading with the same normalized text — or one that just restates the page
+ * title (the body's content stays; only the redundant heading element is
+ * dropped, so the prose flows on without a repeated label).
+ *
+ * `title` is the post title (the page's sole <h1>), seeded as "already seen"
+ * so a body heading echoing the title is removed too.
+ */
+export function dedupeHeadings(html: string, title: string): string {
+  const seen = new Set<string>();
+  const titleKey = normalizeHeadingText(title);
+  if (titleKey) seen.add(titleKey);
+
+  return html.replace(
+    /<h([2-6])(\s[^>]*)?>([\s\S]*?)<\/h\1\s*>/gi,
+    (match, _level, _attrs, inner) => {
+      const key = normalizeHeadingText(inner);
+      if (!key) return match; // empty heading — leave as-is
+      if (seen.has(key)) return ""; // duplicate → drop the heading element
+      seen.add(key);
+      return match;
+    },
+  );
+}
+
 /**
  * Normalize the SEO meta TITLE (the <title> / title-tag) to the audit spec:
  *   - collapse whitespace
@@ -1713,6 +1751,19 @@ JSON SHAPE — strict:
 }
 
 /**
+ * On-page quality rules appended to every article-generation system prompt
+ * (both the profile and legacy paths). Phrased as natural-language ceilings,
+ * not mechanical SEO knobs (no keyword-density / "keyword in first 100 words"
+ * rules — those are AI-detector fingerprints, deliberately avoided).
+ */
+const SEO_QUALITY_DIRECTIVE = `
+
+ON-PAGE QUALITY (apply throughout the article):
+- Keep the AVERAGE sentence length at or below ~20 words (shorter is fine; vary length for rhythm). Break up any single sentence that runs past ~28 words into two.
+- Every <h2>/<h3> heading must have UNIQUE text — never repeat the same heading wording, and do not restate the article title as a heading.
+- Make the opening paragraph clearly on-topic: reference the article's main subject naturally in the first few sentences.`;
+
+/**
  * Render the client's Knowledge Base summaries into a system-prompt block.
  * Returns "" when there's nothing to inject.
  */
@@ -2155,7 +2206,7 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
       // gets a topical value instead of the generic "General Content".
       nicheLabel: opts.niche,
     });
-    system = composed.systemPrompt + languageDirective + knowledgeContext;
+    system = composed.systemPrompt + languageDirective + knowledgeContext + SEO_QUALITY_DIRECTIVE;
     user = composed.userPrompt;
     // Append the external-news-links clause (no-op for peptides — they
     // skip this entirely upstream).
@@ -2177,7 +2228,7 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
     // mid-string truncation for almost all posts.
     maxTokens = Math.min(8192, Math.round(opts.styleProfile.wordBandMax * 3.0));
   } else {
-    system = buildSystemPrompt(opts) + languageDirective + knowledgeContext;
+    system = buildSystemPrompt(opts) + languageDirective + knowledgeContext + SEO_QUALITY_DIRECTIVE;
     user = buildUserPrompt(opts);
     if (newsLinksClause) {
       user = user + newsLinksClause;
@@ -2299,6 +2350,9 @@ The "content" field is the full HTML article body — at least ${MIN_WORDS} word
   // Guarantee the body carries no <h1> — the platform title is the page's
   // sole H1. Prevents the "Too many H1 headings" SEO error.
   body = demoteH1ToH2(body);
+  // Drop duplicate heading text (and any body heading that restates the
+  // title) — clears the "duplicate heading texts" audit warning.
+  body = dedupeHeadings(body, parsed.title ?? "");
 
   if (!usingProfile) {
     body = capWordCount(body, MAX_WORDS);
