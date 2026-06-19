@@ -74,6 +74,158 @@ export async function getReport(id: string) {
   return report || null;
 }
 
+// ─── Cost analytics ───────────────────────────────────────────────────────────
+
+export interface CostAnalytics {
+  /** Total generation spend (text + image) recorded on generated posts. */
+  totalCostUsd: number;
+  /** Number of generated posts the cost is spread across. */
+  postCount: number;
+  /** Distinct blogs that have generated at least one post. */
+  blogCount: number;
+  avgCostPerBlog: number;
+  avgCostPerPost: number;
+}
+
+/**
+ * Aggregate generation cost from `generated_posts.cost_usd`. Cost is incurred
+ * at generation time regardless of publish status, so this sums every row.
+ * Pass a clientId to scope to one client; omit for the whole network.
+ */
+export async function getCostAnalytics(clientId?: string): Promise<CostAnalytics> {
+  await requireAdmin();
+
+  const [row] = await db
+    .select({
+      totalCost: sql<string>`COALESCE(SUM(${generatedPosts.costUsd}), 0)`,
+      postCount: sql<number>`count(*)::int`,
+      blogCount: sql<number>`count(distinct ${generatedPosts.blogId})::int`,
+    })
+    .from(generatedPosts)
+    .where(clientId ? eq(generatedPosts.clientId, clientId) : undefined);
+
+  const totalCostUsd = Number(row?.totalCost ?? 0);
+  const postCount = row?.postCount ?? 0;
+  const blogCount = row?.blogCount ?? 0;
+
+  return {
+    totalCostUsd,
+    postCount,
+    blogCount,
+    avgCostPerBlog: blogCount > 0 ? totalCostUsd / blogCount : 0,
+    avgCostPerPost: postCount > 0 ? totalCostUsd / postCount : 0,
+  };
+}
+
+export interface ClientReportSummary {
+  clientId: string;
+  clientName: string;
+  reportCount: number;
+  publishedCount: number;
+  latestReportAt: Date | null;
+  latestTrend: "improving" | "stable" | "declining" | null;
+  /** Posts shipped, summed from the client's reports. */
+  totalPostsPublished: number;
+  totalCostUsd: number;
+  postCount: number;
+  blogCount: number;
+  avgCostPerBlog: number;
+  avgCostPerPost: number;
+}
+
+/**
+ * Per-client rollup powering the "By client" cards on the Reports page: report
+ * counts + latest trend from `reports`, and generation cost from
+ * `generated_posts`. Includes any client that has at least one report or one
+ * generated post. Sorted by total spend (desc).
+ */
+export async function getClientReportSummaries(): Promise<ClientReportSummary[]> {
+  await requireAdmin();
+
+  const [clientRows, reportRows, costRows] = await Promise.all([
+    db.select({ id: clients.id, name: clients.name }).from(clients),
+    db
+      .select({
+        clientId: reports.clientId,
+        generatedAt: reports.generatedAt,
+        trend: reports.overallSeoTrend,
+        visible: reports.visibleToClient,
+        posts: reports.totalPostsPublished,
+      })
+      .from(reports)
+      .orderBy(desc(reports.generatedAt)),
+    db
+      .select({
+        clientId: generatedPosts.clientId,
+        totalCost: sql<string>`COALESCE(SUM(${generatedPosts.costUsd}), 0)`,
+        postCount: sql<number>`count(*)::int`,
+        blogCount: sql<number>`count(distinct ${generatedPosts.blogId})::int`,
+      })
+      .from(generatedPosts)
+      .groupBy(generatedPosts.clientId),
+  ]);
+
+  const nameById = new Map(clientRows.map((c) => [c.id, c.name]));
+  const costById = new Map(costRows.map((r) => [r.clientId, r]));
+
+  // reportRows are newest-first, so the first row seen per client is the latest.
+  const repAgg = new Map<
+    string,
+    {
+      count: number;
+      published: number;
+      latestAt: Date | null;
+      latestTrend: ClientReportSummary["latestTrend"];
+      posts: number;
+    }
+  >();
+  for (const r of reportRows) {
+    const cur =
+      repAgg.get(r.clientId) ??
+      { count: 0, published: 0, latestAt: null, latestTrend: null, posts: 0 };
+    cur.count++;
+    if (r.visible) cur.published++;
+    cur.posts += r.posts ?? 0;
+    if (cur.latestAt === null) {
+      cur.latestAt = r.generatedAt;
+      cur.latestTrend = r.trend ?? null;
+    }
+    repAgg.set(r.clientId, cur);
+  }
+
+  const ids = new Set<string>([...repAgg.keys(), ...costById.keys()]);
+  const out: ClientReportSummary[] = [];
+  for (const id of ids) {
+    const clientName = nameById.get(id);
+    if (!clientName) continue; // orphaned row — client deleted
+    const rep = repAgg.get(id);
+    const cost = costById.get(id);
+    const totalCostUsd = Number(cost?.totalCost ?? 0);
+    const postCount = cost?.postCount ?? 0;
+    const blogCount = cost?.blogCount ?? 0;
+    out.push({
+      clientId: id,
+      clientName,
+      reportCount: rep?.count ?? 0,
+      publishedCount: rep?.published ?? 0,
+      latestReportAt: rep?.latestAt ?? null,
+      latestTrend: rep?.latestTrend ?? null,
+      totalPostsPublished: rep?.posts ?? 0,
+      totalCostUsd,
+      postCount,
+      blogCount,
+      avgCostPerBlog: blogCount > 0 ? totalCostUsd / blogCount : 0,
+      avgCostPerPost: postCount > 0 ? totalCostUsd / postCount : 0,
+    });
+  }
+
+  out.sort(
+    (a, b) =>
+      b.totalCostUsd - a.totalCostUsd || a.clientName.localeCompare(b.clientName),
+  );
+  return out;
+}
+
 async function generateReportInternal(
   clientId: string,
   periodStart: string,

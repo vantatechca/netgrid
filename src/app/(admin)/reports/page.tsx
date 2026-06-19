@@ -1,8 +1,10 @@
 import Link from "next/link";
 import { requireAdmin } from "@/lib/auth/helpers";
-import { getReports } from "@/lib/actions/report-actions";
-import { Badge } from "@/components/ui/badge";
-import { TriggerReportsButton } from "@/components/reports/trigger-reports-button";
+import {
+  getReports,
+  getCostAnalytics,
+  getClientReportSummaries,
+} from "@/lib/actions/report-actions";
 import {
   Card,
   CardContent,
@@ -10,15 +12,24 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
+  StatCard,
+  ReportRow,
+  TrendIcon,
+  trendBadgeClass,
+  fmtUsd,
+  formatReportDate,
+} from "@/components/reports/report-pieces";
+import { Badge } from "@/components/ui/badge";
+import { TriggerReportsButton } from "@/components/reports/trigger-reports-button";
+import {
   Calendar,
   ChevronRight,
+  DollarSign,
   Eye,
   EyeOff,
   FileText,
-  Globe,
-  Minus,
-  TrendingDown,
-  TrendingUp,
+  Layers,
+  Receipt,
   Users,
 } from "lucide-react";
 
@@ -31,51 +42,17 @@ const FILTERS = [
 ] as const;
 type Filter = (typeof FILTERS)[number]["value"];
 
-function formatDate(d: Date | string | null): string {
-  if (!d) return "—";
-  if (typeof d === "string" && /^\d{4}-\d{2}-\d{2}/.test(d)) {
-    const [y, m, day] = d.split("-").map(Number);
-    return new Date(y, m - 1, day).toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
-  }
-  return new Date(d).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
-
-function trendBadgeClass(trend: string | null): string {
-  if (trend === "improving")
-    return "bg-green-100 text-green-800 hover:bg-green-100 border-transparent";
-  if (trend === "declining")
-    return "bg-red-100 text-red-800 hover:bg-red-100 border-transparent";
-  return "bg-muted text-muted-foreground hover:bg-muted border-transparent";
-}
-
-function TrendIcon({ trend }: { trend: string | null }) {
-  if (trend === "improving") return <TrendingUp className="size-3" />;
-  if (trend === "declining") return <TrendingDown className="size-3" />;
-  return <Minus className="size-3" />;
-}
-
-function scoreColor(score: number | null | undefined): string {
-  if (score === null || score === undefined) return "text-muted-foreground";
-  if (score >= 80) return "text-green-600";
-  if (score >= 60) return "text-yellow-600";
-  return "text-red-600";
-}
-
 export default async function AdminReportsPage({
   searchParams,
 }: {
   searchParams?: { filter?: string };
 }) {
   await requireAdmin();
-  const data = await getReports({ pageSize: 100 });
+  const [data, cost, clientSummaries] = await Promise.all([
+    getReports({ pageSize: 100 }),
+    getCostAnalytics(),
+    getClientReportSummaries(),
+  ]);
   const items = data.reports;
 
   const activeFilter: Filter =
@@ -110,12 +87,7 @@ export default async function AdminReportsPage({
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
-          icon={FileText}
-          tone="blue"
-          label="Total Reports"
-          value={data.total}
-        />
+        <StatCard icon={FileText} tone="blue" label="Total Reports" value={data.total} />
         <StatCard
           icon={Eye}
           tone={publishedCount > 0 ? "green" : "gray"}
@@ -138,6 +110,97 @@ export default async function AdminReportsPage({
           sub={`${totalPostsPublished} posts shipped`}
         />
       </div>
+
+      {/* Cost analytics */}
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard
+          icon={DollarSign}
+          tone="green"
+          label="Total Spend"
+          value={fmtUsd(cost.totalCostUsd)}
+          sub="generation cost, all time"
+        />
+        <StatCard
+          icon={Layers}
+          tone="blue"
+          label="Avg Cost / Blog"
+          value={fmtUsd(cost.avgCostPerBlog)}
+          sub={`${cost.blogCount} blog${cost.blogCount === 1 ? "" : "s"} generating`}
+        />
+        <StatCard
+          icon={Receipt}
+          tone="blue"
+          label="Avg Cost / Post"
+          value={fmtUsd(cost.avgCostPerPost)}
+          sub="text + images"
+        />
+        <StatCard
+          icon={FileText}
+          tone="gray"
+          label="Posts Generated"
+          value={cost.postCount}
+          sub="across all blogs"
+        />
+      </div>
+
+      {/* By client */}
+      {clientSummaries.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">By Client</h2>
+            <p className="text-xs text-muted-foreground">
+              {clientSummaries.length} client
+              {clientSummaries.length === 1 ? "" : "s"}
+            </p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {clientSummaries.map((c) => (
+              <Link
+                key={c.clientId}
+                href={`/reports/client/${c.clientId}`}
+                className="group block"
+              >
+                <Card className="h-full transition-colors group-hover:border-primary/40 group-hover:bg-muted/30">
+                  <CardContent className="space-y-3 p-4">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="truncate font-semibold" title={c.clientName}>
+                          {c.clientName}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {c.reportCount} report{c.reportCount === 1 ? "" : "s"}
+                          {c.latestReportAt && (
+                            <> · latest {formatReportDate(c.latestReportAt)}</>
+                          )}
+                        </p>
+                      </div>
+                      {c.latestTrend ? (
+                        <Badge
+                          className={
+                            "flex shrink-0 items-center gap-1 text-[10px] " +
+                            trendBadgeClass(c.latestTrend)
+                          }
+                        >
+                          <TrendIcon trend={c.latestTrend} />
+                          {c.latestTrend}
+                        </Badge>
+                      ) : (
+                        <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2 border-t pt-3 text-xs">
+                      <ClientStat label="Spend" value={fmtUsd(c.totalCostUsd)} />
+                      <ClientStat label="Avg / blog" value={fmtUsd(c.avgCostPerBlog)} />
+                      <ClientStat label="Posts" value={String(c.postCount)} />
+                    </div>
+                  </CardContent>
+                </Card>
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0 pb-3">
@@ -185,102 +248,13 @@ export default async function AdminReportsPage({
             </div>
           ) : (
             <div className="divide-y">
-              {visible.map((row) => {
-                const report = row.report;
-                const onSchedule = report.blogsOnSchedule ?? 0;
-                const offSchedule = report.blogsOffSchedule ?? 0;
-                const totalBlogs = onSchedule + offSchedule;
-                return (
-                  <Link
-                    key={report.id}
-                    href={`/reports/${report.id}`}
-                    className="block transition-colors hover:bg-muted/30"
-                  >
-                    <div className="flex items-start gap-4 p-4">
-                      <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-blue-100">
-                        <FileText className="size-5 text-blue-700" />
-                      </div>
-
-                      <div className="min-w-0 flex-1 space-y-2">
-                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                          <span className="font-semibold">
-                            {report.title || "Monthly Report"}
-                          </span>
-                          <Badge
-                            variant={
-                              report.visibleToClient ? "default" : "outline"
-                            }
-                            className="text-[10px]"
-                          >
-                            {report.visibleToClient ? "Published" : "Draft"}
-                          </Badge>
-                          {report.overallSeoTrend && (
-                            <Badge
-                              className={
-                                "flex items-center gap-1 text-[10px] " +
-                                trendBadgeClass(report.overallSeoTrend)
-                              }
-                            >
-                              <TrendIcon trend={report.overallSeoTrend} />
-                              {report.overallSeoTrend}
-                            </Badge>
-                          )}
-                        </div>
-
-                        <p className="text-xs text-muted-foreground">
-                          <span className="font-medium text-foreground">
-                            {row.clientName}
-                          </span>
-                          <span className="mx-1.5">·</span>
-                          {formatDate(report.periodStart)} →{" "}
-                          {formatDate(report.periodEnd)}
-                          {report.generatedAt && (
-                            <>
-                              <span className="mx-1.5">·</span>
-                              generated {formatDate(report.generatedAt)}
-                            </>
-                          )}
-                        </p>
-
-                        <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 pt-1 text-xs">
-                          <Metric
-                            label="Avg SEO"
-                            value={
-                              report.avgSeoScore != null
-                                ? String(report.avgSeoScore)
-                                : "—"
-                            }
-                            valueColor={scoreColor(report.avgSeoScore)}
-                          />
-                          <Metric
-                            label="Posts"
-                            value={String(report.totalPostsPublished ?? 0)}
-                          />
-                          <Metric
-                            label="Issues fixed"
-                            value={String(report.totalIssuesFixed ?? 0)}
-                          />
-                          {totalBlogs > 0 && (
-                            <Metric
-                              label="On schedule"
-                              value={`${onSchedule} / ${totalBlogs}`}
-                              valueColor={
-                                offSchedule === 0
-                                  ? "text-green-600"
-                                  : offSchedule > onSchedule
-                                  ? "text-red-600"
-                                  : "text-amber-700"
-                              }
-                            />
-                          )}
-                        </div>
-                      </div>
-
-                      <ChevronRight className="size-4 shrink-0 self-center text-muted-foreground" />
-                    </div>
-                  </Link>
-                );
-              })}
+              {visible.map((row) => (
+                <ReportRow
+                  key={row.report.id}
+                  report={row.report}
+                  clientName={row.clientName}
+                />
+              ))}
             </div>
           )}
         </CardContent>
@@ -289,65 +263,11 @@ export default async function AdminReportsPage({
   );
 }
 
-// ───────────────────────────────────────────────────────────────────────────
-// Pieces
-
-type Tone = "blue" | "green" | "red" | "amber" | "purple" | "gray";
-
-const STAT_TONE: Record<Tone, { iconBg: string; iconColor: string }> = {
-  blue: { iconBg: "bg-blue-100", iconColor: "text-blue-700" },
-  green: { iconBg: "bg-green-100", iconColor: "text-green-700" },
-  red: { iconBg: "bg-red-100", iconColor: "text-red-700" },
-  amber: { iconBg: "bg-amber-100", iconColor: "text-amber-700" },
-  purple: { iconBg: "bg-purple-100", iconColor: "text-purple-700" },
-  gray: { iconBg: "bg-muted", iconColor: "text-muted-foreground" },
-};
-
-function StatCard({
-  icon: Icon,
-  tone,
-  label,
-  value,
-  sub,
-}: {
-  icon: typeof Globe;
-  tone: Tone;
-  label: string;
-  value: string | number;
-  sub?: string;
-}) {
-  const t = STAT_TONE[tone];
+function ClientStat({ label, value }: { label: string; value: string }) {
   return (
-    <Card>
-      <CardContent className="p-4">
-        <div className="flex items-start justify-between gap-2">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-            {label}
-          </p>
-          <div className={`flex size-7 items-center justify-center rounded-full ${t.iconBg}`}>
-            <Icon className={`size-3.5 ${t.iconColor}`} />
-          </div>
-        </div>
-        <p className="mt-2 text-2xl font-bold tabular-nums">{value}</p>
-        {sub && <p className="text-xs text-muted-foreground mt-0.5">{sub}</p>}
-      </CardContent>
-    </Card>
-  );
-}
-
-function Metric({
-  label,
-  value,
-  valueColor,
-}: {
-  label: string;
-  value: string;
-  valueColor?: string;
-}) {
-  return (
-    <div className="flex items-baseline gap-1">
-      <span className="text-muted-foreground">{label}:</span>
-      <span className={`font-semibold ${valueColor ?? ""}`}>{value}</span>
+    <div>
+      <p className="text-muted-foreground">{label}</p>
+      <p className="font-semibold tabular-nums">{value}</p>
     </div>
   );
 }
