@@ -4,6 +4,7 @@ import {
   getReports,
   getCostAnalytics,
   getClientReportSummaries,
+  type CostWindow,
 } from "@/lib/actions/report-actions";
 import {
   Card,
@@ -42,16 +43,35 @@ const FILTERS = [
 ] as const;
 type Filter = (typeof FILTERS)[number]["value"];
 
+const WINDOWS = [
+  { value: "all", label: "All time" },
+  { value: "30d", label: "30 days" },
+  { value: "month", label: "This month" },
+] as const;
+
+function reportsHref(p: { filter?: string; window?: string }): string {
+  const sp = new URLSearchParams();
+  if (p.filter) sp.set("filter", p.filter);
+  if (p.window && p.window !== "all") sp.set("window", p.window);
+  const qs = sp.toString();
+  return qs ? `/reports?${qs}` : "/reports";
+}
+
 export default async function AdminReportsPage({
   searchParams,
 }: {
-  searchParams?: { filter?: string };
+  searchParams?: { filter?: string; window?: string };
 }) {
   await requireAdmin();
+
+  const activeWindow: CostWindow =
+    (WINDOWS.find((w) => w.value === searchParams?.window)?.value as CostWindow) ??
+    "all";
+
   const [data, cost, clientSummaries] = await Promise.all([
     getReports({ pageSize: 100 }),
-    getCostAnalytics(),
-    getClientReportSummaries(),
+    getCostAnalytics({ window: activeWindow }),
+    getClientReportSummaries(activeWindow),
   ]);
   const items = data.reports;
 
@@ -112,13 +132,43 @@ export default async function AdminReportsPage({
       </div>
 
       {/* Cost analytics */}
+      <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-lg font-semibold">Generation Cost</h2>
+        <div className="flex flex-wrap gap-1.5">
+          {WINDOWS.map((w) => {
+            const active = activeWindow === w.value;
+            return (
+              <Link
+                key={w.value}
+                href={reportsHref({ filter: activeFilter, window: w.value })}
+                scroll={false}
+                className={
+                  "rounded-md border px-2.5 py-1 text-xs font-medium transition-colors " +
+                  (active
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-input bg-background hover:bg-muted")
+                }
+              >
+                {w.label}
+              </Link>
+            );
+          })}
+        </div>
+      </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
           icon={DollarSign}
           tone="green"
           label="Total Spend"
           value={fmtUsd(cost.totalCostUsd)}
-          sub="generation cost, all time"
+          sub={
+            activeWindow === "all"
+              ? "generation cost, all time"
+              : activeWindow === "30d"
+                ? "last 30 days"
+                : "this month"
+          }
         />
         <StatCard
           icon={Layers}
@@ -141,6 +191,7 @@ export default async function AdminReportsPage({
           value={cost.postCount}
           sub="across all blogs"
         />
+      </div>
       </div>
 
       {/* By client */}
@@ -211,7 +262,7 @@ export default async function AdminReportsPage({
               return (
                 <Link
                   key={f.value || "all"}
-                  href={f.value ? `/reports?filter=${f.value}` : "/reports"}
+                  href={reportsHref({ filter: f.value, window: activeWindow })}
                   scroll={false}
                   className={
                     "rounded-md border px-2.5 py-1 text-xs font-medium transition-colors " +

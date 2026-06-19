@@ -134,6 +134,7 @@ export interface ReportRowData {
   totalIssuesFixed: number | null;
   blogsOnSchedule: number | null;
   blogsOffSchedule: number | null;
+  totalCostUsd?: string | number | null;
 }
 
 /** A single report as a clickable row linking to its detail page. */
@@ -213,6 +214,9 @@ export function ReportRow({
               label="Issues fixed"
               value={String(report.totalIssuesFixed ?? 0)}
             />
+            {report.totalCostUsd != null && (
+              <Metric label="Cost" value={fmtUsd(Number(report.totalCostUsd))} />
+            )}
             {totalBlogs > 0 && (
               <Metric
                 label="On schedule"
