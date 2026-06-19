@@ -47,6 +47,9 @@ const clientFields = z.object({
     .max(1000)
     .optional()
     .or(z.literal("")),
+  ctaPlacement: z
+    .enum(["bottom", "top_bottom", "top_middle_bottom"])
+    .optional(),
 });
 
 // When the action button is enabled, both the label and URL are required.

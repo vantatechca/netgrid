@@ -612,6 +612,7 @@ export async function generateBlogPost(
       ctaEnabled: clients.ctaEnabled,
       ctaLabel: clients.ctaLabel,
       ctaUrl: clients.ctaUrl,
+      ctaPlacement: clients.ctaPlacement,
     })
     .from(blogs)
     .leftJoin(clients, eq(blogs.clientId, clients.id))
@@ -727,7 +728,11 @@ export async function generateBlogPost(
     language: postLanguage,
     cta:
       blog.ctaEnabled && blog.ctaLabel?.trim() && blog.ctaUrl?.trim()
-        ? { label: blog.ctaLabel.trim(), url: blog.ctaUrl.trim() }
+        ? {
+            label: blog.ctaLabel.trim(),
+            url: blog.ctaUrl.trim(),
+            placement: blog.ctaPlacement ?? "bottom",
+          }
         : undefined,
   });
 

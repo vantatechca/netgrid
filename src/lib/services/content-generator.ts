@@ -380,7 +380,7 @@ export interface GenerateOptions {
    * body (link to the client's main site / contact / registration page).
    * Injected deterministically — not LLM-generated.
    */
-  cta?: { label: string; url: string };
+  cta?: { label: string; url: string; placement?: string };
 }
 
 export interface GeneratedContent {
@@ -1795,6 +1795,56 @@ function buildCtaHtml(cta?: { label: string; url: string }): string {
   );
 }
 
+/** Positions for the CTA from a placement preset. */
+function ctaPositions(placement?: string): Array<"top" | "middle" | "bottom"> {
+  if (placement === "top_bottom") return ["top", "bottom"];
+  if (placement === "top_middle_bottom") return ["top", "middle", "bottom"];
+  return ["bottom"];
+}
+
+/** Insert an HTML snippet at the ~50% word-count point, on a paragraph boundary. */
+function insertHtmlAtMidpoint(html: string, snippet: string): string {
+  const parts = html.split(/(<\/p>)/i);
+  const paragraphs: Array<{ html: string; words: number }> = [];
+  for (let i = 0; i < parts.length; i += 2) {
+    const combined = (parts[i] ?? "") + (parts[i + 1] ?? "");
+    if (combined.trim().length === 0) continue;
+    const words = combined.replace(/<[^>]+>/g, " ").trim().split(/\s+/).filter(Boolean).length;
+    paragraphs.push({ html: combined, words });
+  }
+  if (paragraphs.length < 4) return html + snippet; // too short for a sensible midpoint
+  const total = paragraphs.reduce((s, p) => s + p.words, 0);
+  let acc = 0;
+  let insertAt = paragraphs.length - 1;
+  for (let i = 0; i < paragraphs.length; i++) {
+    acc += paragraphs[i].words;
+    if (acc >= total / 2) {
+      insertAt = i + 1;
+      break;
+    }
+  }
+  return (
+    paragraphs.slice(0, insertAt).map((p) => p.html).join("") +
+    snippet +
+    paragraphs.slice(insertAt).map((p) => p.html).join("")
+  );
+}
+
+/** Inject the client's CTA button at its configured position(s). */
+function injectCta(body: string, cta?: GenerateOptions["cta"]): string {
+  if (!cta) return body;
+  const button = buildCtaHtml(cta);
+  if (!button) return body;
+
+  const positions = ctaPositions(cta.placement);
+  let out = body;
+  // Middle first, so the top/bottom buttons don't skew the midpoint math.
+  if (positions.includes("middle")) out = insertHtmlAtMidpoint(out, button);
+  if (positions.includes("top")) out = button + out;
+  if (positions.includes("bottom")) out = out + button;
+  return out;
+}
+
 /**
  * Render the client's Knowledge Base summaries into a system-prompt block.
  * Returns "" when there's nothing to inject.
@@ -2547,12 +2597,9 @@ The "content" field is the full HTML article body — at least ${MIN_WORDS} word
     body = embedBodyImage(body, bodyImageUrl, parsed.title, opts.blogSeed);
   }
 
-  // Append the client's call-to-action button at the very bottom (no-op when
-  // the client has no CTA configured).
-  const ctaHtml = buildCtaHtml(opts.cta);
-  if (ctaHtml) {
-    body = body + ctaHtml;
-  }
+  // Inject the client's call-to-action button at its configured position(s)
+  // — no-op when the client has no CTA configured.
+  body = injectCta(body, opts.cta);
 
   // 6. Scoring removed (per footprint audit insight 2). The old
   //    analyzeContent call cost ~$0.0015/post AND optimized to exactly the
