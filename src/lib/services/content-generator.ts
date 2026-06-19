@@ -367,6 +367,14 @@ export interface GenerateOptions {
    * single SEO signal the audit flagged as missing (internal link graph).
    */
   internalLinkRefs?: Array<{ title: string; url: string }>;
+  /**
+   * Distilled summaries of the client's active Knowledge Base documents for
+   * this blog. When present, they're appended to the system prompt so the
+   * article draws on the client's own facts/terminology. Placed in the system
+   * prefix (stable per blog) rather than the user message so it stays
+   * cache-friendly if generation is ever batched per blog.
+   */
+  knowledgeSummaries?: string[];
 }
 
 export interface GeneratedContent {
@@ -1704,6 +1712,19 @@ JSON SHAPE — strict:
   return prompt;
 }
 
+/**
+ * Render the client's Knowledge Base summaries into a system-prompt block.
+ * Returns "" when there's nothing to inject.
+ */
+function buildKnowledgeContext(summaries?: string[]): string {
+  const list = (summaries ?? []).map((s) => s.trim()).filter(Boolean);
+  if (list.length === 0) return "";
+  return (
+    `\n\nCLIENT KNOWLEDGE BASE — reference material this client provided. Draw on these facts, terminology, and context wherever they fit the topic, and never contradict them:\n` +
+    list.map((s) => `- ${s}`).join("\n")
+  );
+}
+
 function buildUserPrompt(opts: GenerateOptions): string {
   return `Write the article.
 
@@ -2118,6 +2139,10 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
   // and the title / excerpt / meta fields come back in French too.
   const languageDirective = buildLanguageDirective(opts.language);
 
+  // Client Knowledge Base context — appended to the SYSTEM prompt (the stable
+  // per-blog prefix) so the article draws on the client's own material.
+  const knowledgeContext = buildKnowledgeContext(opts.knowledgeSummaries);
+
   let system: string;
   let user: string;
   let maxTokens: number;
@@ -2130,7 +2155,7 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
       // gets a topical value instead of the generic "General Content".
       nicheLabel: opts.niche,
     });
-    system = composed.systemPrompt + languageDirective;
+    system = composed.systemPrompt + languageDirective + knowledgeContext;
     user = composed.userPrompt;
     // Append the external-news-links clause (no-op for peptides — they
     // skip this entirely upstream).
@@ -2152,7 +2177,7 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
     // mid-string truncation for almost all posts.
     maxTokens = Math.min(8192, Math.round(opts.styleProfile.wordBandMax * 3.0));
   } else {
-    system = buildSystemPrompt(opts) + languageDirective;
+    system = buildSystemPrompt(opts) + languageDirective + knowledgeContext;
     user = buildUserPrompt(opts);
     if (newsLinksClause) {
       user = user + newsLinksClause;
