@@ -375,6 +375,12 @@ export interface GenerateOptions {
    * cache-friendly if generation is ever batched per blog.
    */
   knowledgeSummaries?: string[];
+  /**
+   * Per-client call-to-action button appended to the bottom of the article
+   * body (link to the client's main site / contact / registration page).
+   * Injected deterministically — not LLM-generated.
+   */
+  cta?: { label: string; url: string };
 }
 
 export interface GeneratedContent {
@@ -1765,6 +1771,31 @@ ON-PAGE QUALITY (apply throughout the article):
 - Make the opening paragraph clearly on-topic: reference the article's main subject naturally in the first few sentences.`;
 
 /**
+ * Build the styled call-to-action button appended to the bottom of a post.
+ * Inline CSS so it renders as a button on any theme. Returns "" when the CTA
+ * is incomplete or the URL isn't a safe http(s) link.
+ */
+function buildCtaHtml(cta?: { label: string; url: string }): string {
+  const label = (cta?.label ?? "").trim();
+  const url = (cta?.url ?? "").trim();
+  if (!label || !/^https?:\/\//i.test(url)) return "";
+
+  const safeLabel = label
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  const safeUrl = url.replace(/"/g, "%22").replace(/</g, "%3C").replace(/>/g, "%3E");
+
+  return (
+    `\n<div style="text-align:center;margin:2.5em 0;">` +
+    `<a href="${safeUrl}" target="_blank" rel="noopener" ` +
+    `style="display:inline-block;padding:14px 30px;background:#111827;color:#ffffff;` +
+    `font-weight:600;font-size:16px;text-decoration:none;border-radius:8px;">` +
+    `${safeLabel}</a></div>`
+  );
+}
+
+/**
  * Render the client's Knowledge Base summaries into a system-prompt block.
  * Returns "" when there's nothing to inject.
  */
@@ -2514,6 +2545,13 @@ The "content" field is the full HTML article body — at least ${MIN_WORDS} word
   // image (rendered above the post by Shopify/WordPress themes).
   if (bodyImageUrl) {
     body = embedBodyImage(body, bodyImageUrl, parsed.title, opts.blogSeed);
+  }
+
+  // Append the client's call-to-action button at the very bottom (no-op when
+  // the client has no CTA configured).
+  const ctaHtml = buildCtaHtml(opts.cta);
+  if (ctaHtml) {
+    body = body + ctaHtml;
   }
 
   // 6. Scoring removed (per footprint audit insight 2). The old
