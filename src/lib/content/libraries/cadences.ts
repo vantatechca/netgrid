@@ -1,7 +1,8 @@
 import type { CadenceId, CadenceSpec } from "../types";
 
 /**
- * 14 cadences. Each one defines the prose rhythm a voice writes at — average
+ * 24 cadences (1-14 core; 15-24 extended for non-peptide niches). Each one
+ * defines the prose rhythm a voice writes at — average
  * sentence length, paragraph length, transition density, and a one-line voice
  * direction injected into prompts.
  *
@@ -128,9 +129,106 @@ export const CADENCES: Record<CadenceId, CadenceSpec> = {
     voiceDirection: "Term-anchored, definitional, precise",
     transitionDensity: "none",
   },
+
+  // ── Extended cadences (15-24) ────────────────────────────────────────────
+  // Reachable by non-peptide niches via pickCadence so cross-niche sites
+  // spread across more sentence rhythms. Each is a genuinely distinct rhythm
+  // profile, not a re-label of 1-14.
+  15: {
+    id: 15,
+    name: "Staccato burst",
+    spec: "Very short sentences (avg 9 words) with frequent single-sentence paragraphs. Abrupt, emphatic.",
+    numbers: { avgWords: 9, stdDev: 4, shortExample: 3, longExample: 18, avgParagraph: 2 },
+    voiceDirection: "Staccato, emphatic, frequent one-line paragraphs",
+    transitionDensity: "none",
+  },
+  16: {
+    id: 16,
+    name: "Flowing narrative",
+    spec: "Long flowing sentences (avg 26 words) that build clause on clause. Paragraphs of 5-7 sentences.",
+    numbers: { avgWords: 26, stdDev: 9, shortExample: 12, longExample: 46, avgParagraph: 6 },
+    voiceDirection: "Flowing, clause-rich, narrative momentum",
+    transitionDensity: "medium",
+  },
+  17: {
+    id: 17,
+    name: "Conversational explainer",
+    spec: "Relaxed sentences (avg 14 words) with second-person address. Paragraphs of 2-4 sentences.",
+    numbers: { avgWords: 14, stdDev: 6, shortExample: 6, longExample: 26, avgParagraph: 3 },
+    voiceDirection: "Conversational, second-person, friendly explainer",
+    transitionDensity: "low",
+  },
+  18: {
+    id: 18,
+    name: "Data-dense",
+    spec: "Compact sentences (avg 17 words) packed with figures. Frequent lists. Paragraphs of 2-3 sentences.",
+    numbers: { avgWords: 17, stdDev: 5, shortExample: 9, longExample: 27, avgParagraph: 2 },
+    voiceDirection: "Number-forward, compact, list-friendly",
+    transitionDensity: "none",
+  },
+  19: {
+    id: 19,
+    name: "Persuasive op-ed",
+    spec: "Assertive sentences (avg 20 words) with rhetorical structure. Paragraphs of 4-5 sentences.",
+    numbers: { avgWords: 20, stdDev: 8, shortExample: 8, longExample: 34, avgParagraph: 4 },
+    voiceDirection: "Persuasive, thesis-driven, assertive op-ed register",
+    transitionDensity: "high",
+  },
+  20: {
+    id: 20,
+    name: "Tutorial walkthrough",
+    spec: "Imperative sentences (avg 15 words) in sequence. Numbered structure. Paragraphs of 2-3 sentences.",
+    numbers: { avgWords: 15, stdDev: 5, shortExample: 7, longExample: 25, avgParagraph: 3 },
+    voiceDirection: "Imperative, sequential, walkthrough register",
+    transitionDensity: "medium",
+  },
+  21: {
+    id: 21,
+    name: "Balanced review",
+    spec: "Even sentences (avg 18 words) weighing pros and cons. Paragraphs of 3-5 sentences.",
+    numbers: { avgWords: 18, stdDev: 6, shortExample: 9, longExample: 29, avgParagraph: 4 },
+    voiceDirection: "Even-handed, pro-and-con weighting, reviewer register",
+    transitionDensity: "low",
+  },
+  22: {
+    id: 22,
+    name: "Rapid FAQ",
+    spec: "Short answers (avg 13 words) following compact questions. Paragraphs of 1-2 sentences.",
+    numbers: { avgWords: 13, stdDev: 6, shortExample: 5, longExample: 24, avgParagraph: 2 },
+    voiceDirection: "Rapid question-answer, compact, scannable",
+    transitionDensity: "none",
+  },
+  23: {
+    id: 23,
+    name: "Descriptive lifestyle",
+    spec: "Sensory, descriptive sentences (avg 22 words). Paragraphs of 4-6 sentences. Magazine-lifestyle warmth.",
+    numbers: { avgWords: 22, stdDev: 9, shortExample: 10, longExample: 38, avgParagraph: 5 },
+    voiceDirection: "Sensory, descriptive, lifestyle-magazine warmth",
+    transitionDensity: "medium",
+  },
+  24: {
+    id: 24,
+    name: "Comparative analytical",
+    spec: "Contrast-driven sentences (avg 19 words) pairing options. Paragraphs of 3-4 sentences.",
+    numbers: { avgWords: 19, stdDev: 7, shortExample: 9, longExample: 31, avgParagraph: 3 },
+    voiceDirection: "Comparative, contrast-anchored, analytical",
+    transitionDensity: "medium",
+  },
 };
 
-export const CADENCE_IDS: CadenceId[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
+export const CADENCE_IDS: CadenceId[] = [
+  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
+  15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+];
+
+/**
+ * Cadences 15-24 — the extended rhythm pool. The assignment algorithm adds
+ * these to the eligible set for non-peptide sub-niches (peptide voices keep
+ * their hand-tuned compatibleCadences in 1-14).
+ */
+export const EXTENDED_CADENCE_IDS: CadenceId[] = [
+  15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+];
 
 export function cadenceById(id: CadenceId): CadenceSpec {
   return CADENCES[id];

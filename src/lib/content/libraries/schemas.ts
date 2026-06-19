@@ -1,16 +1,22 @@
 import type { SchemaId, SchemaSpec } from "../types";
 
 /**
- * 4 JSON output schemas. The composer pastes `jsonSpec` verbatim into the
+ * 8 JSON output schemas. The composer pastes `jsonSpec` verbatim into the
  * skeleton's {schema.json} placeholder so Claude has the exact target shape.
  *
  * All schemas share a common envelope (title, content, excerpt, metaTitle,
- * metaDescription, keywords). The differentiators are inside `content`:
+ * metaDescription, keywords) — the generator only reads those core fields, so
+ * the extra fields (deck/faq/items/steps/...) are guidance, not parsed. The
+ * differentiators are inside `content`:
  *
  *   A — Standard article (h2/h3 hierarchy, prose-heavy)
  *   B — Magazine feature (lead callout, sidebars, byline-style block)
  *   C — FAQ-rich (article followed by Q/A block)
  *   D — Listicle-anchored (numbered headings, summary cards)
+ *   E — How-to / step guide (sequential numbered steps)
+ *   F — Comparison / versus (side-by-side, pros and cons)
+ *   G — Case study / narrative (situation → approach → outcome)
+ *   H — Buyer's guide (criteria sections + a clear recommendation)
  */
 export const SCHEMAS: Record<SchemaId, SchemaSpec> = {
   1: {
@@ -69,9 +75,61 @@ export const SCHEMAS: Record<SchemaId, SchemaSpec> = {
   "keywords":         ["3-7 keywords"]
 }`,
   },
+  5: {
+    id: 5,
+    code: "E",
+    name: "How-to / step guide",
+    jsonSpec: `{
+  "title":            "string, ≤60 chars, action-oriented (often 'How to …')",
+  "content":          "HTML: a short framing <p>, then sequential numbered steps as <h2>/<h3> headings each followed by instructional paragraphs (and <ol>/<ul> where it helps). Allowed tags from the tag set only.",
+  "excerpt":          "150-160 char summary",
+  "metaTitle":        "string, primary keyword first, ~50 chars, ' | ' separator not '-', no brand name",
+  "metaDescription":  "string, ~140 chars, primary keyword early, one sentence with a soft call to action",
+  "keywords":         ["3-7 keywords"]
+}`,
+  },
+  6: {
+    id: 6,
+    code: "F",
+    name: "Comparison / versus",
+    jsonSpec: `{
+  "title":            "string, ≤70 chars, often 'X vs Y' framing",
+  "content":          "HTML: a framing <p>, then a section per option or per criterion with <h2>/<h3> headings, explicit trade-offs, and an honest pros/cons treatment. End with a short verdict paragraph. Allowed tags from the tag set only.",
+  "excerpt":          "150-160 char summary",
+  "metaTitle":        "string, primary keyword first, ~50 chars, ' | ' separator not '-', no brand name",
+  "metaDescription":  "string, ~140 chars, primary keyword early, one sentence with a soft call to action",
+  "keywords":         ["3-7 keywords"]
+}`,
+  },
+  7: {
+    id: 7,
+    code: "G",
+    name: "Case study / narrative",
+    jsonSpec: `{
+  "title":            "string, ≤70 chars",
+  "content":          "HTML structured as a narrative: a 'situation' section, an 'approach' section, and an 'outcome' section under <h2> headings, with concrete specifics throughout. Allowed tags from the tag set only.",
+  "excerpt":          "150-160 char summary",
+  "metaTitle":        "string, primary keyword first, ~50 chars, ' | ' separator not '-', no brand name",
+  "metaDescription":  "string, ~140 chars, primary keyword early, one sentence with a soft call to action",
+  "keywords":         ["3-7 keywords"]
+}`,
+  },
+  8: {
+    id: 8,
+    code: "H",
+    name: "Buyer's guide",
+    jsonSpec: `{
+  "title":            "string, ≤70 chars (often 'best … for …' or 'how to choose …')",
+  "content":          "HTML: a short intro on what matters, then a section per selection criterion under <h2>/<h3> headings, then a clear recommendation paragraph naming who each option suits. Allowed tags from the tag set only.",
+  "excerpt":          "150-160 char summary",
+  "metaTitle":        "string, primary keyword first, ~50 chars, ' | ' separator not '-', no brand name",
+  "metaDescription":  "string, ~140 chars, primary keyword early, one sentence with a soft call to action",
+  "keywords":         ["3-7 keywords"]
+}`,
+  },
 };
 
-export const SCHEMA_IDS: SchemaId[] = [1, 2, 3, 4];
+export const SCHEMA_IDS: SchemaId[] = [1, 2, 3, 4, 5, 6, 7, 8];
 
 export function schemaById(id: SchemaId): SchemaSpec {
   return SCHEMAS[id];
