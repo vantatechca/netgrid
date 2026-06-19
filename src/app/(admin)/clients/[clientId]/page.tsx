@@ -4,6 +4,7 @@ import { getClient, getClientStats } from "@/lib/actions/client-actions";
 import { getBlogs } from "@/lib/actions/blog-actions";
 import { getSeoScans, getSeoIssues } from "@/lib/actions/seo-actions";
 import { getMessages } from "@/lib/actions/message-actions";
+import { listKnowledgeDocuments } from "@/lib/actions/knowledge-actions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -25,10 +26,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BlogTable } from "@/components/blogs/blog-table";
 import { MessageThread } from "@/components/messages/message-thread";
 import { ClientForm } from "@/components/clients/client-form";
+import { KnowledgeBasePanel } from "@/components/clients/knowledge-base-panel";
 import {
   AlertTriangle,
   ArrowLeft,
   BarChart3,
+  BookOpen,
   FileText,
   Globe,
   Lock,
@@ -137,7 +140,7 @@ export default async function ClientDetailPage({
   }
 
   // ─── DETAIL VIEW ──────────────────────────────────────────────────────────
-  const [client, stats, blogsResult, scansResult, issuesResult, messages] =
+  const [client, stats, blogsResult, scansResult, issuesResult, messages, knowledgeDocs] =
     (await Promise.all([
       getClient(clientId),
       getClientStats(clientId),
@@ -161,6 +164,7 @@ export default async function ClientDetailPage({
         pageSize: 20,
       })),
       getMessages({ clientId, pageSize: 200 }).catch(() => []),
+      listKnowledgeDocuments(clientId).catch(() => []),
     ]).catch(() => {
       notFound();
     })) as [
@@ -170,6 +174,7 @@ export default async function ClientDetailPage({
       Awaited<ReturnType<typeof getSeoScans>>,
       Awaited<ReturnType<typeof getSeoIssues>>,
       Awaited<ReturnType<typeof getMessages>>,
+      Awaited<ReturnType<typeof listKnowledgeDocuments>>,
     ];
 
   if (!client) notFound();
@@ -264,6 +269,10 @@ export default async function ClientDetailPage({
           <TabsTrigger value="seo">
             <BarChart3 className="size-4" />
             SEO ({issuesResult.total})
+          </TabsTrigger>
+          <TabsTrigger value="knowledge">
+            <BookOpen className="size-4" />
+            Knowledge ({knowledgeDocs.length})
           </TabsTrigger>
           <TabsTrigger value="messages">
             <MessageSquare className="size-4" />
@@ -531,6 +540,11 @@ export default async function ClientDetailPage({
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        {/* Knowledge Tab */}
+        <TabsContent value="knowledge" className="pt-4">
+          <KnowledgeBasePanel clientId={client.id} documents={knowledgeDocs} />
         </TabsContent>
 
         {/* Messages Tab */}

@@ -460,6 +460,7 @@ async function runGenerateAndPublish(
       language: postLanguage,
       blogSeed: blog.id,
       internalLinkRefs,
+      knowledgeSummaries: knowledge.summaries,
     });
 
     // Generation with topic-level recovery. Some subjects fail
