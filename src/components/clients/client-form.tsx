@@ -52,8 +52,10 @@ export function ClientForm({ mode, defaultValues }: ClientFormProps) {
           router.push(`/clients/${defaultValues.id}`);
         } else {
           const newClient = await createClient(data);
-          toast.success("Client created successfully");
-          router.push(`/clients/${newClient.id}`);
+          toast.success("Client created — add reference docs to the Knowledge Base");
+          // Land on the new client's Knowledge tab so uploading documents is
+          // the natural next step right after creation.
+          router.push(`/clients/${newClient.id}?tab=knowledge`);
         }
         router.refresh();
       } catch {

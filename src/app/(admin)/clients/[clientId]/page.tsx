@@ -42,8 +42,10 @@ import {
 
 interface ClientDetailPageProps {
   params: { clientId: string };
-  searchParams: { edit?: string };
+  searchParams: { edit?: string; tab?: string };
 }
+
+const CLIENT_TABS = ["overview", "blogs", "seo", "knowledge", "messages"] as const;
 
 const statusVariant: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   active: "default",
@@ -256,7 +258,13 @@ export default async function ClientDetailPage({
       </div>
 
       {/* Tabs */}
-      <Tabs defaultValue="overview">
+      <Tabs
+        defaultValue={
+          CLIENT_TABS.includes(searchParams.tab as (typeof CLIENT_TABS)[number])
+            ? searchParams.tab
+            : "overview"
+        }
+      >
         <TabsList>
           <TabsTrigger value="overview">
             <Globe className="size-4" />
