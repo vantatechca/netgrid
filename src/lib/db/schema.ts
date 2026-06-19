@@ -43,6 +43,19 @@ export const compliancePlacementEnum = pgEnum("compliance_placement", [
   "ABOUT_ONLY",
   "ROTATING",
 ]);
+export const knowledgeSourceTypeEnum = pgEnum("knowledge_source_type", [
+  "spreadsheet",
+  "csv",
+  "docx",
+  "pdf",
+  "image",
+  "text",
+]);
+export const knowledgeExtractionStatusEnum = pgEnum("knowledge_extraction_status", [
+  "pending",
+  "extracted",
+  "failed",
+]);
 
 // ─── 1. users ────────────────────────────────────────────────────────────────
 
@@ -427,6 +440,54 @@ export const newsItems = pgTable("news_items", {
   uniqueIndex("news_items_vertical_link_uk").on(table.verticalKey, table.link),
 ]);
 
+// ─── knowledge_documents ──────────────────────────────────────────────────────
+//
+// Per-client Knowledge Base. The team uploads briefs, keyword sheets, brand
+// guides, etc.; each file is normalised to Markdown at upload time (see
+// services/knowledge-converter.ts) and run through a one-time extraction pass
+// (services/knowledge-extractor.ts) that distills keywords, topics, and a
+// summary. Ideation and generation later read the active rows for a blog/client
+// so Claude works from the client's actual material instead of generic niche
+// keyword lists.
+//
+// blogId is nullable: when set, the document is scoped to a single blog; when
+// null it applies to the whole client (shared across all its blogs).
+
+export const knowledgeDocuments = pgTable("knowledge_documents", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  clientId: uuid("client_id")
+    .notNull()
+    .references(() => clients.id, { onDelete: "cascade" }),
+  blogId: uuid("blog_id").references(() => blogs.id, { onDelete: "cascade" }),
+  fileName: varchar("file_name", { length: 500 }).notNull(),
+  contentType: varchar("content_type", { length: 150 }),
+  sourceType: knowledgeSourceTypeEnum("source_type").notNull(),
+  // Normalised Markdown body — the canonical form fed to Claude.
+  markdown: text("markdown").notNull(),
+  charCount: integer("char_count").notNull().default(0),
+  // True when extraction produced suspiciously little text (e.g. a scanned
+  // PDF with no text layer) — surfaced for manual review.
+  lowConfidence: boolean("low_confidence").notNull().default(false),
+  warnings: jsonb("warnings"), // string[] of non-fatal conversion notes
+  // Distilled knowledge from the one-time extraction pass.
+  extractedKeywords: jsonb("extracted_keywords"), // string[]
+  extractedTopics: jsonb("extracted_topics"), // string[]
+  summary: text("summary"),
+  extractionStatus: knowledgeExtractionStatusEnum("extraction_status")
+    .notNull()
+    .default("pending"),
+  extractionError: text("extraction_error"),
+  // Whether this document should be consulted during ideation/generation.
+  isActive: boolean("is_active").notNull().default(true),
+  uploadedBy: uuid("uploaded_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("knowledge_documents_client_id_idx").on(table.clientId),
+  index("knowledge_documents_blog_id_idx").on(table.blogId),
+  index("knowledge_documents_active_idx").on(table.isActive),
+]);
+
 // ─── Relations ──────────────────────────────────────────────────────────────
 
 export const usersRelations = relations(users, ({ one }) => ({
@@ -439,6 +500,7 @@ export const clientsRelations = relations(clients, ({ many }) => ({
   messages: many(messages),
   reports: many(reports),
   activityLogs: many(activityLog),
+  knowledgeDocuments: many(knowledgeDocuments),
 }));
 
 export const blogsRelations = relations(blogs, ({ one, many }) => ({
@@ -448,6 +510,7 @@ export const blogsRelations = relations(blogs, ({ one, many }) => ({
   postVerifications: many(postVerifications),
   thirdPartyData: many(seoThirdPartyData),
   generatedPosts: many(generatedPosts),
+  knowledgeDocuments: many(knowledgeDocuments),
   styleProfile: one(styleProfiles, {
     fields: [blogs.id],
     references: [styleProfiles.blogId],
@@ -456,6 +519,12 @@ export const blogsRelations = relations(blogs, ({ one, many }) => ({
 
 export const styleProfilesRelations = relations(styleProfiles, ({ one }) => ({
   blog: one(blogs, { fields: [styleProfiles.blogId], references: [blogs.id] }),
+}));
+
+export const knowledgeDocumentsRelations = relations(knowledgeDocuments, ({ one }) => ({
+  client: one(clients, { fields: [knowledgeDocuments.clientId], references: [clients.id] }),
+  blog: one(blogs, { fields: [knowledgeDocuments.blogId], references: [blogs.id] }),
+  uploadedByUser: one(users, { fields: [knowledgeDocuments.uploadedBy], references: [users.id] }),
 }));
 
 export const generatedPostsRelations = relations(generatedPosts, ({ one }) => ({
