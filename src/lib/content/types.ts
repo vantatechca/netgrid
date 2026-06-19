@@ -52,10 +52,13 @@ export type SkeletonId =
   | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12;
 
 export type CadenceId =
-  | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14;
+  | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14
+  // Extended rhythm pool (15-24) — reachable by non-peptide niches so the
+  // ~hundreds of cross-niche sites don't cluster on 14 sentence rhythms.
+  | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24;
 
-export type SchemaId = 1 | 2 | 3 | 4; // A, B, C, D
-export type TagSetId = 1 | 2 | 3 | 4 | 5 | 6;
+export type SchemaId = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8; // A-H output shapes
+export type TagSetId = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
 export type CitationStyleId = 1 | 2 | 3 | 4 | 5;
 export type TemplateId = number; // 1..24 (T1-T18 standard, W19-W24 weird)
 export type QuirkId = number; // 1..30
@@ -233,7 +236,7 @@ export interface CitationStyleSpec {
 
 export interface SchemaSpec {
   id: SchemaId;
-  code: "A" | "B" | "C" | "D";
+  code: "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H";
   name: string;
   jsonSpec: string; // pasted verbatim into {schema.json}
 }

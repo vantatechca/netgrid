@@ -20,7 +20,7 @@ import type {
 import { archetypeForVoice } from "../libraries/archetypes";
 import { nicheConfig, PEPTIDES_NICHE_KEY, type NicheConfig } from "../libraries/niches";
 import { GLOBAL_WORD_BAND_MAX, GLOBAL_WORD_BAND_MIN } from "../config";
-import { CADENCE_IDS } from "../libraries/cadences";
+import { CADENCE_IDS, EXTENDED_CADENCE_IDS } from "../libraries/cadences";
 import { CITATION_STYLE_IDS } from "../libraries/citation-styles";
 import {
   COMPLIANCE_PHRASES,
@@ -255,9 +255,15 @@ function pickCadence(
   voice: Voice,
   subNiche: SubNicheId,
 ): CadenceId {
-  const eligible = voice.compatibleCadences.length > 0
+  const base = voice.compatibleCadences.length > 0
     ? voice.compatibleCadences
     : CADENCE_IDS;
+  // Non-peptide sub-niches (14+) also draw from the extended rhythm pool
+  // (15-24) so cross-niche sites don't cluster on the 14 core cadences.
+  // Peptide voices keep their hand-tuned 1-14 set untouched.
+  const eligible = subNiche >= 14
+    ? Array.from(new Set([...base, ...EXTENDED_CADENCE_IDS]))
+    : base;
   const subNicheUsage = ns.cadenceUsageInSubNiche.get(subNiche) ?? new Map();
   const weights = eligible.map(() => 1);
   const usages = eligible.map((id) => subNicheUsage.get(id) ?? 0);
@@ -299,16 +305,24 @@ function pickTagSet(
 // ─── Phase 6: Schema ───────────────────────────────────────────────────────
 
 function pickSchema(rng: SeededRng, voiceId: VoiceId): SchemaId {
-  const distribution: Record<SchemaId, number> = { 1: 0.30, 2: 0.25, 3: 0.25, 4: 0.20 };
+  // Baseline: the four core shapes (A-D) stay the most common; the extended
+  // shapes (E-H) share the remaining mass so they appear without dominating.
+  const CORE_WEIGHT = 0.16; // each of A-D
+  const EXTENDED_WEIGHT = (1 - CORE_WEIGHT * 4) / 4; // each of E-H → 0.09
+  const distribution: Partial<Record<SchemaId, number>> = {};
+  for (const id of SCHEMA_IDS) {
+    distribution[id] = id <= 4 ? CORE_WEIGHT : EXTENDED_WEIGHT;
+  }
+
   const bias = schemaBiasForVoice(voiceId);
   if (bias !== null) {
-    // Heavy bias toward the preferred schema (60%) but allow others
-    distribution[bias] = 0.6;
-    const remaining = 0.4;
+    // Heavy bias toward the preferred schema (50%); spread the rest evenly.
+    distribution[bias] = 0.5;
+    const remaining = 0.5;
     const others = SCHEMA_IDS.filter((id) => id !== bias);
     for (const id of others) distribution[id] = remaining / others.length;
   }
-  const weights = SCHEMA_IDS.map((id) => distribution[id]);
+  const weights = SCHEMA_IDS.map((id) => distribution[id] ?? 0);
   const chosen = weightedSample(rng, SCHEMA_IDS, weights);
   return chosen ?? 1;
 }
