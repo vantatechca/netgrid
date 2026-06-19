@@ -27,7 +27,7 @@ import {
   COMPLIANCE_PHRASE_IDS,
   PLACEMENT_DISTRIBUTION,
 } from "../libraries/compliance-phrases";
-import { COMPOUND_CANON, ALL_COMPOUNDS, GLP1_COMPOUNDS } from "../libraries/compounds";
+import { canonForSubNiche, ALL_COMPOUNDS, GLP1_COMPOUNDS } from "../libraries/compounds";
 import {
   defaultStrictness,
   isSkeletonCompatibleWithCadence,
@@ -157,10 +157,23 @@ function pickSubNiche(
   ns: NetworkState,
   niche: NicheConfig,
 ): SubNicheId {
-  // Non-peptide niches typically have only one sub-niche (one per niche).
-  // Skip the distribution weighting in that case.
+  // Single sub-niche → no choice to make.
   if (niche.subNicheIds.length === 1) {
     return niche.subNicheIds[0];
+  }
+
+  // Non-peptide niches carry several sub-niches all at targetPct 0 (they're
+  // outside the 2000-blog peptide distribution). The target-weighting below
+  // would zero out and fall back to a pure random pick, clustering blogs
+  // unevenly. Spread them with a usage-balanced uniform draw instead so a
+  // niche's blogs fan out across all its topical sub-divisions.
+  const hasTargets = niche.subNicheIds.some((id) => SUB_NICHES[id].targetPct > 0);
+  if (!hasTargets) {
+    const ids = niche.subNicheIds;
+    const weights = ids.map(() => 1);
+    const usages = ids.map((id) => get(ns.subNicheUsage, id));
+    const chosen = balancedSample(rng, ids, weights, usages, 0.7);
+    return chosen ?? rng.pick(ids);
   }
 
   const total = ns.allProfiles.length;
@@ -568,7 +581,7 @@ function pickCompounds(
   rng: SeededRng,
   subNiche: SubNicheId,
 ): { primary: string[]; secondary: string[] } {
-  const canon = COMPOUND_CANON[subNiche];
+  const canon = canonForSubNiche(subNiche);
 
   // Pool for primary
   let primaryPool: string[];

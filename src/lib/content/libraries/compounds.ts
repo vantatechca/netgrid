@@ -9,7 +9,10 @@ import type { CompoundCanonEntry, SubNicheId } from "../types";
  * for methodology / news / stack-design where content is multi-compound by
  * nature.
  */
-export const COMPOUND_CANON: Record<SubNicheId, CompoundCanonEntry> = {
+// Only the 33 "general" sub-niches carry an explicit canon. The per-niche
+// sub-divisions (34-90) inherit via canonForSubNiche(), so this is a Partial
+// record rather than a total one.
+export const COMPOUND_CANON: Partial<Record<SubNicheId, CompoundCanonEntry>> = {
   1: {
     subNiche: 1,
     mode: "primary",
@@ -260,6 +263,56 @@ export const COMPOUND_CANON: Record<SubNicheId, CompoundCanonEntry> = {
 };
 
 /**
+ * Per-niche topical sub-divisions (sub-niche IDs 34-90) don't carry their own
+ * compound canon — they inherit their parent niche's "general" canon (the
+ * subject vocabulary is the same; only the {sub_niche} framing differs). Maps
+ * each sub-division back to the general sub-niche it belongs to.
+ */
+const SUB_NICHE_CANON_PARENT: Partial<Record<SubNicheId, SubNicheId>> = {
+  34: 14, 35: 14, 36: 14,
+  37: 15, 38: 15, 39: 15,
+  40: 16, 41: 16, 42: 16,
+  43: 17, 44: 17, 45: 17,
+  46: 18, 47: 18, 48: 18,
+  49: 19, 50: 19, 51: 19,
+  52: 20, 53: 20, 54: 20,
+  55: 21, 56: 21, 57: 21,
+  58: 22, 59: 22, 60: 22,
+  61: 23, 62: 23, 63: 23,
+  64: 24, 65: 24, 66: 24,
+  67: 26, 68: 26, 69: 26,
+  70: 27, 71: 27, 72: 27,
+  73: 28, 74: 28, 75: 28,
+  76: 29, 77: 29, 78: 29,
+  79: 30, 80: 30, 81: 30,
+  82: 31, 83: 31, 84: 31,
+  85: 32, 86: 32, 87: 32,
+  88: 33, 89: 33, 90: 33,
+};
+
+/**
+ * Resolve the compound canon for any sub-niche, inheriting the parent niche's
+ * canon for the per-niche sub-divisions (34-90) and falling back to the
+ * universal (broad) canon if a mapping is ever missing. Always returns a
+ * defined entry — callers must not index COMPOUND_CANON directly, since the
+ * sub-division IDs have no own entry.
+ */
+const UNIVERSAL_CANON: CompoundCanonEntry = {
+  subNiche: 25,
+  mode: "broad",
+  primary: [],
+  adjacent: ["any"],
+};
+
+export function canonForSubNiche(subNiche: SubNicheId): CompoundCanonEntry {
+  return (
+    COMPOUND_CANON[subNiche] ??
+    COMPOUND_CANON[SUB_NICHE_CANON_PARENT[subNiche] ?? 25] ??
+    UNIVERSAL_CANON
+  );
+}
+
+/**
  * Flattened universe of every named compound across all canons. Used when a
  * "broad" sub-niche needs to draw from the union.
  */
@@ -267,6 +320,7 @@ export const ALL_COMPOUNDS: readonly string[] = (() => {
   const set = new Set<string>();
   for (const id of Object.keys(COMPOUND_CANON) as unknown as SubNicheId[]) {
     const entry = COMPOUND_CANON[id];
+    if (!entry) continue;
     entry.primary.forEach((c) => set.add(c));
     entry.adjacent.forEach((c) => {
       // Skip directive tokens

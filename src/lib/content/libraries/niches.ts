@@ -66,7 +66,7 @@ export const NICHES: Record<string, NicheConfig> = {
   reputation_sites: {
     key: "reputation_sites",
     name: "Reputation Sites & Reviews",
-    subNicheIds: [14],
+    subNicheIds: [14, 34, 35, 36],
     voiceIds: CROSS_NICHE_VOICE_POOL,
     useCompliancePhrases: false,
     compliancePhraseIds: [],
@@ -77,7 +77,7 @@ export const NICHES: Record<string, NicheConfig> = {
   gambling: {
     key: "gambling",
     name: "Sports Betting & Gambling",
-    subNicheIds: [15],
+    subNicheIds: [15, 37, 38, 39],
     voiceIds: CROSS_NICHE_VOICE_POOL,
     useCompliancePhrases: true,
     // Gambling-specific phrases live in compliance-phrases.ts at IDs 41-44.
@@ -90,7 +90,7 @@ export const NICHES: Record<string, NicheConfig> = {
   apps_marketing: {
     key: "apps_marketing",
     name: "Apps & Software Reviews",
-    subNicheIds: [16],
+    subNicheIds: [16, 40, 41, 42],
     voiceIds: CROSS_NICHE_VOICE_POOL,
     useCompliancePhrases: false,
     compliancePhraseIds: [],
@@ -101,7 +101,7 @@ export const NICHES: Record<string, NicheConfig> = {
   exclusive_models: {
     key: "exclusive_models",
     name: "Creator Platforms",
-    subNicheIds: [17],
+    subNicheIds: [17, 43, 44, 45],
     voiceIds: CROSS_NICHE_VOICE_POOL,
     useCompliancePhrases: false,
     compliancePhraseIds: [],
@@ -112,7 +112,7 @@ export const NICHES: Record<string, NicheConfig> = {
   ecom_nails: {
     key: "ecom_nails",
     name: "Nails & Beauty E-commerce",
-    subNicheIds: [18],
+    subNicheIds: [18, 46, 47, 48],
     voiceIds: CROSS_NICHE_VOICE_POOL,
     useCompliancePhrases: false,
     compliancePhraseIds: [],
@@ -123,7 +123,7 @@ export const NICHES: Record<string, NicheConfig> = {
   soccer_jersey: {
     key: "soccer_jersey",
     name: "Soccer Jerseys & Fan Merch",
-    subNicheIds: [19],
+    subNicheIds: [19, 49, 50, 51],
     voiceIds: CROSS_NICHE_VOICE_POOL,
     useCompliancePhrases: false,
     compliancePhraseIds: [],
@@ -134,7 +134,7 @@ export const NICHES: Record<string, NicheConfig> = {
   payment_processing: {
     key: "payment_processing",
     name: "Payment Processing & Fintech",
-    subNicheIds: [20],
+    subNicheIds: [20, 52, 53, 54],
     voiceIds: CROSS_NICHE_VOICE_POOL,
     useCompliancePhrases: false,
     compliancePhraseIds: [],
@@ -145,7 +145,7 @@ export const NICHES: Record<string, NicheConfig> = {
   web_dev: {
     key: "web_dev",
     name: "Web Development",
-    subNicheIds: [21],
+    subNicheIds: [21, 55, 56, 57],
     voiceIds: CROSS_NICHE_VOICE_POOL,
     useCompliancePhrases: false,
     compliancePhraseIds: [],
@@ -156,7 +156,7 @@ export const NICHES: Record<string, NicheConfig> = {
   app_dev: {
     key: "app_dev",
     name: "App Development",
-    subNicheIds: [22],
+    subNicheIds: [22, 58, 59, 60],
     voiceIds: CROSS_NICHE_VOICE_POOL,
     useCompliancePhrases: false,
     compliancePhraseIds: [],
@@ -167,7 +167,7 @@ export const NICHES: Record<string, NicheConfig> = {
   construction: {
     key: "construction",
     name: "Construction & B2B Services",
-    subNicheIds: [23],
+    subNicheIds: [23, 61, 62, 63],
     voiceIds: CROSS_NICHE_VOICE_POOL,
     useCompliancePhrases: false,
     compliancePhraseIds: [],
@@ -178,7 +178,7 @@ export const NICHES: Record<string, NicheConfig> = {
   loans: {
     key: "loans",
     name: "Loans & Personal Finance",
-    subNicheIds: [24],
+    subNicheIds: [24, 64, 65, 66],
     voiceIds: CROSS_NICHE_VOICE_POOL,
     useCompliancePhrases: false,
     compliancePhraseIds: [],
@@ -189,7 +189,7 @@ export const NICHES: Record<string, NicheConfig> = {
   gym_franchise: {
     key: "gym_franchise",
     name: "Gym Franchise Openings & Launches",
-    subNicheIds: [26],
+    subNicheIds: [26, 67, 68, 69],
     voiceIds: CROSS_NICHE_VOICE_POOL,
     useCompliancePhrases: false,
     compliancePhraseIds: [],
@@ -202,7 +202,7 @@ export const NICHES: Record<string, NicheConfig> = {
   gym_subscription: {
     key: "gym_subscription",
     name: "Gym Memberships & Subscriptions",
-    subNicheIds: [31],
+    subNicheIds: [31, 82, 83, 84],
     voiceIds: CROSS_NICHE_VOICE_POOL,
     useCompliancePhrases: false,
     compliancePhraseIds: [],
@@ -214,7 +214,7 @@ export const NICHES: Record<string, NicheConfig> = {
   roofing: {
     key: "roofing",
     name: "Roofing & Roof Repair",
-    subNicheIds: [27],
+    subNicheIds: [27, 70, 71, 72],
     voiceIds: CROSS_NICHE_VOICE_POOL,
     useCompliancePhrases: false,
     compliancePhraseIds: [],
@@ -226,7 +226,7 @@ export const NICHES: Record<string, NicheConfig> = {
   tax_lawyer: {
     key: "tax_lawyer",
     name: "Tax Law & IRS Representation",
-    subNicheIds: [28],
+    subNicheIds: [28, 73, 74, 75],
     voiceIds: CROSS_NICHE_VOICE_POOL,
     // Tax law has mandatory disclaimers + bar-review posture; track
     // those at the vertical-config level (disclaimers field) rather
@@ -241,7 +241,7 @@ export const NICHES: Record<string, NicheConfig> = {
   pest_extermination: {
     key: "pest_extermination",
     name: "Pest Control & Extermination",
-    subNicheIds: [29],
+    subNicheIds: [29, 76, 77, 78],
     voiceIds: CROSS_NICHE_VOICE_POOL,
     useCompliancePhrases: false,
     compliancePhraseIds: [],
@@ -253,7 +253,7 @@ export const NICHES: Record<string, NicheConfig> = {
   charity: {
     key: "charity",
     name: "Charity & Nonprofit Operations",
-    subNicheIds: [30],
+    subNicheIds: [30, 79, 80, 81],
     voiceIds: CROSS_NICHE_VOICE_POOL,
     useCompliancePhrases: false,
     compliancePhraseIds: [],
@@ -266,7 +266,7 @@ export const NICHES: Record<string, NicheConfig> = {
   online_casino: {
     key: "online_casino",
     name: "Online Casino & Casino Games",
-    subNicheIds: [32],
+    subNicheIds: [32, 85, 86, 87],
     voiceIds: CROSS_NICHE_VOICE_POOL,
     // Casino content carries the same responsible-gambling posture as the
     // existing sports-betting `gambling` niche — reuse the same compliance
@@ -283,7 +283,7 @@ export const NICHES: Record<string, NicheConfig> = {
   real_estate: {
     key: "real_estate",
     name: "Real Estate & Property",
-    subNicheIds: [33],
+    subNicheIds: [33, 88, 89, 90],
     voiceIds: CROSS_NICHE_VOICE_POOL,
     useCompliancePhrases: false,
     compliancePhraseIds: [],

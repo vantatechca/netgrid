@@ -20,7 +20,29 @@ export type SubNicheId =
   | 30  // charity
   | 31  // gym_subscription (long-term membership comparisons)
   | 32  // online_casino (casino games — slots / poker / blackjack)
-  | 33; // real_estate (residential + commercial property)
+  | 33  // real_estate (residential + commercial property)
+  // ── Per-niche topical sub-divisions (34-90) ───────────────────────────────
+  // Each registered non-peptide niche gets 3 extra sub-niches so blogs in
+  // the same niche don't all share one topical frame (a footprint at scale).
+  | 34 | 35 | 36   // reputation_sites
+  | 37 | 38 | 39   // gambling
+  | 40 | 41 | 42   // apps_marketing
+  | 43 | 44 | 45   // exclusive_models
+  | 46 | 47 | 48   // ecom_nails
+  | 49 | 50 | 51   // soccer_jersey
+  | 52 | 53 | 54   // payment_processing
+  | 55 | 56 | 57   // web_dev
+  | 58 | 59 | 60   // app_dev
+  | 61 | 62 | 63   // construction
+  | 64 | 65 | 66   // loans
+  | 67 | 68 | 69   // gym_franchise
+  | 70 | 71 | 72   // roofing
+  | 73 | 74 | 75   // tax_lawyer
+  | 76 | 77 | 78   // pest_extermination
+  | 79 | 80 | 81   // charity
+  | 82 | 83 | 84   // gym_subscription
+  | 85 | 86 | 87   // online_casino
+  | 88 | 89 | 90;  // real_estate
 
 export type ArchetypeId =
   | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12;
