@@ -83,6 +83,13 @@ export interface PublishPostInput {
    * excerpt or auto-generated snippet.
    */
   metaDescription?: string;
+  /**
+   * Byline / author display name. Shopify stamps every article with the API
+   * token's name ("Shopify API") unless an `author` is supplied — a
+   * network-wide fingerprint. When omitted, the platform client derives a
+   * stable per-blog human name so each site has its own consistent byline.
+   */
+  author?: string;
 }
 
 export interface PublishPostResult {

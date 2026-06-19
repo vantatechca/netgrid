@@ -1640,6 +1640,66 @@ function bodyImageClassForBlog(seed: string | undefined): string {
   return POOL[hashSeed(seed) % POOL.length];
 }
 
+/**
+ * Per-blog `rel` value for outbound links. A network where every external
+ * link is `rel="noopener nofollow"` is a trivial fingerprint; real sites
+ * vary in how (and whether) they nofollow/sponsor outbound links. Same blog
+ * → same rel always. `noopener` is always present (security), the
+ * follow/nofollow signalling rotates.
+ */
+function relForBlog(seed: string | undefined): string {
+  const POOL = [
+    "noopener nofollow",
+    "noopener",
+    "nofollow noopener",
+    "noopener noreferrer nofollow",
+    "external nofollow noopener",
+    "noopener ugc",
+  ];
+  if (!seed) return POOL[0];
+  return POOL[hashSeed(seed) % POOL.length];
+}
+
+/**
+ * Per-blog CTA button appearance. Identical inline-styled buttons across the
+ * network are an obvious footprint (footprint audit). Each blog gets a stable
+ * colour/padding/radius/weight drawn deterministically from its seed, so the
+ * serialized HTML differs site-to-site while every button still renders as a
+ * tasteful dark pill. Same blog → same button always.
+ */
+function ctaStyleForBlog(seed: string | undefined): {
+  bg: string;
+  padding: string;
+  radius: string;
+  weight: string;
+  fontSize: string;
+  align: string;
+  margin: string;
+} {
+  const BG = ["#111827", "#0f172a", "#1f2937", "#18181b", "#1e293b", "#0b1220", "#171717"];
+  const PADDING = ["14px 30px", "13px 28px", "15px 32px", "12px 26px", "14px 34px"];
+  const RADIUS = ["8px", "6px", "10px", "4px", "9999px"];
+  const WEIGHT = ["600", "700", "500"];
+  const FONT = ["16px", "15px", "17px"];
+  const MARGIN = ["2.5em 0", "2.25em 0", "2.75em 0", "2em 0"];
+  if (!seed) {
+    return {
+      bg: BG[0], padding: PADDING[0], radius: RADIUS[0],
+      weight: WEIGHT[0], fontSize: FONT[0], align: "center", margin: MARGIN[0],
+    };
+  }
+  const h = hashSeed(seed);
+  return {
+    bg: BG[h % BG.length],
+    padding: PADDING[(h >> 2) % PADDING.length],
+    radius: RADIUS[(h >> 4) % RADIUS.length],
+    weight: WEIGHT[(h >> 6) % WEIGHT.length],
+    fontSize: FONT[(h >> 8) % FONT.length],
+    align: (h >> 10) % 4 === 0 ? "left" : "center",
+    margin: MARGIN[(h >> 11) % MARGIN.length],
+  };
+}
+
 function buildSystemPrompt(opts: GenerateOptions): string {
   const niche = getNicheContext(opts.niche);
   const brandVoice = opts.brandVoice || niche.defaultBrandVoice;
@@ -1775,7 +1835,10 @@ ON-PAGE QUALITY (apply throughout the article):
  * Inline CSS so it renders as a button on any theme. Returns "" when the CTA
  * is incomplete or the URL isn't a safe http(s) link.
  */
-function buildCtaHtml(cta?: { label: string; url: string }): string {
+function buildCtaHtml(
+  cta?: { label: string; url: string },
+  seed?: string,
+): string {
   const label = (cta?.label ?? "").trim();
   const url = (cta?.url ?? "").trim();
   if (!label || !/^https?:\/\//i.test(url)) return "";
@@ -1786,11 +1849,16 @@ function buildCtaHtml(cta?: { label: string; url: string }): string {
     .replace(/>/g, "&gt;");
   const safeUrl = url.replace(/"/g, "%22").replace(/</g, "%3C").replace(/>/g, "%3E");
 
+  // Per-blog button appearance + rel so the CTA markup isn't byte-identical
+  // across the network. Same blog → same button always.
+  const s = ctaStyleForBlog(seed);
+  const rel = relForBlog(seed);
+
   return (
-    `\n<div style="text-align:center;margin:2.5em 0;">` +
-    `<a href="${safeUrl}" target="_blank" rel="noopener" ` +
-    `style="display:inline-block;padding:14px 30px;background:#111827;color:#ffffff;` +
-    `font-weight:600;font-size:16px;text-decoration:none;border-radius:8px;">` +
+    `\n<div style="text-align:${s.align};margin:${s.margin};">` +
+    `<a href="${safeUrl}" target="_blank" rel="${rel}" ` +
+    `style="display:inline-block;padding:${s.padding};background:${s.bg};color:#ffffff;` +
+    `font-weight:${s.weight};font-size:${s.fontSize};text-decoration:none;border-radius:${s.radius};">` +
     `${safeLabel}</a></div>`
   );
 }
@@ -1831,9 +1899,13 @@ function insertHtmlAtMidpoint(html: string, snippet: string): string {
 }
 
 /** Inject the client's CTA button at its configured position(s). */
-function injectCta(body: string, cta?: GenerateOptions["cta"]): string {
+function injectCta(
+  body: string,
+  cta?: GenerateOptions["cta"],
+  seed?: string,
+): string {
   if (!cta) return body;
-  const button = buildCtaHtml(cta);
+  const button = buildCtaHtml(cta, seed);
   if (!button) return body;
 
   const positions = ctaPositions(cta.placement);
@@ -2230,7 +2302,7 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
           `${refList}\n\n` +
           `LINKING RULES:\n` +
           `- Pick 1-3 of the above whose headline genuinely relates to a point you're making.\n` +
-          `- Use HTML <a href="URL" target="_blank" rel="noopener nofollow">descriptive anchor text</a>.\n` +
+          `- Use HTML <a href="URL" target="_blank" rel="${relForBlog(opts.blogSeed)}">descriptive anchor text</a>.\n` +
           `- Anchor text should describe what the reader is clicking to, NOT raw URLs or "click here".\n` +
           `- If none of the references fits naturally, do NOT force a link — quality over count.\n` +
           `- Never include all 6; keep external link count to 3 max.`;
@@ -2599,7 +2671,7 @@ The "content" field is the full HTML article body — at least ${MIN_WORDS} word
 
   // Inject the client's call-to-action button at its configured position(s)
   // — no-op when the client has no CTA configured.
-  body = injectCta(body, opts.cta);
+  body = injectCta(body, opts.cta, opts.blogSeed);
 
   // 6. Scoring removed (per footprint audit insight 2). The old
   //    analyzeContent call cost ~$0.0015/post AND optimized to exactly the

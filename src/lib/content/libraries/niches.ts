@@ -6,7 +6,7 @@ import type { CitationStyleId, SchemaId, SubNicheId, TagSetId, VoiceId } from ".
  *
  *   - Which sub-niches its blogs draw from
  *   - Which voices are eligible (the peptide voice library is mostly
- *     peptide-flavoured; cross-niche voices V78-V92 cover other niches)
+ *     peptide-flavoured; cross-niche voices V78-V127 cover other niches)
  *   - Whether compliance phrases apply (peptides yes, gambling yes for
  *     responsible-gambling disclaimers, most others no)
  *   - Whether a subject canon applies (peptides → compounds; web_dev →
@@ -42,9 +42,11 @@ export interface NicheConfig {
   description: string;
 }
 
-// Cross-niche voice pool (V78-V92) — voices whose personas are generic
-// enough to handle multiple niches. Defined in voices.ts.
-const CROSS_NICHE_VOICE_POOL: VoiceId[] = [78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92];
+// Cross-niche voice pool (V78-V127) — voices whose personas are generic
+// enough to handle multiple niches. Defined in voices.ts. Expanded from 15
+// to 50 so the ~20 non-peptide niches don't all draw from the same small
+// persona set (a network-level footprint when scaled to hundreds of sites).
+const CROSS_NICHE_VOICE_POOL: VoiceId[] = Array.from({ length: 50 }, (_, i) => i + 78);
 
 // Peptide voice pool (V1-V77) — the original 77 peptide-flavoured voices.
 const PEPTIDE_VOICE_POOL: VoiceId[] = Array.from({ length: 77 }, (_, i) => i + 1);

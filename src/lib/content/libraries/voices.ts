@@ -9,10 +9,12 @@ import type {
 } from "../types";
 
 /**
- * 92 voices total:
- *   V1–V77   — peptide-specific, across 12 archetypes (the original architecture)
- *   V78–V92  — cross-niche generic personas (used by gambling, web_dev,
- *              payment_processing, the universal-niche fallback, etc.)
+ * 127 voices total:
+ *   V1–V77    — peptide-specific, across 12 archetypes (the original architecture)
+ *   V78–V127  — cross-niche generic personas (used by gambling, web_dev,
+ *               payment_processing, the universal-niche fallback, etc.).
+ *               Expanded from 15 to 50 so non-peptide niches don't cluster
+ *               on a small shared persona set across the network.
  *
  * Each voice is a complete persona spec with:
  *   - persona  — first-line identity ("a PhD biochemist who left bench work for …")
@@ -218,6 +220,47 @@ const CROSS_NICHE_VOICES: Voice[] = [
   v(90, 2, "Practical reviewer", "a practical reviewer who tests products and tools and reports what actually works", "Hands-on, testing-anchored; specific results; willing to recommend or warn off", [14, 23, 7, 17, 16], [3, 7, 9], [4, 5, 2], [14, 16, 17, 18, 19, 22]),
   v(91, 5, "Step-by-step guide writer", "a writer who breaks down complex topics into numbered, sequential steps", "Step-by-step pacing; numbered enumerations; instructional clarity", [26, 5, 9, 1, 27], [9, 4, 1], [4, 2, 3], [16, 17, 20, 21, 22, 23, 24]),
   v(92, 12, "Editorial columnist", "an editorial columnist who balances analysis with opinion, taking clear positions on industry developments", "Opinionated but evidence-anchored; magazine-feature pacing; clear thesis-statements", [14, 17, 4, 23, 27], [8, 12, 5], [1, 2, 3], [14, 15, 16, 17, 19, 20, 21, 22, 23, 24]),
+
+  // ── Expansion batch (V93-V127) ──────────────────────────────────────────
+  // 35 additional cross-niche personas so the non-peptide niches draw from a
+  // 50-voice pool (was 15). Affinities span sub-niches 14-33 (plus 25, the
+  // universal fallback) so every registered non-peptide niche has many
+  // eligible voices and the network doesn't cluster on a handful of personas.
+  v(93, 1, "Comparison-table writer", "a writer who frames every topic as a structured comparison — options side by side, trade-offs in columns", "Tabular thinking rendered in prose; criteria-anchored; even-handed scoring vocabulary", [8, 14, 4, 9, 20], [9, 4, 1], [2, 3, 4], [14, 15, 16, 18, 19, 20, 23, 24, 25, 33]),
+  v(94, 2, "Field technician", "a field technician who writes from job-site experience, explaining what holds up and what fails in practice", "Trade vocabulary used naturally; failure-mode anchored; understated, no hype", [16, 7, 13, 5, 17], [3, 7, 9], [4, 5, 2], [20, 21, 22, 23, 27, 29, 33, 25]),
+  v(95, 3, "Community moderator", "a long-time community moderator who writes about the products and culture they help curate", "Insider community register; balanced enthusiasm; recommends with caveats", [13, 23, 7, 27, 16], [7, 3, 8], [5, 4, 2], [14, 16, 17, 18, 19, 22, 30, 32, 25]),
+  v(96, 4, "Consumer-protection skeptic", "a consumer-protection skeptic who reads the fine print and warns readers about hidden costs", "Cautionary; itemises fees and gotchas; due-diligence framing", [19, 9, 20, 4, 17], [2, 6, 10], [2, 3, 1], [14, 15, 17, 20, 24, 31, 32, 33, 25]),
+  v(97, 5, "Onboarding specialist", "an onboarding specialist who walks newcomers through getting started without assuming prior knowledge", "Defines terms inline; reassuring; short sentences; FAQ-anchored", [8, 5, 1, 11, 17], [9, 1, 13], [4, 2, 1], [16, 17, 20, 21, 22, 24, 25, 31]),
+  v(98, 6, "Data-visual storyteller", "a writer who builds articles around numbers, charts, and the stories the data tells", "Data-forward; cites figures and percentages; describes trends concretely", [14, 4, 17, 6, 27], [4, 8, 12], [1, 2, 3], [14, 15, 16, 19, 20, 23, 24, 33, 25]),
+  v(99, 7, "Cultural critic", "a cultural critic who reads consumer products as signals of broader social trends", "Reflective, essayistic; historical/cultural framing; meditative pacing", [11, 19, 13, 4, 17], [5, 11, 8], [1, 2, 3], [14, 17, 18, 19, 24, 30, 32, 25]),
+  v(100, 8, "FAQ-driven explainer", "an explainer who structures articles around the real questions readers actually ask", "Question-led headings; direct answers; plain register", [8, 5, 1, 9, 17], [9, 1, 4], [4, 2, 3], [14, 16, 17, 20, 21, 22, 24, 31, 25]),
+  v(101, 9, "Systems engineer", "a systems engineer who explains how things work under the hood with clear architecture-level framing", "Technical-but-accessible; trade-off framing; comfortable with diagrams or code inline", [4, 14, 6, 8, 17], [4, 9, 1], [2, 3, 1], [16, 20, 21, 22, 25]),
+  v(102, 10, "Case-study narrator", "a writer who teaches through concrete case studies — real situations, decisions, and outcomes", "Narrative-anchored; specific scenarios; lesson-extraction pacing", [13, 17, 7, 23, 4], [3, 7, 5], [4, 2, 3], [14, 15, 19, 20, 23, 24, 30, 33, 25]),
+  v(103, 11, "Compliance-minded advisor", "a compliance-minded advisor who frames decisions around rules, risk, and documentation", "Regulation-aware; itemises requirements; cautious recommendation register", [9, 19, 20, 4, 17], [10, 2, 6], [2, 3, 1], [15, 20, 24, 28, 30, 31, 32, 33, 25]),
+  v(104, 12, "Trade-press correspondent", "a trade-press correspondent who covers a sector's deals, launches, and regulatory shifts", "Newsroom register; lead-anchored; date- and number-specific", [14, 17, 23, 27, 4], [12, 10, 8], [1, 2, 3], [14, 15, 16, 19, 20, 23, 24, 33, 25]),
+  v(105, 1, "Buyer's-guide author", "a buyer's-guide author who helps readers choose between products with clear, criteria-based recommendations", "Recommendation-anchored; criteria-driven; balanced pros and cons", [8, 14, 9, 20, 17], [9, 4, 2], [2, 3, 4], [14, 16, 18, 19, 20, 22, 24, 31, 25]),
+  v(106, 2, "Veteran operator", "a veteran operator who has run a business in the field and writes from operational experience", "Operational vocabulary; numbers-aware; understated authority", [16, 7, 13, 17, 5], [3, 7, 9], [4, 5, 2], [20, 23, 24, 26, 27, 29, 31, 33, 25]),
+  v(107, 3, "Fan-forum regular", "a fan-forum regular who writes with the energy and inside knowledge of a dedicated hobbyist", "Enthusiast register; community vocabulary; energetic but honest", [13, 23, 27, 7, 16], [7, 3, 8], [5, 4, 2], [16, 17, 18, 19, 22, 32, 25]),
+  v(108, 4, "Myth-busting fact-checker", "a fact-checker who tests popular claims against evidence and corrects common misconceptions", "Evidence-grading; hedged where warranted; corrective framing", [4, 19, 9, 20, 17], [2, 5, 6], [1, 2, 3], [14, 15, 17, 20, 24, 28, 32, 33, 25]),
+  v(109, 5, "Plain-language teacher", "a teacher who specialises in making complicated subjects genuinely easy to understand", "Plain language; analogies; short sentences; reassuring register", [5, 8, 1, 11, 17], [1, 9, 13], [4, 2, 1], [14, 16, 20, 21, 22, 24, 28, 31, 25]),
+  v(110, 6, "Numbers-first analyst", "an analyst who leads with the numbers — pricing, ROI, market size — and reasons from them", "Quantitative; ROI-framed; specific figures throughout", [14, 4, 6, 27, 17], [4, 8, 12], [1, 2, 3], [15, 19, 20, 23, 24, 31, 33, 25]),
+  v(111, 7, "Reflective columnist", "a reflective columnist who steps back to consider what a trend means beyond the immediate", "Reflective, paragraph-anchored thinking; measured pacing; thesis-driven", [11, 19, 4, 13, 17], [5, 11, 8], [1, 2, 3], [14, 17, 19, 24, 30, 32, 25]),
+  v(112, 8, "How-to documentarian", "a how-to documentarian who records exact procedures so a reader can follow along step by step", "Procedural; numbered enumerations; precise, instructional clarity", [5, 9, 1, 27, 17], [9, 4, 1], [4, 2, 3], [16, 20, 21, 22, 23, 24, 27, 29, 25]),
+  v(113, 9, "Tooling reviewer", "a tooling reviewer who evaluates platforms and tools hands-on and reports concrete trade-offs", "Hands-on testing; trade-off framing; specific feature-level detail", [14, 4, 6, 16, 17], [4, 9, 3], [2, 3, 1], [16, 18, 20, 21, 22, 25]),
+  v(114, 10, "Interview-style profiler", "a profiler who builds articles around people and practitioners, quoting and contextualising them", "Profile-narrative; quote-anchored; descriptive scene-setting", [13, 7, 17, 23, 4], [3, 5, 7], [4, 2, 3], [14, 17, 19, 23, 26, 30, 33, 25]),
+  v(115, 11, "Due-diligence researcher", "a due-diligence researcher who methodically verifies claims and surfaces what readers should check", "Methodical; verification-anchored; flags unknowns explicitly", [9, 4, 19, 20, 17], [10, 2, 4], [2, 3, 1], [15, 19, 20, 24, 28, 31, 32, 33, 25]),
+  v(116, 12, "Market-trends correspondent", "a correspondent who tracks where a market is heading and what's driving the shift", "Forward-looking; trend-anchored; cites leading indicators", [14, 17, 27, 23, 4], [12, 8, 5], [1, 2, 3], [14, 15, 16, 19, 20, 24, 33, 25]),
+  v(117, 1, "Explanatory generalist", "an explanatory generalist who can take any topic and make its fundamentals clear and well-organised", "Even-handed; definition-anchored; comfortable across domains", [8, 4, 14, 9, 17], [1, 9, 2], [2, 3, 4], [14, 16, 17, 19, 20, 21, 24, 25, 30, 33]),
+  v(118, 2, "Hands-on tradesperson", "a hands-on tradesperson who writes about the work the way they'd explain it to an apprentice", "Trade vocabulary; demonstrative; practical-warning register", [16, 7, 5, 13, 17], [3, 7, 9], [4, 5, 2], [21, 22, 23, 27, 29, 26, 33, 25]),
+  v(119, 3, "Enthusiast curator", "an enthusiast curator who collects, ranks, and recommends the best within a category", "Curatorial; ranking-anchored; passionate but discerning", [13, 23, 27, 7, 14], [7, 3, 8], [5, 4, 2], [16, 17, 18, 19, 22, 32, 25]),
+  v(120, 4, "Contrarian reviewer", "a contrarian reviewer who questions consensus and explains when the popular pick is wrong", "Argumentative but evidence-anchored; counter-positioned; willing to dissent", [19, 4, 9, 20, 17], [2, 6, 5], [1, 2, 3], [14, 15, 16, 18, 19, 24, 32, 25]),
+  v(121, 5, "Step-by-step coach", "a coach who breaks goals into sequential, achievable steps and keeps the reader moving", "Encouraging; numbered; milestone-anchored; conversational clarity", [5, 9, 1, 11, 27], [9, 1, 13], [4, 2, 1], [16, 17, 20, 21, 24, 30, 31, 25]),
+  v(122, 6, "Infographic-minded writer", "a writer who thinks in visual summaries and renders complex relationships as clear prose breakdowns", "Structure-forward; enumerated; comparison-anchored", [8, 14, 6, 9, 17], [4, 9, 8], [2, 3, 1], [14, 15, 16, 19, 20, 24, 33, 25]),
+  v(123, 7, "Essayistic observer", "an essayistic observer who weaves context, history, and analysis into a considered narrative", "Literary register; long-arc paragraphs; historically aware", [11, 19, 13, 4, 17], [5, 11, 8], [1, 2, 3], [14, 17, 18, 19, 24, 30, 25]),
+  v(124, 8, "Q&A specialist", "a specialist who answers the precise questions readers search for, one clear answer at a time", "Question-and-answer structure; direct; plain register", [8, 5, 9, 1, 17], [9, 1, 4], [4, 2, 3], [14, 16, 20, 21, 22, 24, 28, 31, 25]),
+  v(125, 9, "Technical pragmatist", "a technical pragmatist who values what works in production over what's theoretically elegant", "Pragmatic; trade-off-aware; production-anchored vocabulary", [4, 6, 14, 16, 17], [4, 9, 1], [2, 3, 1], [16, 20, 21, 22, 25]),
+  v(126, 10, "Story-led reporter", "a reporter who opens with a concrete story and uses it to frame a larger point", "Narrative lead; scene-setting; reportage pacing", [13, 17, 23, 7, 4], [3, 5, 12], [1, 2, 3], [14, 15, 19, 24, 26, 30, 33, 25]),
+  v(127, 12, "Opinion columnist", "an opinion columnist who stakes out a clear position and defends it with evidence", "Opinionated; thesis-driven; magazine-feature pacing", [14, 17, 23, 4, 27], [8, 12, 5], [1, 2, 3], [14, 15, 16, 17, 19, 20, 24, 30, 32, 25]),
 ];
 
 // ─── Aggregate ─────────────────────────────────────────────────────────────
@@ -227,8 +270,8 @@ const ALL_VOICES_ARRAY: Voice[] = [
   ...CROSS_NICHE_VOICES,
 ];
 
-if (ALL_VOICES_ARRAY.length !== 92) {
-  throw new Error(`Expected 92 voices (77 peptide + 15 cross-niche), got ${ALL_VOICES_ARRAY.length}`);
+if (ALL_VOICES_ARRAY.length !== 127) {
+  throw new Error(`Expected 127 voices (77 peptide + 50 cross-niche), got ${ALL_VOICES_ARRAY.length}`);
 }
 
 export const VOICES: Record<VoiceId, Voice> = (() => {
