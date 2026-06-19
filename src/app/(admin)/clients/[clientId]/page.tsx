@@ -544,7 +544,11 @@ export default async function ClientDetailPage({
 
         {/* Knowledge Tab */}
         <TabsContent value="knowledge" className="pt-4">
-          <KnowledgeBasePanel clientId={client.id} documents={knowledgeDocs} />
+          <KnowledgeBasePanel
+            clientId={client.id}
+            documents={knowledgeDocs}
+            blogs={blogsResult.blogs.map((b) => ({ id: b.id, domain: b.domain }))}
+          />
         </TabsContent>
 
         {/* Messages Tab */}

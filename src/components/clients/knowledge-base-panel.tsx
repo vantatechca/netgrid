@@ -7,6 +7,7 @@ import {
   AlertTriangle,
   FileText,
   Loader2,
+  RefreshCw,
   Trash2,
   Upload,
 } from "lucide-react";
@@ -32,10 +33,16 @@ import {
   uploadKnowledgeDocument,
   setKnowledgeDocumentActive,
   deleteKnowledgeDocument,
+  reprocessKnowledgeDocument,
   type listKnowledgeDocuments,
 } from "@/lib/actions/knowledge-actions";
 
 type KnowledgeDoc = Awaited<ReturnType<typeof listKnowledgeDocuments>>[number];
+
+interface BlogOption {
+  id: string;
+  domain: string;
+}
 
 const ACCEPT =
   ".xlsx,.xls,.csv,.docx,.pdf,.txt,.md,image/png,image/jpeg,image/webp,image/gif";
@@ -49,14 +56,20 @@ const statusVariant: Record<string, "default" | "secondary" | "destructive"> = {
 export function KnowledgeBasePanel({
   clientId,
   documents,
+  blogs,
 }: {
   clientId: string;
   documents: KnowledgeDoc[];
+  blogs: BlogOption[];
 }) {
   const router = useRouter();
   const fileInput = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [pending, start] = useTransition();
+  // "" = client-wide; otherwise the selected blog id this upload is scoped to.
+  const [scopeBlogId, setScopeBlogId] = useState("");
+
+  const blogDomainById = new Map(blogs.map((b) => [b.id, b.domain]));
 
   const handleFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -70,6 +83,7 @@ export function KnowledgeBasePanel({
         const fd = new FormData();
         fd.append("file", file);
         fd.append("clientId", clientId);
+        if (scopeBlogId) fd.append("blogId", scopeBlogId);
         const doc = await uploadKnowledgeDocument(fd);
         ok++;
         if (doc.extractionStatus === "failed") {
@@ -111,6 +125,31 @@ export function KnowledgeBasePanel({
     });
   };
 
+  const handleReprocess = (id: string) => {
+    start(async () => {
+      const t = toast.loading("Re-extracting keywords…");
+      try {
+        const doc = await reprocessKnowledgeDocument(id);
+        if (doc.extractionStatus === "extracted") {
+          toast.success("Reprocessed", {
+            id: t,
+            description: `${(doc.extractedKeywords as string[] | null)?.length ?? 0} keywords extracted.`,
+          });
+        } else {
+          toast.warning("Reprocess still failed", {
+            id: t,
+            description: doc.extractionError ?? undefined,
+          });
+        }
+        router.refresh();
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Could not reprocess document", {
+          id: t,
+        });
+      }
+    });
+  };
+
   const handleDelete = (id: string, fileName: string) => {
     if (!confirm(`Delete "${fileName}" from the Knowledge Base?`)) return;
     start(async () => {
@@ -136,17 +175,33 @@ export function KnowledgeBasePanel({
               post ideation and writing.
             </CardDescription>
           </div>
-          <Button
-            onClick={() => fileInput.current?.click()}
-            disabled={uploading}
-          >
-            {uploading ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <Upload className="size-4" />
-            )}
-            Upload
-          </Button>
+          <div className="flex items-center gap-2">
+            <select
+              value={scopeBlogId}
+              onChange={(e) => setScopeBlogId(e.target.value)}
+              disabled={uploading}
+              aria-label="Document scope"
+              className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+            >
+              <option value="">Client-wide</option>
+              {blogs.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.domain}
+                </option>
+              ))}
+            </select>
+            <Button
+              onClick={() => fileInput.current?.click()}
+              disabled={uploading}
+            >
+              {uploading ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Upload className="size-4" />
+              )}
+              Upload
+            </Button>
+          </div>
           <input
             ref={fileInput}
             type="file"
@@ -174,7 +229,7 @@ export function KnowledgeBasePanel({
                 <TableHead>Status</TableHead>
                 <TableHead>Keywords</TableHead>
                 <TableHead>Active</TableHead>
-                <TableHead className="w-10" />
+                <TableHead className="w-20 text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -202,7 +257,9 @@ export function KnowledgeBasePanel({
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {doc.sourceType}
-                      {doc.blogId ? " · blog" : " · client-wide"}
+                      {doc.blogId
+                        ? ` · ${blogDomainById.get(doc.blogId) ?? "blog"}`
+                        : " · client-wide"}
                     </TableCell>
                     <TableCell>
                       <Badge variant={statusVariant[doc.extractionStatus] ?? "secondary"}>
@@ -231,14 +288,28 @@ export function KnowledgeBasePanel({
                       />
                     </TableCell>
                     <TableCell>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        disabled={pending}
-                        onClick={() => handleDelete(doc.id, doc.fileName)}
-                      >
-                        <Trash2 className="size-4 text-muted-foreground" />
-                      </Button>
+                      <div className="flex items-center justify-end gap-1">
+                        {(doc.extractionStatus === "failed" ||
+                          doc.lowConfidence) && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            disabled={pending}
+                            title="Re-extract keywords"
+                            onClick={() => handleReprocess(doc.id)}
+                          >
+                            <RefreshCw className="size-4 text-muted-foreground" />
+                          </Button>
+                        )}
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          disabled={pending}
+                          onClick={() => handleDelete(doc.id, doc.fileName)}
+                        >
+                          <Trash2 className="size-4 text-muted-foreground" />
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 );
