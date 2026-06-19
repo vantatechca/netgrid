@@ -833,6 +833,41 @@ async function rewriteBodyDataUrisToShopifyUrls(
  *
  * Returns the article's canonical URL: /blogs/{blogHandle}/{articleHandle}
  */
+
+/** Stable non-crypto hash, seeded per-blog so the byline varies site-to-site. */
+function shopifyHashSeed(seed: string): number {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) {
+    h = ((h << 5) - h + seed.charCodeAt(i)) | 0;
+  }
+  return Math.abs(h);
+}
+
+/**
+ * Per-blog author byline. Shopify stamps "Shopify API" on every article
+ * created via the Admin API unless an `author` is supplied — the same byline
+ * across the whole network is a glaring footprint. We derive a stable human
+ * name from the store identity so each blog has its own consistent author,
+ * while different blogs get different names. Same store → same author always.
+ */
+const AUTHOR_FIRST = [
+  "Emma", "Liam", "Olivia", "Noah", "Ava", "Ethan", "Sophia", "Mason",
+  "Isabella", "Lucas", "Mia", "Henry", "Charlotte", "Jack", "Amelia",
+  "Owen", "Harper", "Leo", "Grace", "Daniel", "Chloe", "Nathan", "Lily",
+  "Adam", "Hannah", "Caleb", "Zoe", "Ryan", "Nora", "Eli",
+];
+const AUTHOR_LAST = [
+  "Bennett", "Carter", "Reed", "Hayes", "Brooks", "Morgan", "Foster",
+  "Price", "Hughes", "Coleman", "Walsh", "Porter", "Sutton", "Lane",
+  "Wells", "Hart", "Frost", "Dawson", "Cross", "Sloan", "Marsh", "Quinn",
+  "Vance", "Boyd", "Nash", "Ellis", "Webb", "Shaw", "Fox", "Burke",
+];
+function authorNameForStore(seed: string): string {
+  const h = shopifyHashSeed(seed);
+  const first = AUTHOR_FIRST[h % AUTHOR_FIRST.length];
+  const last = AUTHOR_LAST[(h >> 5) % AUTHOR_LAST.length];
+  return `${first} ${last}`;
+}
 export async function createArticle(
   creds: ShopifyCreds,
   input: PublishPostInput,
@@ -927,6 +962,8 @@ export async function createArticle(
       {
         article: {
           title: input.title,
+          author: (input.author && input.author.trim()) ||
+            authorNameForStore(blogHandle || creds.storeUrl),
           body_html: rewrittenBody,
           summary_html: input.excerpt,
           tags: input.tags?.join(", "),

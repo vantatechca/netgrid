@@ -215,6 +215,49 @@ export async function testConnection(
 }
 
 
+/** Stable non-crypto hash, seeded per-blog so markup varies site-to-site. */
+function wpHashSeed(seed: string): number {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) {
+    h = ((h << 5) - h + seed.charCodeAt(i)) | 0;
+  }
+  return Math.abs(h);
+}
+
+/**
+ * Per-blog hero <figure> markup. A network where every WordPress hero is
+ * `<figure class="post-hero-image" style="margin:0 0 1.5em;">` is a trivial
+ * HTML fingerprint. Each blog (keyed by its wpUrl) gets a stable class +
+ * inline-style variant so the serialized markup differs site-to-site while
+ * still rendering as a full-width hero. Same blog → same markup always.
+ */
+function buildHeroFigure(seed: string, src: string, safeAlt: string): string {
+  const CLASS = [
+    "post-hero-image",
+    "article-hero",
+    "entry-hero",
+    "post-featured",
+    "hero-figure",
+    "lead-image",
+    "post-cover",
+    "featured-figure",
+  ];
+  const FIG_MARGIN = ["0 0 1.5em", "0 0 1.75rem", "0 0 1.25em 0", "0 0 2em"];
+  const IMG_STYLE = [
+    "width:100%;height:auto;display:block;",
+    "display:block;max-width:100%;height:auto;",
+    "width:100%;height:auto;",
+  ];
+  const h = wpHashSeed(seed);
+  const cls = CLASS[h % CLASS.length];
+  const margin = FIG_MARGIN[(h >> 3) % FIG_MARGIN.length];
+  const imgStyle = IMG_STYLE[(h >> 5) % IMG_STYLE.length];
+  return (
+    `<figure class="${cls}" style="margin:${margin};">` +
+    `<img src="${src}" alt="${safeAlt}" style="${imgStyle}" /></figure>`
+  );
+}
+
 /**
  * Create a new WordPress post. If `input.featuredImageUrl` is set, the image
  * is uploaded to the Media Library first and its ID is attached as
@@ -281,10 +324,7 @@ export async function createPost(
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;")
         .slice(0, 200);
-      const heroFigure =
-        `<figure class="post-hero-image" style="margin:0 0 1.5em;">` +
-        `<img src="${featuredSourceUrl}" alt="${safeAlt}" ` +
-        `style="width:100%;height:auto;display:block;" /></figure>`;
+      const heroFigure = buildHeroFigure(wpUrl, featuredSourceUrl, safeAlt);
       rewrittenBody = heroFigure + rewrittenBody;
     }
 
