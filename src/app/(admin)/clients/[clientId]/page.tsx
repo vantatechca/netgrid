@@ -131,6 +131,12 @@ export default async function ClientDetailPage({
             ctaEnabled: client.ctaEnabled ?? false,
             ctaLabel: client.ctaLabel ?? "",
             ctaUrl: client.ctaUrl ?? "",
+            ctaPlacement:
+              (client.ctaPlacement as
+                | "bottom"
+                | "top_bottom"
+                | "top_middle_bottom"
+                | undefined) ?? "bottom",
             status:
               (client.status as
                 | "onboarding"

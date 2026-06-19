@@ -91,6 +91,8 @@ export const clients = pgTable("clients", {
   ctaEnabled: boolean("cta_enabled").default(false).notNull(),
   ctaLabel: varchar("cta_label", { length: 80 }),
   ctaUrl: varchar("cta_url", { length: 1000 }),
+  // Where the button appears: "bottom" | "top_bottom" | "top_middle_bottom".
+  ctaPlacement: varchar("cta_placement", { length: 40 }).default("bottom"),
   status: clientStatusEnum("status").default("onboarding"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),

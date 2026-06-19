@@ -46,6 +46,7 @@ export function ClientForm({ mode, defaultValues }: ClientFormProps) {
       ctaEnabled: defaultValues?.ctaEnabled ?? false,
       ctaLabel: defaultValues?.ctaLabel ?? "",
       ctaUrl: defaultValues?.ctaUrl ?? "",
+      ctaPlacement: defaultValues?.ctaPlacement ?? "bottom",
     },
   });
 
@@ -245,6 +246,21 @@ export function ClientForm({ mode, defaultValues }: ClientFormProps) {
                     {errors.ctaUrl.message}
                   </p>
                 )}
+              </div>
+              <div className="space-y-2 sm:col-span-2">
+                <Label htmlFor="ctaPlacement">Placement</Label>
+                <select
+                  id="ctaPlacement"
+                  {...register("ctaPlacement")}
+                  className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+                >
+                  <option value="bottom">Bottom only</option>
+                  <option value="top_bottom">Top &amp; bottom</option>
+                  <option value="top_middle_bottom">Top, middle &amp; bottom</option>
+                </select>
+                <p className="text-xs text-muted-foreground">
+                  Where the button appears within each post.
+                </p>
               </div>
             </div>
           )}

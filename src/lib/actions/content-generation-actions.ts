@@ -347,6 +347,7 @@ async function runGenerateAndPublish(
       ctaEnabled: clients.ctaEnabled,
       ctaLabel: clients.ctaLabel,
       ctaUrl: clients.ctaUrl,
+      ctaPlacement: clients.ctaPlacement,
     })
     .from(blogs)
     .innerJoin(clients, eq(blogs.clientId, clients.id))
@@ -355,7 +356,7 @@ async function runGenerateAndPublish(
 
   if (!row) throw new Error(`Blog ${input.blogId} not found`);
   const { blog, clientNiche } = row;
-  const cta = clientCta(row.ctaEnabled, row.ctaLabel, row.ctaUrl);
+  const cta = clientCta(row.ctaEnabled, row.ctaLabel, row.ctaUrl, row.ctaPlacement);
 
   if (!blogHasCredentials(blog)) {
     throw new Error(
@@ -719,9 +720,10 @@ function clientCta(
   enabled: boolean | null,
   label: string | null,
   url: string | null,
-): { label: string; url: string } | undefined {
+  placement: string | null,
+): { label: string; url: string; placement?: string } | undefined {
   if (!enabled || !label?.trim() || !url?.trim()) return undefined;
-  return { label: label.trim(), url: url.trim() };
+  return { label: label.trim(), url: url.trim(), placement: placement ?? "bottom" };
 }
 
 /** Build the platform credential bundle from a blog row. */
@@ -865,6 +867,7 @@ async function resolveIdeationContext(blogId: string) {
       ctaEnabled: clients.ctaEnabled,
       ctaLabel: clients.ctaLabel,
       ctaUrl: clients.ctaUrl,
+      ctaPlacement: clients.ctaPlacement,
     })
     .from(blogs)
     .innerJoin(clients, eq(blogs.clientId, clients.id))
@@ -872,7 +875,7 @@ async function resolveIdeationContext(blogId: string) {
     .limit(1);
   if (!row) throw new Error(`Blog ${blogId} not found`);
   const { blog, clientNiche } = row;
-  const cta = clientCta(row.ctaEnabled, row.ctaLabel, row.ctaUrl);
+  const cta = clientCta(row.ctaEnabled, row.ctaLabel, row.ctaUrl, row.ctaPlacement);
 
   let styleProfile = await getStyleProfileForBlog(blog.id);
   if (!styleProfile) {
