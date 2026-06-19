@@ -1715,6 +1715,26 @@ Begin now. Return only the JSON object.`;
 
 // ─── Topic ideation (used by cron auto-publish) ─────────────────────────────
 
+/**
+ * Render the client's distilled Knowledge Base into a prompt section that
+ * tells the model to prioritize the client's own topics/keywords. Returns ""
+ * when there's nothing to inject (blogs with no active knowledge documents).
+ */
+function buildKnowledgeSection(
+  knowledge?: { keywords: string[]; topics: string[] },
+): string {
+  const topics = knowledge?.topics?.filter(Boolean).slice(0, 20) ?? [];
+  const keywords = knowledge?.keywords?.filter(Boolean).slice(0, 40) ?? [];
+  if (topics.length === 0 && keywords.length === 0) return "";
+
+  return (
+    `\n\nCLIENT KNOWLEDGE BASE (uploaded reference material — prioritize this over generic niche topics):\n` +
+    (topics.length ? `  priority topics: ${topics.join(", ")}\n` : "") +
+    (keywords.length ? `  target keywords: ${keywords.join(", ")}\n` : "") +
+    `Prefer a topic and keywords that align with the client's own material above whenever it fits the niche.`
+  );
+}
+
 export async function ideateTopic(
   niche: string | null | undefined,
   recentTitles: string[],
@@ -1731,6 +1751,13 @@ export async function ideateTopic(
     styleProfile?: StyleProfile;
     /** Output language — French verticals get French topics + keywords. */
     language?: "en" | "fr" | "en_fr";
+    /**
+     * Distilled client Knowledge Base for this blog (uploaded reference
+     * material — briefs, keyword sheets, etc.). When present, ideation
+     * prioritizes the client's own topics/keywords over the generic niche
+     * list, so posts reflect the material the client actually gave us.
+     */
+    knowledge?: { keywords: string[]; topics: string[] };
   } = {},
 ): Promise<{ topic: string; keywords: string[] }> {
   const ctx = getNicheContext(niche);
@@ -1827,8 +1854,10 @@ Return JSON only:
     ? `\n\nRecent news headlines relevant to this vertical (last 72 hours):\n${newsBlock}`
     : "";
 
+  const knowledgeSection = buildKnowledgeSection(opts.knowledge);
+
   const user = `Recent titles on this site (avoid duplicating these):
-${recentList}${profileAnchorSection}${newsSection}
+${recentList}${profileAnchorSection}${knowledgeSection}${newsSection}
 
 Suggest the next post's topic.`;
 
@@ -1848,6 +1877,81 @@ Suggest the next post's topic.`;
     const msg = err instanceof Error ? err.message : "parse error";
     throw new Error(
       `Topic ideation returned invalid JSON: ${msg} | response preview: ${text.slice(0, 200)}`,
+    );
+  }
+}
+
+// ─── Keyword suggestion (manual "Suggest keywords" button) ──────────────────
+
+/**
+ * Generate target keywords for a (possibly user-supplied) topic. Powers the
+ * manual "Suggest keywords" button: topic-aware when a topic is given,
+ * otherwise falls back to niche/Knowledge-Base keywords. Draws on the
+ * client's Knowledge Base first, then the niche's generic key topics.
+ */
+export async function suggestKeywords(
+  niche: string | null | undefined,
+  topic: string,
+  opts: {
+    knowledge?: { keywords: string[]; topics: string[] };
+    language?: "en" | "fr" | "en_fr";
+  } = {},
+): Promise<string[]> {
+  const ctx = getNicheContext(niche);
+  const cleanTopic = topic.trim();
+
+  const knowledgeSection = buildKnowledgeSection(opts.knowledge);
+  const nicheKeywords =
+    ctx.keyTopics.length > 0
+      ? `\n\nNiche key topics (use as fallback inspiration): ${ctx.keyTopics.join(", ")}`
+      : "";
+
+  const languageClause =
+    opts.language === "fr"
+      ? `\n- Write every keyword in FRENCH (français), Québec phrasing — this is a French-language blog`
+      : "";
+
+  const topicLine = cleanTopic
+    ? `the article topic below`
+    : `the ${ctx.label} niche (no specific topic yet)`;
+
+  const system = `You generate target SEO keywords for a ${ctx.industry} blog (${ctx.label}). Produce 4-6 concrete, search-worthy keywords or short phrases for ${topicLine}. Keywords must:
+- Be specific (real terms of art, products, metrics) — not generic filler
+- Have genuine search intent
+- Prefer terms from the client's Knowledge Base when relevant${languageClause}
+
+Return JSON only:
+{ "keywords": ["kw1", "kw2", "kw3", "kw4"] }`;
+
+  const user = `${cleanTopic ? `Topic: ${cleanTopic}` : "(no topic supplied — suggest niche-level keywords)"}${knowledgeSection}${nicheKeywords}
+
+Suggest the target keywords.`;
+
+  const { text } = await callClaude(system, user, {
+    maxTokens: 200,
+    temperature: 0.7,
+    expectJson: true,
+  });
+
+  try {
+    const parsed = safeParseClaudeJson<{ keywords?: unknown }>(text);
+    if (!Array.isArray(parsed.keywords)) return [];
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const k of parsed.keywords) {
+      const s = String(k).trim();
+      if (!s) continue;
+      const key = s.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(s);
+      if (out.length >= 8) break;
+    }
+    return out;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "parse error";
+    throw new Error(
+      `Keyword suggestion returned invalid JSON: ${msg} | response preview: ${text.slice(0, 200)}`,
     );
   }
 }

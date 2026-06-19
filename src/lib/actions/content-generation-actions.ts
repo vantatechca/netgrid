@@ -8,12 +8,14 @@ import { requireAdmin } from "@/lib/auth/helpers";
 import {
   generateContent,
   ideateTopic,
+  suggestKeywords,
   resolvePostLanguage,
   postLanguageForDomain,
   estimateImageCostUsd,
   type GenerateOptions,
   type Tone,
 } from "@/lib/services/content-generator";
+import { getActiveKnowledgeForBlog } from "@/lib/actions/knowledge-actions";
 import {
   assignProfileForBlogIfPeptides,
   getStyleProfileForBlog,
@@ -399,6 +401,10 @@ async function runGenerateAndPublish(
     clientNiche,
   );
 
+  // Distilled client Knowledge Base for this blog (client-wide + per-blog
+  // active documents). Anchors ideation on the client's own material.
+  const knowledge = await getActiveKnowledgeForBlog(blog.id);
+
   let topic = input.topic?.trim();
   let keywords = input.keywords ?? [];
 
@@ -408,6 +414,7 @@ async function runGenerateAndPublish(
       verticalKey: verticalForPost?.key ?? null,
       styleProfile: styleProfile ?? undefined,
       language: postLanguage,
+      knowledge,
     });
     topic = ideated.topic;
     if (keywords.length === 0) keywords = ideated.keywords;
@@ -509,6 +516,7 @@ async function runGenerateAndPublish(
             verticalKey: verticalForPost?.key ?? null,
             styleProfile: styleProfile ?? undefined,
             language: postLanguage,
+            knowledge,
           },
         );
         if (!newIdea.topic || newIdea.topic.trim() === currentTopic.trim()) {
@@ -698,6 +706,83 @@ export async function generateAndPublishForBlog(
 ): Promise<GenerateAndPublishResult> {
   await requireAdmin();
   return runGenerateAndPublish(input);
+}
+
+/**
+ * Resolve the shared ideation context for a blog (niche, locked style profile,
+ * vertical/language, and distilled Knowledge Base) so the manual "Suggest"
+ * actions anchor on exactly the same signals the auto-publish path uses.
+ */
+async function resolveIdeationContext(blogId: string) {
+  const [row] = await db
+    .select({ blog: blogs, clientNiche: clients.niche })
+    .from(blogs)
+    .innerJoin(clients, eq(blogs.clientId, clients.id))
+    .where(eq(blogs.id, blogId))
+    .limit(1);
+  if (!row) throw new Error(`Blog ${blogId} not found`);
+  const { blog, clientNiche } = row;
+
+  let styleProfile = await getStyleProfileForBlog(blog.id);
+  if (!styleProfile) {
+    const r = await assignProfileForBlogIfPeptides(blog.id);
+    if (r.success && r.assigned) {
+      styleProfile = await getStyleProfileForBlog(blog.id);
+    }
+  }
+
+  const verticalForPost = verticalForNiche(clientNiche);
+  const language = postLanguageForDomain(
+    verticalForPost?.language,
+    blog.domain,
+    clientNiche,
+  );
+  const knowledge = await getActiveKnowledgeForBlog(blog.id);
+
+  return {
+    blog,
+    clientNiche,
+    styleProfile,
+    verticalKey: verticalForPost?.key ?? null,
+    language,
+    knowledge,
+  };
+}
+
+/**
+ * Manual "Suggest topic" button: ideate a topic (and matching keywords) for a
+ * blog, anchored on its style profile + the client's Knowledge Base. The admin
+ * can edit the result before generating the post.
+ */
+export async function suggestTopicForBlog(
+  blogId: string,
+): Promise<{ topic: string; keywords: string[] }> {
+  await requireAdmin();
+  const ctx = await resolveIdeationContext(blogId);
+  const recentTitles = await getRecentTitles(blogId);
+  return ideateTopic(ctx.clientNiche, recentTitles, {
+    verticalKey: ctx.verticalKey,
+    styleProfile: ctx.styleProfile ?? undefined,
+    language: ctx.language,
+    knowledge: ctx.knowledge,
+  });
+}
+
+/**
+ * Manual "Suggest keywords" button: generate target keywords for the topic the
+ * admin has typed (topic-aware), or niche/Knowledge-Base keywords when the
+ * topic box is empty.
+ */
+export async function suggestKeywordsForBlog(
+  blogId: string,
+  topic?: string,
+): Promise<string[]> {
+  await requireAdmin();
+  const ctx = await resolveIdeationContext(blogId);
+  return suggestKeywords(ctx.clientNiche, topic ?? "", {
+    knowledge: ctx.knowledge,
+    language: ctx.language,
+  });
 }
 
 export interface AutoPublishResult {
