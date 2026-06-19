@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { and, desc, eq, isNull, or } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { activityLog, blogs, knowledgeDocuments } from "@/lib/db/schema";
+import { activityLog, blogs, clients, knowledgeDocuments } from "@/lib/db/schema";
 import { requireAdmin } from "@/lib/auth/helpers";
 import { convertToMarkdown } from "@/lib/services/knowledge-converter";
 import { extractKnowledge } from "@/lib/services/knowledge-extractor";
@@ -211,6 +211,64 @@ export async function deleteKnowledgeDocument(id: string) {
 
   revalidatePath(`/clients/${deleted.clientId}`);
   return deleted;
+}
+
+// ─── reprocessKnowledgeDocument ───────────────────────────────────────────────
+
+/**
+ * Re-run the extraction pass on an already-stored document's Markdown, without
+ * re-uploading the file. For documents whose extraction failed or came back
+ * low-confidence. Uses the client's niche to focus keyword choice.
+ */
+export async function reprocessKnowledgeDocument(
+  id: string,
+): Promise<KnowledgeDocument> {
+  await requireAdmin();
+
+  const [row] = await db
+    .select({
+      doc: knowledgeDocuments,
+      niche: clients.niche,
+    })
+    .from(knowledgeDocuments)
+    .innerJoin(clients, eq(knowledgeDocuments.clientId, clients.id))
+    .where(eq(knowledgeDocuments.id, id))
+    .limit(1);
+
+  if (!row) throw new Error("Knowledge document not found.");
+
+  try {
+    const extraction = await extractKnowledge(row.doc.markdown, {
+      fileName: row.doc.fileName,
+      niche: row.niche ?? undefined,
+    });
+    const [updated] = await db
+      .update(knowledgeDocuments)
+      .set({
+        extractedKeywords: extraction.keywords,
+        extractedTopics: extraction.topics,
+        summary: extraction.summary || null,
+        extractionStatus: "extracted",
+        extractionError: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(knowledgeDocuments.id, id))
+      .returning();
+    revalidatePath(`/clients/${row.doc.clientId}`);
+    return updated;
+  } catch (err) {
+    const [updated] = await db
+      .update(knowledgeDocuments)
+      .set({
+        extractionStatus: "failed",
+        extractionError: err instanceof Error ? err.message : String(err),
+        updatedAt: new Date(),
+      })
+      .where(eq(knowledgeDocuments.id, id))
+      .returning();
+    revalidatePath(`/clients/${row.doc.clientId}`);
+    return updated;
+  }
 }
 
 // ─── getActiveKnowledgeForBlog ────────────────────────────────────────────────
