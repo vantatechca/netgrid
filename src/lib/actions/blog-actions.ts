@@ -609,6 +609,9 @@ export async function generateBlogPost(
       domain: blogs.domain,
       platform: blogs.platform,
       niche: clients.niche,
+      ctaEnabled: clients.ctaEnabled,
+      ctaLabel: clients.ctaLabel,
+      ctaUrl: clients.ctaUrl,
     })
     .from(blogs)
     .leftJoin(clients, eq(blogs.clientId, clients.id))
@@ -722,6 +725,10 @@ export async function generateBlogPost(
     styleProfile: styleProfile ?? undefined,
     verticalKey: verticalForPost?.key ?? null,
     language: postLanguage,
+    cta:
+      blog.ctaEnabled && blog.ctaLabel?.trim() && blog.ctaUrl?.trim()
+        ? { label: blog.ctaLabel.trim(), url: blog.ctaUrl.trim() }
+        : undefined,
   });
 
   // Generation with topic-level recovery.
