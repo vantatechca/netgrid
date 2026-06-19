@@ -20,7 +20,7 @@ import {
   assignProfileForBlogIfPeptides,
   getStyleProfileForBlog,
 } from "@/lib/actions/style-profile-actions";
-import { publishPost, type PlatformBlog } from "@/lib/services/platform-client";
+import { publishPost, backfillPostSeo, resolveShopifyBlogId, type PlatformBlog } from "@/lib/services/platform-client";
 import { verticalForNiche } from "@/lib/content/verticals";
 import { pingIndexNowFireAndForget } from "@/lib/services/index-now-pinger";
 
@@ -707,6 +707,133 @@ export async function generateAndPublishForBlog(
 ): Promise<GenerateAndPublishResult> {
   await requireAdmin();
   return runGenerateAndPublish(input);
+}
+
+/** Build the platform credential bundle from a blog row. */
+function toPlatformBlog(blog: typeof blogs.$inferSelect): PlatformBlog {
+  return {
+    platform: blog.platform,
+    wpUrl: blog.wpUrl,
+    wpUsername: blog.wpUsername,
+    wpAppPassword: blog.wpAppPassword,
+    seoPlugin: blog.seoPlugin,
+    shopifyAuthMode: blog.shopifyAuthMode,
+    shopifyStoreUrl: blog.shopifyStoreUrl,
+    shopifyAdminApiToken: blog.shopifyAdminApiToken,
+    shopifyClientId: blog.shopifyClientId,
+    shopifyClientSecret: blog.shopifyClientSecret,
+  };
+}
+
+/**
+ * Regenerate an already-published post in place: re-run generation for the
+ * post's original topic/keywords (so it picks up the latest generator
+ * improvements — heading de-dup, sentence-length cap, unique anchors, etc.)
+ * and UPDATE the live external post at the same URL — no duplicate post.
+ *
+ * Pushes the new body + meta title/description via the existing in-place
+ * update path. The featured image is left untouched; the regenerated body
+ * carries its own fresh inline image.
+ */
+export async function regenerateAndUpdatePost(
+  generatedPostId: string,
+): Promise<GenerateAndPublishResult> {
+  await requireAdmin();
+
+  const [post] = await db
+    .select()
+    .from(generatedPosts)
+    .where(eq(generatedPosts.id, generatedPostId))
+    .limit(1);
+
+  if (!post) throw new Error(`Generated post ${generatedPostId} not found`);
+  if (post.status !== "published" || !post.externalPostId) {
+    throw new Error(
+      "Only a published post can be regenerated in place. Publish it first.",
+    );
+  }
+
+  const ctx = await resolveIdeationContext(post.blogId);
+  const blog = ctx.blog;
+  if (!blogHasCredentials(blog)) {
+    throw new Error(
+      `Blog ${blog.domain} is missing ${blog.platform} credentials — reconnect the platform first`,
+    );
+  }
+
+  const keywords = Array.isArray(post.keywords) ? (post.keywords as string[]) : [];
+  const internalLinkRefs = await getInternalLinkRefs(blog.id, 8);
+
+  const content = await generateContent({
+    topic: post.topic,
+    keywords,
+    wordCount: 1000,
+    tone: "professional",
+    niche: ctx.clientNiche,
+    seoOptimized: true,
+    styleProfile: ctx.styleProfile ?? undefined,
+    verticalKey: ctx.verticalKey,
+    language: ctx.language,
+    blogSeed: blog.id,
+    internalLinkRefs,
+    knowledgeSummaries: ctx.knowledge.summaries,
+  });
+
+  // Push the fresh body + meta to the SAME live post (same URL).
+  const platformBlog = toPlatformBlog(blog);
+  const shopifyBlogId =
+    blog.platform === "shopify"
+      ? (await resolveShopifyBlogId(platformBlog))?.blogId
+      : undefined;
+
+  const update = await backfillPostSeo(
+    platformBlog,
+    post.externalPostId,
+    {
+      bodyHtml: content.content,
+      metaTitle: content.metaTitle,
+      metaDescription: content.metaDescription,
+      focusKeyword: content.keywords?.[0],
+    },
+    shopifyBlogId,
+  );
+  if (!update.success) {
+    throw new Error(`Live update failed: ${update.message}`);
+  }
+
+  // Persist the new content on the existing row (status + external ids stay).
+  await db
+    .update(generatedPosts)
+    .set({
+      title: content.title,
+      body: content.content,
+      excerpt: content.excerpt,
+      metaTitle: content.metaTitle,
+      metaDescription: content.metaDescription,
+      keywords: content.keywords,
+      wordCount: content.wordCount,
+      seoScore: content.seoScore,
+      readabilityScore: content.readabilityScore,
+      brandVoiceScore: content.brandVoiceScore,
+      tokensUsed: content.tokensUsed,
+      costUsd: String(content.costUsd),
+      featuredImageUrl: content.heroImageUrl ?? null,
+      bodyImageUrl: content.bodyImageUrl ?? null,
+      scrubberReport: content.scrubberReport ?? null,
+      flaggedForReview: content.flaggedForReview ?? false,
+      generatedAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(eq(generatedPosts.id, post.id));
+
+  return {
+    success: true,
+    generatedPostId: post.id,
+    status: "published",
+    externalPostId: post.externalPostId,
+    externalPostUrl: post.externalPostUrl ?? undefined,
+    message: `Regenerated and updated the live post on ${blog.domain}`,
+  };
 }
 
 /**

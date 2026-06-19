@@ -65,6 +65,7 @@ import {
   getGeneratedPostContent,
   publishGeneratedPost,
   retryGeneratedPost,
+  regenerateBlogPost,
   updateGeneratedPostContent,
   type BlogGeneratedPostRow,
   type BlogLivePostRow,
@@ -186,6 +187,10 @@ function GeneratedRowActions({
   // hasn't gone live. Published rows can be edited from the Live tab;
   // in-flight rows must wait.
   const canEdit = row.status === "generated" || row.status === "failed";
+  // Regenerate is only meaningful once a post is live — it rewrites the
+  // article (picking up the latest generator improvements) and updates the
+  // SAME external post in place.
+  const canRegenerate = isPublished && !!row.externalPostId;
   const viewPending = viewLoadingId === row.id;
   const editPending = editLoadingId === row.id;
 
@@ -199,6 +204,25 @@ function GeneratedRowActions({
       if (res.success) toast.success(res.message, { id: t });
       else toast.error(res.message, { id: t });
 
+      router.refresh();
+    });
+  };
+
+  const handleRegenerate = () => {
+    if (
+      !window.confirm(
+        "Regenerate this post and update the live page (same URL)? The current content will be replaced.",
+      )
+    ) {
+      return;
+    }
+    start(async () => {
+      const t = toast.loading("Regenerating…", {
+        description: "Rewriting the article and updating the live post.",
+      });
+      const res = await regenerateBlogPost(row.id);
+      if (res.success) toast.success(res.message, { id: t });
+      else toast.error(res.message, { id: t });
       router.refresh();
     });
   };
@@ -258,6 +282,22 @@ function GeneratedRowActions({
         <Button size="sm" variant="outline" disabled>
           <Loader2 className="mr-1.5 size-3.5 animate-spin" />
           {row.status === "generating" ? "Generating…" : "Publishing…"}
+        </Button>
+      )}
+
+      {canRegenerate && (
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={handleRegenerate}
+          disabled={pending}
+          title="Regenerate & update the live post"
+        >
+          {pending ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <RefreshCw className="size-4" />
+          )}
         </Button>
       )}
 
