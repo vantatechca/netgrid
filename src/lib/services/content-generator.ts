@@ -1761,6 +1761,7 @@ const SEO_QUALITY_DIRECTIVE = `
 ON-PAGE QUALITY (apply throughout the article):
 - Keep the AVERAGE sentence length at or below ~20 words (shorter is fine; vary length for rhythm). Break up any single sentence that runs past ~28 words into two.
 - Every <h2>/<h3> heading must have UNIQUE text — never repeat the same heading wording, and do not restate the article title as a heading.
+- Every hyperlink must use UNIQUE, descriptive anchor text — never reuse the same anchor wording for two links, and don't use an anchor that merely repeats a heading.
 - Make the opening paragraph clearly on-topic: reference the article's main subject naturally in the first few sentences.`;
 
 /**
