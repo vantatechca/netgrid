@@ -247,6 +247,10 @@ export const reports = pgTable("reports", {
   totalIssuesFixed: integer("total_issues_fixed"),
   blogsOnSchedule: integer("blogs_on_schedule"),
   blogsOffSchedule: integer("blogs_off_schedule"),
+  // Generation cost (text + images) for posts created during the report's
+  // period. Computed at report-generation time; null on reports generated
+  // before this column existed.
+  totalCostUsd: decimal("total_cost_usd", { precision: 10, scale: 6 }),
   highlights: jsonb("highlights"),
   concerns: jsonb("concerns"),
   rawData: jsonb("raw_data"),

@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/card";
 import { ReportHtmlContent } from "@/components/reports/report-html-content";
 import { PublishToggle } from "@/components/reports/publish-toggle";
+import { fmtUsd } from "@/components/reports/report-pieces";
 import { ArrowLeft, Globe, Minus, TrendingDown, TrendingUp } from "lucide-react";
 
 interface ReportDetailPageProps {
@@ -105,7 +106,7 @@ export default async function ReportDetailPage({ params }: ReportDetailPageProps
       </div>
 
       {/* Stat cards */}
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <Card>
           <CardHeader className="pb-2">
             <CardDescription>Avg SEO Score</CardDescription>
@@ -132,6 +133,16 @@ export default async function ReportDetailPage({ params }: ReportDetailPageProps
               {trend === "declining" && <TrendingDown className="size-5 text-red-600" />}
               {trend === "stable" && <Minus className="size-5 text-muted-foreground" />}
               {trend ?? "—"}
+            </CardTitle>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription>Generation Cost</CardDescription>
+            <CardTitle className="text-2xl tabular-nums">
+              {report.totalCostUsd != null
+                ? fmtUsd(Number(report.totalCostUsd))
+                : "—"}
             </CardTitle>
           </CardHeader>
         </Card>

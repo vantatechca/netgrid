@@ -39,7 +39,7 @@ export default async function ClientReportsPage({
 
   const [data, cost] = await Promise.all([
     getReports({ clientId, pageSize: 100 }),
-    getCostAnalytics(clientId),
+    getCostAnalytics({ clientId }),
   ]);
   const items = data.reports;
   const publishedCount = items.filter((r) => r.report.visibleToClient).length;

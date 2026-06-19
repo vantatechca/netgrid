@@ -87,13 +87,34 @@ export interface CostAnalytics {
   avgCostPerPost: number;
 }
 
+/** Time windows for cost aggregation. */
+export type CostWindow = "all" | "30d" | "month";
+
+/** Start instant for a cost window (null = no lower bound / all time). */
+function costWindowStart(window: CostWindow): Date | null {
+  const now = new Date();
+  if (window === "30d") return new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  if (window === "month") return new Date(now.getFullYear(), now.getMonth(), 1);
+  return null;
+}
+
 /**
  * Aggregate generation cost from `generated_posts.cost_usd`. Cost is incurred
- * at generation time regardless of publish status, so this sums every row.
- * Pass a clientId to scope to one client; omit for the whole network.
+ * at generation time regardless of publish status, so this sums every row in
+ * the window. Pass a clientId to scope to one client; omit for the whole
+ * network. `window` bounds by `created_at` ("all" | "30d" | "month").
  */
-export async function getCostAnalytics(clientId?: string): Promise<CostAnalytics> {
+export async function getCostAnalytics(
+  params: { clientId?: string; window?: CostWindow } = {},
+): Promise<CostAnalytics> {
   await requireAdmin();
+  const { clientId, window = "all" } = params;
+
+  const start = costWindowStart(window);
+  const conds = [];
+  if (clientId) conds.push(eq(generatedPosts.clientId, clientId));
+  if (start) conds.push(gte(generatedPosts.createdAt, start));
+  const where = conds.length > 0 ? and(...conds) : undefined;
 
   const [row] = await db
     .select({
@@ -102,7 +123,7 @@ export async function getCostAnalytics(clientId?: string): Promise<CostAnalytics
       blogCount: sql<number>`count(distinct ${generatedPosts.blogId})::int`,
     })
     .from(generatedPosts)
-    .where(clientId ? eq(generatedPosts.clientId, clientId) : undefined);
+    .where(where);
 
   const totalCostUsd = Number(row?.totalCost ?? 0);
   const postCount = row?.postCount ?? 0;
@@ -139,8 +160,13 @@ export interface ClientReportSummary {
  * `generated_posts`. Includes any client that has at least one report or one
  * generated post. Sorted by total spend (desc).
  */
-export async function getClientReportSummaries(): Promise<ClientReportSummary[]> {
+export async function getClientReportSummaries(
+  window: CostWindow = "all",
+): Promise<ClientReportSummary[]> {
   await requireAdmin();
+
+  const start = costWindowStart(window);
+  const costWhere = start ? gte(generatedPosts.createdAt, start) : undefined;
 
   const [clientRows, reportRows, costRows] = await Promise.all([
     db.select({ id: clients.id, name: clients.name }).from(clients),
@@ -162,6 +188,7 @@ export async function getClientReportSummaries(): Promise<ClientReportSummary[]>
         blogCount: sql<number>`count(distinct ${generatedPosts.blogId})::int`,
       })
       .from(generatedPosts)
+      .where(costWhere)
       .groupBy(generatedPosts.clientId),
   ]);
 
@@ -318,6 +345,21 @@ async function generateReportInternal(
     );
   const totalPosts = postsPublished?.count ?? 0;
 
+  // Generation cost (text + images) for everything generated during the
+  // period — captures drafts/failed too, not just published, so it reflects
+  // actual spend. Stored on the report for the Reports UI.
+  const [periodCost] = await db
+    .select({ total: sql<string>`COALESCE(SUM(${generatedPosts.costUsd}), 0)` })
+    .from(generatedPosts)
+    .where(
+      and(
+        eq(generatedPosts.clientId, clientId),
+        gte(generatedPosts.createdAt, startDate),
+        lte(generatedPosts.createdAt, endDate),
+      ),
+    );
+  const totalCostUsd = periodCost?.total ?? "0";
+
   const summaryHtml = await generateMonthlyReport({
     clientName: client.name,
     clientNiche: client.niche || "general",
@@ -352,6 +394,7 @@ async function generateReportInternal(
       totalIssuesFixed: issuesFixed?.count || 0,
       blogsOnSchedule: onScheduleBlogs?.count || 0,
       blogsOffSchedule: (blogCount?.count || 0) - (onScheduleBlogs?.count || 0),
+      totalCostUsd,
       visibleToClient: false,
     })
     .returning();
