@@ -5,6 +5,7 @@ import { blogs, clients, generatedPosts } from "@/lib/db/schema";
 import { requireAdmin } from "@/lib/auth/helpers";
 import { createBlogSchema, updateBlogSchema } from "@/lib/validators/blog";
 import { testConnection as platformTestConnection } from "@/lib/services/platform-client";
+import { regenerateAndUpdatePost } from "@/lib/actions/content-generation-actions";
 import {
   testConnection as shopifyTestConnection,
   fetchAllLiveArticles as shopifyFetchAllLive,
@@ -1122,6 +1123,25 @@ export async function retryGeneratedPost(
     .where(eq(generatedPosts.id, generatedPostId));
 
   return publishGeneratedPost(generatedPostId);
+}
+
+/**
+ * Regenerate a published post in place and update the live external post,
+ * so it picks up the latest generator improvements. Thin wrapper that maps
+ * thrown errors to a result the UI can toast.
+ */
+export async function regenerateBlogPost(
+  generatedPostId: string,
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const r = await regenerateAndUpdatePost(generatedPostId);
+    return { success: r.success, message: r.message };
+  } catch (e) {
+    return {
+      success: false,
+      message: e instanceof Error ? e.message : "Regenerate failed",
+    };
+  }
 }
 
 // ─── Import Blogs from CSV (batched) ────────────────────────────────────────
