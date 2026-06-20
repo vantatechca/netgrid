@@ -204,12 +204,6 @@ export function pingIndexNowFireAndForget(
 ): void {
   (async () => {
     const canonicalPostUrl = toCanonicalUrl(postUrl, blog.domain);
-    if (canonicalPostUrl !== postUrl) {
-      console.info(
-        `[indexnow] rewrote postUrl: ${postUrl} → ${canonicalPostUrl}`,
-      );
-    }
-    console.info(`[indexnow] start for ${blog.domain} → ${canonicalPostUrl}`);
 
     if (!process.env.INDEXNOW_KEY?.trim()) {
       console.warn(
@@ -227,20 +221,11 @@ export function pingIndexNowFireAndForget(
     }
 
     const canonicalKeyLocation = toCanonicalUrl(platformKeyLocation, blog.domain);
-    if (canonicalKeyLocation !== platformKeyLocation) {
-      console.info(
-        `[indexnow] rewrote keyLocation: ${platformKeyLocation} → ${canonicalKeyLocation}`,
-      );
-    }
 
     const r = await pingIndexNow(canonicalPostUrl, {
       keyLocation: canonicalKeyLocation,
     });
-    if (r.ok) {
-      console.info(
-        `[indexnow] pinged ${blog.domain} → ${canonicalPostUrl} (HTTP ${r.status ?? "n/a"})`,
-      );
-    } else {
+    if (!r.ok) {
       console.warn(
         `[indexnow] FAILED for ${blog.domain} (status=${r.status}): ${r.error?.slice(0, 200) ?? "unknown"}`,
       );
@@ -248,14 +233,6 @@ export function pingIndexNowFireAndForget(
         console.warn(
           `[indexnow] 403 means the key file isn't reachable at ${canonicalKeyLocation}. ` +
             `Check that ${blog.domain} resolves to the host serving ${platformKeyLocation}.`,
-        );
-      } else if (r.status === 422) {
-        console.warn(
-          `[indexnow] 422 means Bing rejected the URL/keyLocation pair. ` +
-            `Common causes: (a) blog.domain is empty or not a registered domain, ` +
-            `(b) the domain isn't pointed at the platform yet, ` +
-            `(c) you're submitting an IP or .myshopify.com URL — should be auto-fixed by ` +
-            `the canonical rewrite above; if you don't see a "rewrote" log line, blog.domain is missing.`,
         );
       }
     }
