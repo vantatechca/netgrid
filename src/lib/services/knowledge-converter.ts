@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { compressImageDataUri } from "./image-compress";
 
 /**
  * Knowledge-base file → Markdown converter.
@@ -25,9 +26,16 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-// Vision model for image / scanned-document text extraction. Kept in one place
-// so it can be bumped without hunting through the file.
-const VISION_MODEL = "claude-sonnet-4-20250514";
+// Vision model for image / scanned-document text extraction. Defaults to the
+// same Sonnet model the rest of the app uses (the previously hardcoded dated
+// snapshot isn't provisioned on every account, which silently broke image
+// uploads). Overridable via env without a code change.
+const VISION_MODEL = process.env.KNOWLEDGE_VISION_MODEL || "claude-sonnet-4-5";
+
+// Claude's vision API rejects images larger than ~5 MB. Our local upload cap
+// is 20 MB, so anything between must be downscaled before the request or it
+// throws. Leave headroom under 5 MB for the base64 envelope.
+const VISION_IMAGE_MAX_BYTES = 4 * 1024 * 1024;
 
 // Below this character count, a "text" extraction (PDF in particular) is
 // treated as effectively empty — likely a scanned/image-only document — and
@@ -218,7 +226,32 @@ async function imageToMarkdown(
   buf: Buffer,
   contentType: string,
 ): Promise<string> {
-  const mediaType = normaliseImageMediaType(contentType);
+  let mediaType = normaliseImageMediaType(contentType);
+  let data = buf;
+
+  // Downscale oversized images so we stay under Claude's ~5 MB image limit.
+  // compressImageDataUri re-encodes to JPEG; Claude downscales to 1568px
+  // internally anyway, so capping width there keeps text legible for OCR.
+  if (data.length > VISION_IMAGE_MAX_BYTES) {
+    const dataUri = `data:${mediaType};base64,${data.toString("base64")}`;
+    const compressed = await compressImageDataUri(dataUri, {
+      maxBytes: VISION_IMAGE_MAX_BYTES,
+      maxWidth: 1568,
+      quality: 80,
+    });
+    const m = compressed?.match(/^data:([^;,]+);base64,(.+)$/);
+    if (m) {
+      mediaType = "image/jpeg";
+      data = Buffer.from(m[2], "base64");
+    }
+  }
+
+  if (data.length > VISION_IMAGE_MAX_BYTES) {
+    throw new Error(
+      `Image is too large to transcribe (${(data.length / 1024 / 1024).toFixed(1)} MB after compression; Claude's limit is ~5 MB). Try a smaller or lower-resolution image.`,
+    );
+  }
+
   const message = await anthropic.messages.create({
     model: VISION_MODEL,
     max_tokens: 1500,
@@ -231,7 +264,7 @@ async function imageToMarkdown(
             source: {
               type: "base64",
               media_type: mediaType,
-              data: buf.toString("base64"),
+              data: data.toString("base64"),
             },
           },
           {

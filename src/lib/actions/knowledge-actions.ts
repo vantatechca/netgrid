@@ -60,11 +60,53 @@ export async function uploadKnowledgeDocument(
   }
 
   const buf = Buffer.from(await file.arrayBuffer());
-  const conversion = await convertToMarkdown(
-    buf,
-    file.type || "",
-    file.name,
-  );
+
+  // Convert to Markdown. A conversion failure (e.g. the vision pass for an
+  // image erroring, or an oversized/corrupt file) must NOT 500 the whole
+  // upload — we still record the document with a failed status and the error
+  // so it shows in the list and can be retried, matching the design intent
+  // that an upload is never silently lost.
+  let conversion: Awaited<ReturnType<typeof convertToMarkdown>>;
+  try {
+    conversion = await convertToMarkdown(buf, file.type || "", file.name);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    // Best-effort source type so the failed row still renders sensibly (the
+    // enum has no "unknown" member). Images are the common failure here.
+    const lower = `${file.type} ${file.name}`.toLowerCase();
+    const failedSourceType = /image\/|\.(png|jpe?g|webp|gif)\b/.test(lower)
+      ? "image"
+      : "text";
+    const [failedDoc] = await db
+      .insert(knowledgeDocuments)
+      .values({
+        clientId,
+        blogId,
+        fileName: file.name,
+        contentType: file.type || null,
+        sourceType: failedSourceType,
+        markdown: "",
+        charCount: 0,
+        lowConfidence: true,
+        warnings: [`Conversion failed: ${message}`],
+        extractionStatus: "failed",
+        extractionError: message,
+        uploadedBy: session.user.id,
+      })
+      .returning();
+
+    await db.insert(activityLog).values({
+      userId: session.user.id,
+      clientId,
+      action: "knowledge.uploaded",
+      entityType: "knowledge_document",
+      entityId: failedDoc.id,
+      details: { fileName: file.name, blogId, conversionError: message },
+    });
+
+    revalidatePath(`/clients/${clientId}`);
+    return failedDoc;
+  }
 
   // 1. Store the document immediately (extraction pending) so the Markdown is
   //    persisted even if the extraction call later fails.

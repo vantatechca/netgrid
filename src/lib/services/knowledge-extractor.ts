@@ -18,9 +18,11 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-// Matches the model used by the other auxiliary Claude calls in this codebase
-// (SEO fixes, reports, ideation). Bump in one place if quality needs it.
-const MODEL = "claude-sonnet-4-20250514";
+// Match the model the rest of the app actually uses (content-generator's
+// CLAUDE_MODEL = "claude-sonnet-4-5"). The previously hardcoded dated snapshot
+// isn't provisioned on every account, which silently failed extraction.
+// Overridable via env without a code change.
+const MODEL = process.env.KNOWLEDGE_MODEL || "claude-sonnet-4-5";
 
 // Cap the document text fed to the model so a huge upload can't blow up cost
 // or the context window. ~24k chars ≈ 6k tokens — plenty for a brief or
