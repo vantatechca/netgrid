@@ -27,7 +27,7 @@ import {
   COMPLIANCE_PHRASE_IDS,
   PLACEMENT_DISTRIBUTION,
 } from "../libraries/compliance-phrases";
-import { canonForSubNiche, ALL_COMPOUNDS, GLP1_COMPOUNDS } from "../libraries/compounds";
+import { COMPOUND_CANON, ALL_COMPOUNDS, PEPTIDE_COMPOUNDS, GLP1_COMPOUNDS } from "../libraries/compounds";
 import {
   defaultStrictness,
   isSkeletonCompatibleWithCadence,
@@ -591,29 +591,47 @@ function pickWordBand(
 
 // ─── Phase 13: Compounds ───────────────────────────────────────────────────
 
-function pickCompounds(
+export function pickCompounds(
   rng: SeededRng,
   subNiche: SubNicheId,
 ): { primary: string[]; secondary: string[] } {
-  const canon = canonForSubNiche(subNiche);
+  // Peptide sub-niches (1-13) must NEVER draw cross-niche topic terms.
+  // ALL_COMPOUNDS now includes the non-peptide niche canons (gambling,
+  // web_dev, roofing, etc.), so scope every broad/padding fallback to
+  // peptide compounds for peptide sub-niches.
+  const isPeptide = subNiche <= 13;
+  const broadPool = isPeptide ? PEPTIDE_COMPOUNDS : ALL_COMPOUNDS;
+
+  const canon = COMPOUND_CANON[subNiche];
+
+  // Every SubNicheId has a canon entry, but with `noUncheckedIndexedAccess`
+  // the index access is typed as possibly-undefined. Guard it: if it's ever
+  // missing, fall back to a straight broad-pool draw so we still return
+  // valid compounds.
+  if (!canon) {
+    const fbPrimary = pickN(rng, [...broadPool], 2);
+    const fbSecondary = pickN(
+      rng,
+      broadPool.filter((c) => !fbPrimary.includes(c)),
+      4,
+    );
+    return { primary: fbPrimary, secondary: fbSecondary };
+  }
 
   // Pool for primary
   let primaryPool: string[];
   if (canon.mode === "broad") {
     if (canon.adjacent.includes("news_driven_lean_glp1")) {
       primaryPool = [...GLP1_COMPOUNDS];
-    } else if (canon.adjacent.includes("any") || canon.adjacent.includes("any_common")) {
-      primaryPool = [...ALL_COMPOUNDS];
     } else {
-      primaryPool = [...ALL_COMPOUNDS];
+      primaryPool = [...broadPool];
     }
   } else {
     primaryPool = [...canon.primary];
   }
 
   if (primaryPool.length < 2) {
-    // Fall through to global canon
-    primaryPool = [...ALL_COMPOUNDS];
+    primaryPool = [...broadPool];
   }
 
   const primary = pickN(rng, primaryPool, 2);
@@ -621,7 +639,7 @@ function pickCompounds(
   // Secondary pool excludes primary picks
   let secondaryPool: string[];
   if (canon.mode === "broad") {
-    secondaryPool = ALL_COMPOUNDS.filter((c) => !primary.includes(c));
+    secondaryPool = broadPool.filter((c) => !primary.includes(c));
   } else {
     const named = new Set<string>();
     canon.primary.forEach((c) => named.add(c));
@@ -640,8 +658,8 @@ function pickCompounds(
   }
 
   if (secondaryPool.length < 4) {
-    // Pad with global canon
-    const padding = ALL_COMPOUNDS.filter(
+    // Pad from the niche-scoped pool — peptide blogs pad with peptides only.
+    const padding = broadPool.filter(
       (c) => !primary.includes(c) && !secondaryPool.includes(c),
     );
     while (secondaryPool.length < 4 && padding.length > 0) {
@@ -653,7 +671,7 @@ function pickCompounds(
 
   const secondary = pickN(rng, secondaryPool, Math.min(4, secondaryPool.length));
   while (secondary.length < 4) {
-    secondary.push(ALL_COMPOUNDS[0]);
+    secondary.push(broadPool[0]);
   }
 
   return { primary, secondary };
