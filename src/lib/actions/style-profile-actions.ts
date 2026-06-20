@@ -6,15 +6,20 @@ import { eq } from "drizzle-orm";
 import {
   assignProfile,
   buildNetworkState,
+  pickCompounds,
 } from "@/lib/content/assignment/algorithm";
+import { SeededRng } from "@/lib/content/assignment/draw-helpers";
+import { PEPTIDE_COMPOUNDS } from "@/lib/content/libraries/compounds";
+import { NICHES, UNIVERSAL_NICHE_KEY, PEPTIDES_NICHE_KEY } from "@/lib/content/libraries/niches";
 import type {
   CompliancePhraseId,
   QuirkId,
   StyleProfile,
+  SubNicheId,
   TemplateId,
 } from "@/lib/content/types";
 import { normalizeNicheKey } from "@/lib/services/content-generator";
-import { NICHES, UNIVERSAL_NICHE_KEY } from "@/lib/content/libraries/niches";
+
 
 /**
  * Convert a DB row → in-memory StyleProfile shape. Array fields come back as
@@ -223,4 +228,50 @@ export async function reassignProfile(
       message: err instanceof Error ? err.message : "Reassignment failed",
     };
   }
+}
+/**
+ * One-time repair: rewrite primary/secondary compounds for any peptide
+ * profile that contains a non-peptide term (TypeScript, insurance claim,
+ * etc.) leaked from the old ALL_COMPOUNDS pool. Regenerates ONLY the two
+ * compound arrays via the now peptide-scoped pickCompounds — voice,
+ * skeleton, cadence, quirks, everything else is left untouched.
+ * Idempotent: a clean row is skipped, so it's safe to re-run.
+ */
+export async function repairPeptideCompounds(): Promise<{
+  scanned: number;
+  repaired: number;
+  sample: string[];
+}> {
+  const peptideSet = new Set<string>(PEPTIDE_COMPOUNDS);
+  const rows = await db
+    .select()
+    .from(styleProfiles)
+    .where(eq(styleProfiles.nicheKey, PEPTIDES_NICHE_KEY));
+
+  let repaired = 0;
+  const sample: string[] = [];
+
+  for (const row of rows) {
+    const all = [
+      ...(row.primaryCompounds ?? []),
+      ...(row.secondaryCompounds ?? []),
+    ];
+    // Already clean — every stored compound is a real peptide term.
+    if (all.length > 0 && all.every((c) => peptideSet.has(c))) continue;
+
+    const rng = new SeededRng(`${row.assignmentSeed ?? row.blogId}:compounds:v2`);
+    const { primary, secondary } = pickCompounds(rng, row.subNicheId as SubNicheId);
+
+    await db
+      .update(styleProfiles)
+      .set({ primaryCompounds: primary, secondaryCompounds: secondary })
+      .where(eq(styleProfiles.blogId, row.blogId));
+
+    if (sample.length < 8) {
+      sample.push(`${row.blogId} (sub ${row.subNicheId}): ${primary.join("+")} / ${secondary.join(", ")}`);
+    }
+    repaired++;
+  }
+
+  return { scanned: rows.length, repaired, sample };
 }
