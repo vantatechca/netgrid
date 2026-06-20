@@ -332,7 +332,27 @@ export const ALL_COMPOUNDS: readonly string[] = (() => {
   }
   return Array.from(set);
 })();
-
+/**
+ * Compounds drawn ONLY from the peptide sub-niches (1-13). Peptide profiles
+ * use this instead of ALL_COMPOUNDS so they never pull cross-niche topic
+ * terms (TypeScript, NFL betting, insurance claim, etc.) that entered
+ * ALL_COMPOUNDS once the non-peptide niches (14-33) were added.
+ */
+export const PEPTIDE_COMPOUNDS: readonly string[] = (() => {
+  const set = new Set<string>();
+  for (let id = 1; id <= 13; id++) {
+    const entry = COMPOUND_CANON[id as SubNicheId];
+    if (!entry) continue;
+    entry.primary.forEach((c) => set.add(c));
+    entry.adjacent.forEach((c) => {
+      if (c === "any" || c === "any_common" || c === "news_driven_lean_glp1" || c === "6_compound_stacks") {
+        return;
+      }
+      set.add(c);
+    });
+  }
+  return Array.from(set);
+})();
 /** Sub-niches that lean toward GLP-1 news (for sub-niche 10's "news driven" mode). */
 export const GLP1_COMPOUNDS: readonly string[] = [
   "Semaglutide",
