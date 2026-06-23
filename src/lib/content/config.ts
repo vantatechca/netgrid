@@ -27,4 +27,4 @@ export const GLOBAL_WORD_BAND_MIN = 800;
  * up to MAX × 1.10 as a soft-trim zone before flagging as a regenerate
  * candidate.
  */
-export const GLOBAL_WORD_BAND_MAX = 1500;
+export const GLOBAL_WORD_BAND_MAX = 1000;

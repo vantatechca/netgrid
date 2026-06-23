@@ -15,15 +15,18 @@ import {
   generateHeroImage,
 } from "@/lib/services/image-generator";
 
-// Match the model used elsewhere in the project.
-const CLAUDE_MODEL = "claude-sonnet-4-5";
+// Haiku 4.5 — chosen for cost: ~3x cheaper output than Sonnet, which dominates
+// per-post cost (the article body is ~90% of the bill). 200K context / 64K max
+// output is far more than this generator needs (≤4096 tokens/post).
+// const CLAUDE_MODEL = "claude-haiku-4-5";
+const CLAUDE_MODEL = "claude-haiku-4-5";
 
-// Sonnet 4.5 pricing — per-token (USD), not per-1K. Verify current rates at
+// Haiku 4.5 pricing — per-token (USD), not per-1K. Verify current rates at
 // https://www.anthropic.com/pricing before relying on cost reporting.
-// As of writing: $3 / 1M input tokens, $15 / 1M output tokens.
+// As of writing: $1 / 1M input tokens, $5 / 1M output tokens.
 const PRICING = {
-  inputPerToken: 0.000003,
-  outputPerToken: 0.000015,
+  inputPerToken: 0.000001,
+  outputPerToken: 0.000005,
 };
 
 // Network-wide word-count policy. Single source of truth lives in
@@ -712,14 +715,22 @@ function repairTruncatedJson(text: string): string {
     return text;
   }
 
-  // Prefer truncating at the last safe object-level comma boundary.
+  // Decide where to cut.
   let result: string;
-  if (lastSafeBoundary > 0) {
+  if (inString) {
+    // Truncated mid-string-value — the common case for a long `content`
+    // field. Keep EVERYTHING and just close the open string. Rolling back to
+    // the previous complete field (lastSafeBoundary) here would discard the
+    // whole partial value; for the {title, content} envelope that means
+    // dropping the entire article body and surfacing only the title (the
+    // "missing content (keys: title)" failure). A partial body is recoverable
+    // (sanitize + capWordCount clean it up); an empty one is not.
+    result = text + '"';
+  } else if (lastSafeBoundary > 0) {
+    // Truncated cleanly between fields — roll back to the last complete pair.
     result = text.substring(0, lastSafeBoundary);
   } else {
     result = text;
-    // Close any in-progress string.
-    if (inString) result += '"';
   }
 
   // Recount open brackets at the truncated position and close them.
@@ -2370,17 +2381,19 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
     if (internalLinksClause) {
       user = user + internalLinksClause;
     }
-    // Profile blogs may target word bands up to 3000 words. Schema C (FAQ-
-    // rich) and Schema D (listicle) include extra structured arrays beyond
-    // the main content, so we budget generously: ~3.0 tokens/word covers
-    // prose + JSON envelope + nested arrays + HTML tags + extra safety
-    // margin against unicode-heavy content (peptide compound names, citations
-    // with accents, etc. all cost more tokens per char). Cap at 8192 —
-    // Sonnet 4.5's max output. The strict word-count directive in the
-    // system prompt now also tells Claude to stay under the ceiling rather
-    // than hit it exactly, which together with the bigger budget eliminates
-    // mid-string truncation for almost all posts.
-    maxTokens = Math.min(8192, Math.round(opts.styleProfile.wordBandMax * 3.0));
+    // max_tokens must comfortably fit a COMPLETE post + JSON envelope, or the
+    // response truncates mid-`content` and the salvage path can only recover
+    // the title (the "missing content (keys: title)" failure). It does NOT
+    // drive cost — billing is on tokens actually generated, and the model
+    // stops on its own when the article is done; the real cost lever is the
+    // word cap (the prompt target + capWordCount below). A too-LOW budget is
+    // the expensive case: it forces truncation, wasted retries, and re-ideation.
+    // French/accented content tokenizes ~2x heavier than English, so a 1000-word
+    // post can run ~2800+ tokens — budget ~3.2 tokens/word with a 3000 floor.
+    // Clamp the band to the global ceiling so an un-migrated profile (still
+    // 1500) doesn't request a needlessly large budget.
+    const effectiveMax = Math.min(opts.styleProfile.wordBandMax, MAX_WORDS);
+    maxTokens = Math.min(4096, Math.max(3000, Math.round(effectiveMax * 3.2)));
   } else {
     system = buildSystemPrompt(opts) + languageDirective + knowledgeContext + SEO_QUALITY_DIRECTIVE;
     user = buildUserPrompt(opts);
@@ -2390,7 +2403,10 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
     if (internalLinksClause) {
       user = user + internalLinksClause;
     }
-    maxTokens = 4000;
+    // Legacy (non-profile) path targets MAX_WORDS too. Same ~3.2 tokens/word
+    // completeness budget as the profile path (see note above) so French /
+    // accented posts never truncate. Cost is bounded by the word cap, not this.
+    maxTokens = Math.min(4096, Math.max(3000, Math.round(MAX_WORDS * 3.2)));
   }
 
     // 1. Generate — with ONE shape-retry on missing content. First attempt
@@ -2508,8 +2524,20 @@ The "content" field is the full HTML article body — at least ${MIN_WORDS} word
   // title) — clears the "duplicate heading texts" audit warning.
   body = dedupeHeadings(body, parsed.title ?? "");
 
+  // Hard-cap article length on BOTH paths. The prompt + max_tokens keep
+  // Claude near the target, but it still occasionally overshoots; trimming
+  // here guarantees the published word count stays within the band (the
+  // 1262-word posts came from the profile path, which previously skipped this
+  // cap and relied on the scrubber, which only flags — never trims). Cap
+  // BEFORE the scrubber so any bottom-placed compliance phrase it appends is
+  // never cut off.
+  const capMax =
+    usingProfile && opts.styleProfile
+      ? Math.min(opts.styleProfile.wordBandMax, MAX_WORDS)
+      : MAX_WORDS;
+  body = capWordCount(body, capMax);
+
   if (!usingProfile) {
-    body = capWordCount(body, MAX_WORDS);
     const wordCount = countWordsInHtml(body);
     if (wordCount < MIN_WORDS) {
       throw new Error(

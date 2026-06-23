@@ -10,7 +10,8 @@
     "lint": "next lint",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
-    "db:seed": "cross-env NODE_OPTIONS=--dns-result-order=ipv4first tsx src/lib/db/seed.ts"
+    "db:seed": "cross-env NODE_OPTIONS=--dns-result-order=ipv4first tsx src/lib/db/seed.ts",
+    "db:repair-compounds": "cross-env NODE_OPTIONS=--dns-result-order=ipv4first tsx src/lib/db/repair-compounds.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.88.0",

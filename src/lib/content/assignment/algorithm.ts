@@ -27,7 +27,7 @@ import {
   COMPLIANCE_PHRASE_IDS,
   PLACEMENT_DISTRIBUTION,
 } from "../libraries/compliance-phrases";
-import { COMPOUND_CANON, ALL_COMPOUNDS, PEPTIDE_COMPOUNDS, GLP1_COMPOUNDS } from "../libraries/compounds";
+import { COMPOUND_CANON, ALL_COMPOUNDS, PEPTIDE_COMPOUNDS, GLP1_COMPOUNDS, canonForSubNiche } from "../libraries/compounds";
 import {
   defaultStrictness,
   isSkeletonCompatibleWithCadence,
@@ -600,23 +600,23 @@ export function pickCompounds(
   // web_dev, roofing, etc.), so scope every broad/padding fallback to
   // peptide compounds for peptide sub-niches.
   const isPeptide = subNiche <= 13;
-  const broadPool = isPeptide ? PEPTIDE_COMPOUNDS : ALL_COMPOUNDS;
 
-  const canon = COMPOUND_CANON[subNiche];
+  // Resolve the canon via canonForSubNiche — NOT a direct COMPOUND_CANON
+  // index. The per-niche sub-divisions (sub-niche IDs 34-90) carry no own
+  // canon entry; they inherit their parent niche's canon. Indexing
+  // COMPOUND_CANON[subNiche] directly returned undefined for those, which
+  // dropped into the broad ALL_COMPOUNDS fallback and leaked cross-niche
+  // terms (e.g. "NFL betting" on a roofing blog). Since ~3 of every 4
+  // blogs in a niche land on a sub-division, this is what made the stored
+  // primary/secondary compounds unrelated to the client's actual niche.
+  const canon = canonForSubNiche(subNiche);
 
-  // Every SubNicheId has a canon entry, but with `noUncheckedIndexedAccess`
-  // the index access is typed as possibly-undefined. Guard it: if it's ever
-  // missing, fall back to a straight broad-pool draw so we still return
-  // valid compounds.
-  if (!canon) {
-    const fbPrimary = pickN(rng, [...broadPool], 2);
-    const fbSecondary = pickN(
-      rng,
-      broadPool.filter((c) => !fbPrimary.includes(c)),
-      4,
-    );
-    return { primary: fbPrimary, secondary: fbSecondary };
-  }
+  // Niche-scoped broad pool. For non-peptide niches, build the pool from
+  // THIS niche's own canon (primary + adjacent) so any broad-mode draw or
+  // padding stays on-topic instead of pulling from the whole cross-niche
+  // universe. Peptides keep their dedicated peptide-only pool.
+  const nicheScopedPool = nicheScopedCompoundPool(canon);
+  const broadPool = isPeptide ? PEPTIDE_COMPOUNDS : nicheScopedPool;
 
   // Pool for primary
   let primaryPool: string[];
@@ -670,11 +670,49 @@ export function pickCompounds(
   }
 
   const secondary = pickN(rng, secondaryPool, Math.min(4, secondaryPool.length));
-  while (secondary.length < 4) {
-    secondary.push(broadPool[0]);
+  // Last-ditch top-up only if the niche-scoped pool was too thin to reach 4.
+  // Guard against an empty pool so we never push `undefined`.
+  while (secondary.length < 4 && broadPool.length > 0) {
+    const next = broadPool.find((c) => !secondary.includes(c)) ?? broadPool[0];
+    secondary.push(next);
   }
 
   return { primary, secondary };
+}
+
+/**
+ * Flatten a single canon entry into its named compound terms (primary +
+ * adjacent), dropping the directive tokens ("any", "any_common", etc.).
+ * Used to keep broad-mode draws and secondary padding scoped to the blog's
+ * OWN niche rather than the whole cross-niche universe.
+ */
+/**
+ * The full set of compound terms that are legitimately on-topic for a given
+ * sub-niche. Used by the repair action to detect profiles whose stored
+ * compounds leaked in from other niches (the pre-fix bug) so it can rewrite
+ * only the contaminated ones. Peptide sub-niches (1-13) are valid against the
+ * dedicated peptide pool; everything else against its own niche canon.
+ */
+export function allowedCompoundsForSubNiche(subNiche: SubNicheId): Set<string> {
+  if (subNiche <= 13) return new Set(PEPTIDE_COMPOUNDS);
+  return new Set(nicheScopedCompoundPool(canonForSubNiche(subNiche)));
+}
+
+function nicheScopedCompoundPool(canon: { primary: string[]; adjacent: string[] }): string[] {
+  const set = new Set<string>();
+  canon.primary.forEach((c) => set.add(c));
+  for (const adj of canon.adjacent) {
+    if (
+      adj === "any" ||
+      adj === "any_common" ||
+      adj === "news_driven_lean_glp1" ||
+      adj === "6_compound_stacks"
+    ) {
+      continue;
+    }
+    set.add(adj);
+  }
+  return Array.from(set);
 }
 
 // ─── Compile + Hamming reroll ──────────────────────────────────────────────
@@ -782,8 +820,14 @@ export function assignProfile(
   const compliancePlacement = pickPlacement(rng, network, scrubberStrictness);
   // Phase 11
   const wordBand = pickWordBand(rng, cadenceId, structuralPool);
-  // Phase 13
-  const { primary, secondary } = pickCompounds(rng, subNicheId);
+  // Phase 13. Only niches with a curated subject canon get compounds. The
+  // universal fallback (unregistered client niches) has useSubjectCanon=false
+  // — it has no hand-curated terms, so leave its compounds empty and let the
+  // blog's free-text niche label carry topical context downstream instead of
+  // injecting unrelated cross-niche terms.
+  const { primary, secondary } = niche.useSubjectCanon
+    ? pickCompounds(rng, subNicheId)
+    : { primary: [], secondary: [] };
 
   let profile = compose(blogId, nicheKey, {
     subNicheId,

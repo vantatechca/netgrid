@@ -7,10 +7,11 @@ import {
   assignProfile,
   buildNetworkState,
   pickCompounds,
+  allowedCompoundsForSubNiche,
 } from "@/lib/content/assignment/algorithm";
 import { SeededRng } from "@/lib/content/assignment/draw-helpers";
 import { PEPTIDE_COMPOUNDS } from "@/lib/content/libraries/compounds";
-import { NICHES, UNIVERSAL_NICHE_KEY, PEPTIDES_NICHE_KEY } from "@/lib/content/libraries/niches";
+import { NICHES, UNIVERSAL_NICHE_KEY, PEPTIDES_NICHE_KEY, nicheConfig } from "@/lib/content/libraries/niches";
 import type {
   CompliancePhraseId,
   QuirkId,
@@ -274,4 +275,76 @@ export async function repairPeptideCompounds(): Promise<{
   }
 
   return { scanned: rows.length, repaired, sample };
+}
+
+/**
+ * Network-wide repair: rewrite primary/secondary compounds for ANY profile —
+ * peptide or otherwise — whose stored compounds drifted off its niche. This
+ * fixes the pre-fix bug where the per-niche sub-divisions (sub-niche IDs
+ * 34-90) had no direct canon entry and fell through to a broad ALL_COMPOUNDS
+ * draw, so a roofing/loans/gambling blog could end up tagged with unrelated
+ * terms like "TypeScript" or "NFL betting".
+ *
+ * For each profile:
+ *   - Niches without a subject canon (the universal fallback) should carry NO
+ *     compounds — any stored ones are cleared.
+ *   - Otherwise, if every stored compound is on-topic for the sub-niche, the
+ *     row is left untouched (idempotent — safe to re-run).
+ *   - Any contaminated row is recomputed via the now canon-correct
+ *     pickCompounds. Only the two compound arrays change; voice, skeleton,
+ *     cadence, quirks, word band, everything else is preserved.
+ */
+export async function repairProfileCompounds(): Promise<{
+  scanned: number;
+  repaired: number;
+  cleared: number;
+  sample: string[];
+}> {
+  const rows = await db.select().from(styleProfiles);
+
+  let repaired = 0;
+  let cleared = 0;
+  const sample: string[] = [];
+
+  for (const row of rows) {
+    const stored = [
+      ...(row.primaryCompounds ?? []),
+      ...(row.secondaryCompounds ?? []),
+    ];
+
+    // Niches with no curated subject canon (universal fallback) must carry no
+    // compounds. Clear any leftovers from the old broad-draw behaviour.
+    const niche = nicheConfig(row.nicheKey);
+    if (niche && !niche.useSubjectCanon) {
+      if (stored.length > 0) {
+        await db
+          .update(styleProfiles)
+          .set({ primaryCompounds: [], secondaryCompounds: [] })
+          .where(eq(styleProfiles.blogId, row.blogId));
+        cleared++;
+      }
+      continue;
+    }
+
+    const allowed = allowedCompoundsForSubNiche(row.subNicheId as SubNicheId);
+    // Already on-topic — every stored compound belongs to this niche.
+    if (stored.length > 0 && stored.every((c) => allowed.has(c))) continue;
+
+    const rng = new SeededRng(`${row.assignmentSeed ?? row.blogId}:compounds:v2`);
+    const { primary, secondary } = pickCompounds(rng, row.subNicheId as SubNicheId);
+
+    await db
+      .update(styleProfiles)
+      .set({ primaryCompounds: primary, secondaryCompounds: secondary })
+      .where(eq(styleProfiles.blogId, row.blogId));
+
+    if (sample.length < 8) {
+      sample.push(
+        `${row.blogId} [${row.nicheKey} / sub ${row.subNicheId}]: ${primary.join("+")} / ${secondary.join(", ")}`,
+      );
+    }
+    repaired++;
+  }
+
+  return { scanned: rows.length, repaired, cleared, sample };
 }
