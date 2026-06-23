@@ -1483,35 +1483,51 @@ export function estimateImageCostUsd(): number {
 
 /**
  * Niche keys whose blogs publish in French regardless of TLD or vertical
- * config. Highest-priority override in postLanguageForDomain. Both
- * gambling sub-niches (sportsbook + online casino) are operator-locked
- * to French for the Quebec market.
+ * config. Highest-priority override in postLanguageForDomain. Both gambling
+ * sub-niches (sportsbook + online casino) are operator-locked to French for
+ * the Quebec market.
  */
 const FRENCH_ONLY_NICHE_KEYS = new Set(["gambling", "online_casino"]);
 
 /**
+ * Niche keys that mix English and French — each post is a clean single
+ * language, ~50/50 across the network (the "en_fr" behaviour). Checked
+ * before the .com → English rule so these niches stay bilingual even on a
+ * .com domain. real_estate is listed here because it has no vertical config
+ * of its own; without this it would fall through to the English default.
+ */
+const MIXED_LANGUAGE_NICHE_KEYS = new Set(["real_estate"]);
+
+/**
  * Language resolution, in priority order — first match wins:
- *   1. Niche in FRENCH_ONLY_NICHE_KEYS → ALWAYS French (gambling family).
- *   2. Domain ends in .com            → ALWAYS English (US / international).
- *   3. Otherwise                       → vertical's configured language
+ *   1. Niche in FRENCH_ONLY_NICHE_KEYS   → ALWAYS French (gambling family).
+ *   2. Niche in MIXED_LANGUAGE_NICHE_KEYS → en_fr coin-flip (overrides .com).
+ *   3. Domain ends in .com               → ALWAYS English (US / international).
+ *   4. Otherwise                         → vertical's configured language
  *      via resolvePostLanguage. en_fr verticals coin-flip per post; each
- *      post is single-language, never mixed.
+ *      post is single-language, never mixed within one post.
  */
 export function postLanguageForDomain(
   verticalLanguage: "en" | "fr" | "en_fr" | null | undefined,
   domain: string,
   niche?: string | null,
 ): "en" | "fr" {
-  // 1. Niche override — gambling family always French.
   const normalizedNiche = (niche || "")
     .trim()
     .toLowerCase()
     .replace(/[\s-]+/g, "_");
+
+  // 1. Niche override — gambling family always French.
   if (FRENCH_ONLY_NICHE_KEYS.has(normalizedNiche)) {
     return "fr";
   }
 
-  // 2. TLD override — .com forces English.
+  // 2. Niche override — bilingual niches coin-flip per post, even on .com.
+  if (MIXED_LANGUAGE_NICHE_KEYS.has(normalizedNiche)) {
+    return resolvePostLanguage("en_fr");
+  }
+
+  // 3. TLD override — .com forces English.
   const cleanDomain = (domain || "")
     .trim()
     .toLowerCase()
@@ -1522,7 +1538,7 @@ export function postLanguageForDomain(
     return "en";
   }
 
-  // 3. Default — vertical's configured language.
+  // 4. Default — vertical's configured language.
   return resolvePostLanguage(verticalLanguage);
 }
 
