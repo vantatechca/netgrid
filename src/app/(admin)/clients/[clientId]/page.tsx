@@ -27,8 +27,8 @@ import { BlogTable } from "@/components/blogs/blog-table";
 import { MessageThread } from "@/components/messages/message-thread";
 import { ClientForm } from "@/components/clients/client-form";
 import { KnowledgeBasePanel } from "@/components/clients/knowledge-base-panel";
+import { ClientSeoIssues } from "@/components/seo/client-seo-issues";
 import {
-  AlertTriangle,
   ArrowLeft,
   BarChart3,
   BookOpen,
@@ -37,7 +37,6 @@ import {
   Lock,
   MessageSquare,
   Pencil,
-  Wrench,
 } from "lucide-react";
 
 interface ClientDetailPageProps {
@@ -52,12 +51,6 @@ const statusVariant: Record<string, "default" | "secondary" | "destructive" | "o
   onboarding: "secondary",
   paused: "outline",
   churned: "destructive",
-};
-
-const severityVariant: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
-  critical: "destructive",
-  warning: "secondary",
-  notice: "outline",
 };
 
 function formatDate(d: Date | string | null): string {
@@ -499,62 +492,27 @@ export default async function ClientDetailPage({
 
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle>Open SEO Issues</CardTitle>
-                  <CardDescription>
-                    {issuesResult.total} unresolved issue{issuesResult.total === 1 ? "" : "s"}.
-                  </CardDescription>
-                </div>
-                {issuesResult.total > 0 && (
-                  <Link href={`/seo/fix-queue?clientId=${client.id}`}>
-                    <Button variant="outline" size="sm">
-                      <Wrench className="size-4" />
-                      Fix Queue
-                    </Button>
-                  </Link>
-                )}
-              </div>
+              <CardTitle>Open SEO Issues</CardTitle>
+              <CardDescription>
+                Issues across this client&apos;s sites. Fix auto-fixable ones
+                inline or all at once.
+              </CardDescription>
             </CardHeader>
             <CardContent>
-              {issuesResult.issues.length === 0 ? (
-                <p className="py-6 text-center text-sm text-muted-foreground">
-                  No open issues — nice.
-                </p>
-              ) : (
-                <div className="space-y-2">
-                  {issuesResult.issues.slice(0, 10).map((issue) => (
-                    <div
-                      key={issue.id}
-                      className="flex items-start gap-3 rounded-md border p-3"
-                    >
-                      <AlertTriangle className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-                      <div className="min-w-0 flex-1 space-y-1">
-                        <div className="flex items-center gap-2">
-                          <Badge variant={severityVariant[issue.severity] ?? "outline"}>
-                            {issue.severity}
-                          </Badge>
-                          <span className="text-xs text-muted-foreground">{issue.category}</span>
-                          <span className="truncate text-xs text-muted-foreground">
-                            {blogDomainById.get(issue.blogId) ?? ""}
-                          </span>
-                        </div>
-                        <p className="text-sm font-medium">{issue.title}</p>
-                        {issue.pageUrl && (
-                          <p className="truncate text-xs text-muted-foreground">
-                            {issue.pageUrl}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                  {issuesResult.issues.length > 10 && (
-                    <p className="pt-2 text-center text-xs text-muted-foreground">
-                      Showing first 10 of {issuesResult.total} issues.
-                    </p>
-                  )}
-                </div>
-              )}
+              <ClientSeoIssues
+                clientId={client.id}
+                total={issuesResult.total}
+                issues={issuesResult.issues.map((issue) => ({
+                  id: issue.id,
+                  blogId: issue.blogId,
+                  blogDomain: blogDomainById.get(issue.blogId) ?? "",
+                  severity: issue.severity,
+                  category: issue.category,
+                  title: issue.title,
+                  pageUrl: issue.pageUrl,
+                  autoFixable: issue.autoFixable ?? false,
+                }))}
+              />
             </CardContent>
           </Card>
         </TabsContent>
