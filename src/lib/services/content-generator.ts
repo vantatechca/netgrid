@@ -1328,6 +1328,19 @@ export function normalizeMetaDescription(
   return truncateToPx(d, DESC_FONT_PX, DESC_TARGET_PX);
 }
 
+/**
+ * Normalize the article EXCERPT (Shopify summary_html / WP excerpt). On many
+ * themes the excerpt is what renders as the <meta name="description"> when no
+ * explicit SEO description metafield is honored — so a long Claude-written
+ * excerpt leaks straight past the meta-description pixel policy. We cap it to
+ * the same strict-safe description budget so the rendered meta description
+ * stays under the 1000px audit limit regardless of how the theme sources it.
+ */
+export function normalizeExcerpt(raw: string | null | undefined): string {
+  const e = (raw || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+  return truncateToPx(e, DESC_FONT_PX, DESC_TARGET_PX);
+}
+
 // Hero-image URL generation lives in image-generator.ts. The composer here
 // also runs a small Claude call (summarizeArticleAsScene below) that turns
 // the freshly-written article body into a concrete photographic scene
@@ -2737,7 +2750,7 @@ The "content" field is the full HTML article body — at least ${MIN_WORDS} word
   return {
     title: parsed.title,
     content: body,
-    excerpt: parsed.excerpt || generateExcerpt(body),
+    excerpt: normalizeExcerpt(parsed.excerpt || generateExcerpt(body)),
     metaTitle: normalizeMetaTitle(parsed.metaTitle, parsed.title),
     metaDescription: normalizeMetaDescription(
       parsed.metaDescription,

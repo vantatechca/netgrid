@@ -8,6 +8,7 @@ import {
   hasH1,
   normalizeMetaTitle,
   normalizeMetaDescription,
+  normalizeExcerpt,
 } from "@/lib/services/content-generator";
 import {
   backfillPostSeo,
@@ -34,6 +35,7 @@ export interface BackfillPostResult {
   title: string | null;
   changedTitle: boolean;
   changedDescription: boolean;
+  changedExcerpt: boolean;
   changedH1: boolean;
   status: "updated" | "skipped" | "failed" | "would-update";
   message?: string;
@@ -134,6 +136,7 @@ export async function backfillBlogSeo(
       title: row.title,
       changedTitle: false,
       changedDescription: false,
+      changedExcerpt: false,
       changedH1: false,
       status: "skipped",
     };
@@ -156,6 +159,13 @@ export async function backfillBlogSeo(
       result.changedTitle = newMetaTitle !== (row.metaTitle ?? "");
       result.changedDescription =
         newMetaDescription !== (row.metaDescription ?? "");
+
+      // Cap the excerpt (summary_html) too — on many Shopify themes the
+      // excerpt is what renders as the meta description, so an over-long
+      // excerpt slips past the description pixel policy even when the
+      // description_tag itself is compliant.
+      const newExcerpt = normalizeExcerpt(row.excerpt ?? "");
+      result.changedExcerpt = newExcerpt !== (row.excerpt ?? "");
 
       // Read the live body and demote any H1s.
       const liveBody = await fetchLivePostBody(
@@ -180,6 +190,7 @@ export async function backfillBlogSeo(
       if (
         !result.changedTitle &&
         !result.changedDescription &&
+        !result.changedExcerpt &&
         !result.changedH1
       ) {
         result.status = "skipped";
@@ -205,6 +216,7 @@ export async function backfillBlogSeo(
           metaDescription: result.changedDescription
             ? newMetaDescription
             : undefined,
+          excerptHtml: result.changedExcerpt ? newExcerpt : undefined,
           focusKeyword,
         },
         shopifyBlogId,
@@ -224,6 +236,7 @@ export async function backfillBlogSeo(
         .set({
           metaTitle: newMetaTitle,
           metaDescription: newMetaDescription,
+          ...(result.changedExcerpt && { excerpt: newExcerpt }),
           ...(newBody !== undefined && { body: newBody }),
           updatedAt: new Date(),
         })
