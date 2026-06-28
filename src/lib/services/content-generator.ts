@@ -1938,6 +1938,23 @@ function insertHtmlAtMidpoint(html: string, snippet: string): string {
   );
 }
 
+/**
+ * Insert a snippet AFTER the first paragraph rather than before it. A "top"
+ * CTA used to be prepended as the literal first element of the body, which
+ * meant every body-derived field — the theme's meta description, the OG /
+ * Twitter descriptions, and the JSON-LD articleBody — opened with the CTA
+ * label (e.g. "Explore Now!") instead of real content. Slotting it after the
+ * opening paragraph keeps the CTA above the fold while leaving the article's
+ * first words clean for SEO. Falls back to prepend only when there's no
+ * paragraph to anchor to.
+ */
+function insertHtmlAfterFirstParagraph(html: string, snippet: string): string {
+  const match = /<\/p>/i.exec(html);
+  if (!match) return snippet + html;
+  const idx = match.index + match[0].length;
+  return html.slice(0, idx) + snippet + html.slice(idx);
+}
+
 /** Inject the client's CTA button at its configured position(s). */
 function injectCta(
   body: string,
@@ -1952,7 +1969,10 @@ function injectCta(
   let out = body;
   // Middle first, so the top/bottom buttons don't skew the midpoint math.
   if (positions.includes("middle")) out = insertHtmlAtMidpoint(out, button);
-  if (positions.includes("top")) out = button + out;
+  // "Top" goes after the opening paragraph, not before it — see
+  // insertHtmlAfterFirstParagraph for why (keeps the meta description / OG /
+  // schema from leading with the CTA label).
+  if (positions.includes("top")) out = insertHtmlAfterFirstParagraph(out, button);
   if (positions.includes("bottom")) out = out + button;
   return out;
 }
