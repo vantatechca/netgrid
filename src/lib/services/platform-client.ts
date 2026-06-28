@@ -46,7 +46,7 @@ function resolvePlatform(blog: PlatformBlog): Platform {
  * Build a ShopifyCreds object from a blog row, or return an error message
  * describing what's missing.
  */
-function buildShopifyCreds(
+export function buildShopifyCreds(
   blog: PlatformBlog,
 ):
   | { ok: true; creds: ShopifyCreds }

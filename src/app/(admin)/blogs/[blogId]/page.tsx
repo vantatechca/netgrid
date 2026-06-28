@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/card";
 import { CredentialDisplay } from "@/components/blogs/credential-display";
 import { WpConnectionTest } from "@/components/blogs/wp-connection-test";
+import { ThemeSeoButton } from "@/components/blogs/theme-seo-button";
 import { BlogForm } from "@/components/blogs/blog-form";
 import { BlogPostsPanel } from "@/components/blogs/blog-posts-panel";
 import { StyleProfilePanel } from "@/components/blogs/style-profile-panel";
@@ -241,7 +242,29 @@ export default async function BlogDetailPage({
               />
             </CardContent>
           </Card>
-        ) : (
+        ) : null}
+
+        {/* Theme SEO (Shopify only) */}
+        {isShopify ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <ShoppingBag className="size-4" />
+                Theme SEO
+              </CardTitle>
+              <CardDescription>
+                Push the OG article tags + JSON-LD schema into this store&apos;s
+                published theme. Requires the app&apos;s read_themes /
+                write_themes scopes.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ThemeSeoButton blogId={params.blogId} />
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {!isShopify ? (
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -254,7 +277,7 @@ export default async function BlogDetailPage({
               <CredentialDisplay label="Application Password" value={blog.wpAppPassword} />
             </CardContent>
           </Card>
-        )}
+        ) : null}
 
         {/* Posting Config */}
         <Card>

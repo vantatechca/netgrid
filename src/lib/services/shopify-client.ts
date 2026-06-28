@@ -7,7 +7,7 @@ import type {
 import { getClientCredentialsToken } from "./shopify-token-cache";
 import { compressImageDataUri } from "./image-compress";
 
-const DEFAULT_API_VERSION = "2024-07";
+export const DEFAULT_API_VERSION = "2024-07";
 const DEFAULT_TIMEOUT_MS = 15000;
 const PUBLISH_TIMEOUT_MS = 30000; // longer for image fetching
 
@@ -54,7 +54,7 @@ export interface ShopifyShop {
   plan_display_name: string;
 }
 
-function normalizeStoreUrl(storeUrl: string): string {
+export function normalizeStoreUrl(storeUrl: string): string {
   let url = storeUrl.trim().replace(/\/+$/, "");
   url = url.replace(/^https?:\/\//i, "");
   return url;
@@ -71,7 +71,7 @@ async function resolveAccessToken(creds: ShopifyCreds): Promise<string> {
   return token;
 }
 
-async function createClient(
+export async function createClient(
   creds: ShopifyCreds,
   apiVersion: string = DEFAULT_API_VERSION,
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
@@ -106,7 +106,7 @@ async function createClient(
   return client;
 }
 
-function formatError(error: unknown): string {
+export function formatError(error: unknown): string {
   if (axios.isAxiosError(error)) {
     const axiosErr = error as AxiosError<{
       errors?: string | Record<string, string[]>;
