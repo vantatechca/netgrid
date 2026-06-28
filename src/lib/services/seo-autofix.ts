@@ -5,6 +5,12 @@ import { eq } from "drizzle-orm";
 import { generateSeoFix } from "@/lib/services/claude-client";
 import * as wp from "@/lib/services/wp-client";
 import {
+  backfillPostSeo,
+  resolveShopifyBlogId,
+  type PlatformBlog,
+} from "@/lib/services/platform-client";
+import { scanBlog, type BlogDescriptor } from "@/lib/seo/scanner";
+import {
   truncateToPx,
   TITLE_FONT_PX,
   DESC_FONT_PX,
@@ -70,15 +76,170 @@ function classifyIssue(title: string):
   return "unknown";
 }
 
+/**
+ * Resolve the fix kind from the stored fixPayload.type first (set by the
+ * scanner), falling back to the title-text classifier. The Shopify scanner's
+ * issue titles differ from WordPress's ("Missing article excerpt" vs "Missing
+ * meta description"), so payload-type routing is what makes the queue
+ * platform-agnostic.
+ */
+function classifyFix(
+  issue: typeof seoIssues.$inferSelect,
+): ReturnType<typeof classifyIssue> {
+  const type = (issue.fixPayload as { type?: string } | null)?.type;
+  if (type === "shopify_meta_description" || type === "wp_meta_description") {
+    return "meta_description";
+  }
+  if (type === "shopify_meta_title" || type === "wp_meta_title") {
+    return "meta_title";
+  }
+  return classifyIssue(issue.title);
+}
+
+/** Build the platform-router blog shape from a DB row. */
+function blogToPlatformBlog(blog: typeof blogs.$inferSelect): PlatformBlog {
+  return {
+    platform: blog.platform,
+    wpUrl: blog.wpUrl,
+    wpUsername: blog.wpUsername,
+    wpAppPassword: blog.wpAppPassword,
+    seoPlugin: blog.seoPlugin,
+    shopifyAuthMode: blog.shopifyAuthMode,
+    shopifyStoreUrl: blog.shopifyStoreUrl,
+    shopifyAdminApiToken: blog.shopifyAdminApiToken,
+    shopifyClientId: blog.shopifyClientId,
+    shopifyClientSecret: blog.shopifyClientSecret,
+    shopifyBlogHandle: blog.shopifyBlogHandle,
+  };
+}
+
+/**
+ * Apply a Shopify SEO fix. Writes the global.title_tag / description_tag
+ * metafields (the values the theme renders) via the platform router —
+ * the same write path the bulk backfill uses, now reachable from the
+ * per-issue fix queue. The article id comes from the scanner's fixPayload.
+ */
+async function autoFixShopifyIssue(
+  issue: typeof seoIssues.$inferSelect,
+  blog: typeof blogs.$inferSelect,
+  niche: string,
+): Promise<AutoFixResult> {
+  const issueId = issue.id;
+  const payload = (issue.fixPayload ?? {}) as {
+    type?: string;
+    articleId?: number | string;
+    articleTitle?: string;
+    excerpt?: string;
+    pageUrl?: string;
+  };
+  const articleId = payload.articleId != null ? String(payload.articleId) : null;
+  if (!articleId) {
+    await markFailed(
+      issueId,
+      "Shopify fix is missing the article id — re-scan the blog to refresh the queue.",
+    );
+    return { issueId, applied: false, message: "Missing Shopify article id" };
+  }
+
+  const platformBlog = blogToPlatformBlog(blog);
+  const kind = classifyFix(issue);
+  const pageUrl = issue.pageUrl || payload.pageUrl || "";
+
+  try {
+    if (kind !== "meta_description" && kind !== "meta_title") {
+      return {
+        issueId,
+        applied: false,
+        message: `Auto-fix not implemented for Shopify: ${issue.title}`,
+      };
+    }
+
+    const issueType = kind === "meta_title" ? "meta_title" : "meta_description";
+    const newValue = await generateSeoFix({
+      niche,
+      blogDomain: blog.domain,
+      pageUrl,
+      pageTitle: payload.articleTitle || "",
+      pageContentExcerpt: payload.excerpt || "",
+      issueType,
+      issueDescription: issue.description || issue.title,
+    });
+    const cleaned = newValue.replace(/\s+/g, " ").trim();
+    const trimmed =
+      kind === "meta_title"
+        ? truncateToPx(cleaned, TITLE_FONT_PX, TITLE_TARGET_PX)
+        : truncateToPx(cleaned, DESC_FONT_PX, DESC_TARGET_PX);
+
+    // Resolve the numeric blog id once so updateArticle hits the right blog.
+    const shopifyBlogId = (await resolveShopifyBlogId(platformBlog))?.blogId;
+    const push = await backfillPostSeo(
+      platformBlog,
+      articleId,
+      kind === "meta_title"
+        ? { metaTitle: trimmed }
+        : // Write both the description_tag metafield (what renders) AND the
+          // excerpt (summary_html) — the scanner flags a missing excerpt, so
+          // setting it is what makes the fix clear on the next re-scan.
+          { metaDescription: trimmed, excerptHtml: trimmed },
+      shopifyBlogId,
+    );
+    if (!push.success) {
+      await markFailed(issueId, push.message);
+      return { issueId, applied: false, message: push.message };
+    }
+    await markApplied(issueId, `${issueType}: ${trimmed}`);
+    return {
+      issueId,
+      applied: true,
+      message: `${issueType} set on Shopify article ${articleId}`,
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    await markFailed(issueId, message);
+    return { issueId, applied: false, message };
+  }
+}
+
 export async function rescanBlogScore(
   blogId: string,
 ): Promise<{ previousScore: number | null; newScore: number | null; delta: number | null; error?: string }> {
   const [blog] = await db.select().from(blogs).where(eq(blogs.id, blogId)).limit(1);
-  if (!blog || !blog.wpUrl) {
-    return { previousScore: null, newScore: null, delta: null, error: "Blog not found or missing URL" };
+  if (!blog) {
+    return { previousScore: null, newScore: null, delta: null, error: "Blog not found" };
   }
 
   const previousScore = blog.currentSeoScore;
+
+  // Shopify blogs have no WordPress URL for PageSpeed — recompute the score
+  // from the content scanner instead (same path the SEO scan uses).
+  if (blog.platform === "shopify") {
+    const descriptor: BlogDescriptor = {
+      id: blog.id,
+      platform: blog.platform,
+      domain: blog.domain,
+      shopifyStoreUrl: blog.shopifyStoreUrl,
+      shopifyAdminApiToken: blog.shopifyAdminApiToken,
+      shopifyAuthMode: blog.shopifyAuthMode,
+      shopifyClientId: blog.shopifyClientId,
+      shopifyClientSecret: blog.shopifyClientSecret,
+      shopifyBlogHandle: blog.shopifyBlogHandle,
+    };
+    const result = await scanBlog(descriptor);
+    const newScore = result.overallScore;
+    await db
+      .update(blogs)
+      .set({ currentSeoScore: newScore, lastSeoScanAt: new Date(), updatedAt: new Date() })
+      .where(eq(blogs.id, blogId));
+    return {
+      previousScore,
+      newScore,
+      delta: previousScore !== null ? newScore - previousScore : null,
+    };
+  }
+
+  if (!blog.wpUrl) {
+    return { previousScore, newScore: null, delta: null, error: "Blog missing WP URL" };
+  }
   const psi = await runPageSpeedAudit(blog.wpUrl, "mobile");
   const newScore = psi.scores.seo;
 
@@ -132,10 +293,6 @@ export async function autoFixIssue(issueId: string): Promise<AutoFixResult> {
     await markFailed(issueId, "Blog not found");
     return { issueId, applied: false, message: "Blog not found" };
   }
-  if (!blog.wpUrl || !blog.wpUsername || !blog.wpAppPassword) {
-    await markFailed(issueId, "Blog WP credentials missing");
-    return { issueId, applied: false, message: "Blog credentials missing" };
-  }
 
   const [client] = await db
     .select()
@@ -143,6 +300,17 @@ export async function autoFixIssue(issueId: string): Promise<AutoFixResult> {
     .where(eq(clients.id, issue.clientId))
     .limit(1);
   const niche = client?.niche || "general";
+
+  // Shopify fixes run through the platform router (writes the SEO metafields),
+  // not the WordPress REST path below.
+  if (blog.platform === "shopify") {
+    return autoFixShopifyIssue(issue, blog, niche);
+  }
+
+  if (!blog.wpUrl || !blog.wpUsername || !blog.wpAppPassword) {
+    await markFailed(issueId, "Blog WP credentials missing");
+    return { issueId, applied: false, message: "Blog credentials missing" };
+  }
 
   const post = await wp.findPostByUrl(
     blog.wpUrl,
@@ -155,7 +323,7 @@ export async function autoFixIssue(issueId: string): Promise<AutoFixResult> {
     return { issueId, applied: false, message: "Post not found" };
   }
 
-  const kind = classifyIssue(issue.title);
+  const kind = classifyFix(issue);
   const pageTitle = post.title?.rendered || "";
   const pageExcerpt = stripHtml(post.excerpt?.rendered || post.content?.rendered || "").slice(
     0,

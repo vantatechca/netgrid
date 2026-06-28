@@ -12,6 +12,8 @@ import {
   TITLE_MIN_PX,
   DESC_MIN_PX,
 } from "@/lib/seo/text-width";
+import { fetchRecentArticles } from "@/lib/services/shopify-client";
+import { buildShopifyCreds } from "@/lib/services/platform-client";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -64,9 +66,14 @@ export interface BlogDescriptor {
   wpUsername?: string | null;
   wpAppPassword?: string | null;
   seoPlugin?: string | null;
-  // Shopify
+  // Shopify (both auth modes supported — legacy token + Dev Dashboard
+  // client_credentials, which is what new blogs use).
   shopifyStoreUrl?: string | null;
   shopifyAdminApiToken?: string | null;
+  shopifyAuthMode?: "legacy_token" | "client_credentials" | null;
+  shopifyClientId?: string | null;
+  shopifyClientSecret?: string | null;
+  shopifyBlogHandle?: string | null;
 }
 
 // ─── Scoring constants ───────────────────────────────────────────────────────
@@ -334,28 +341,32 @@ interface ShopifyArticle {
 }
 
 async function fetchShopifyArticles(blog: BlogDescriptor, maxArticles = 30): Promise<ShopifyArticle[]> {
-  const storeUrl = (blog.shopifyStoreUrl || `https://${blog.domain}`).replace(/\/$/, "");
-  const token = blog.shopifyAdminApiToken;
-  // API version + blog id are no longer per-blog configurable. Hardcode
-  // the default version and use the store-wide articles endpoint, which
-  // auto-discovers the blog.
-  const apiVersion = "2024-07";
-
-  if (!token) return [];
-
-  const endpoint = `${storeUrl}/admin/api/${apiVersion}/articles.json?limit=${maxArticles}`;
+  // Route through the shared Shopify client so BOTH auth modes work — the old
+  // raw-token fetch returned nothing for the client_credentials (Dev
+  // Dashboard) blogs that make up the bulk of the network, so Shopify scans
+  // silently found zero articles.
+  const built = buildShopifyCreds({
+    platform: "shopify",
+    shopifyAuthMode: blog.shopifyAuthMode,
+    shopifyStoreUrl: blog.shopifyStoreUrl,
+    shopifyAdminApiToken: blog.shopifyAdminApiToken,
+    shopifyClientId: blog.shopifyClientId,
+    shopifyClientSecret: blog.shopifyClientSecret,
+    shopifyBlogHandle: blog.shopifyBlogHandle,
+  });
+  if (!built.ok) return [];
 
   try {
-    const res = await fetch(endpoint, {
-      headers: {
-        "X-Shopify-Access-Token": token,
-        "Content-Type": "application/json",
-      },
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!res.ok) return [];
-    const data = await res.json();
-    return (data.articles as ShopifyArticle[]) || [];
+    // Fetch just the most recent `maxArticles` in one request (vs. paginating
+    // the whole blog). ShopifyArticle from the client carries everything the
+    // analyzer reads: id, handle, title, body_html, summary_html.
+    const articles = await fetchRecentArticles(
+      built.creds,
+      undefined,
+      undefined,
+      maxArticles,
+    );
+    return articles as ShopifyArticle[];
   } catch {
     return [];
   }
@@ -402,7 +413,16 @@ function analyzeShopifyArticle(blog: BlogDescriptor, article: ShopifyArticle): R
       severity: "warning",
       title: "Missing article excerpt",
       description: "Shopify uses the excerpt as meta description. Add one for better CTR.",
-      autoFixable: false,
+      // Auto-fixable: writes the global.description_tag metafield (the value
+      // the theme actually renders as the meta description) via updateArticle.
+      autoFixable: true,
+      fixPayload: {
+        type: "shopify_meta_description",
+        articleId: article.id,
+        articleTitle: article.title,
+        excerpt: textContent.slice(0, 600),
+        pageUrl: url,
+      },
     });
   }
 

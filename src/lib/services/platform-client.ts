@@ -255,6 +255,8 @@ export async function backfillPostSeo(
     bodyHtml?: string;
     metaTitle?: string;
     metaDescription?: string;
+    /** Shopify only — sets the article excerpt (summary_html). Ignored on WP. */
+    excerptHtml?: string;
     focusKeyword?: string;
   },
   shopifyBlogId?: string,
@@ -274,6 +276,7 @@ export async function backfillPostSeo(
       bodyHtml: input.bodyHtml,
       metaTitle: input.metaTitle,
       metaDescription: input.metaDescription,
+      excerptHtml: input.excerptHtml,
       blogHandle: resolved.blogHandle ?? undefined,
     });
   }
