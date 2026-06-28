@@ -1051,6 +1051,8 @@ export async function updateArticle(
     bodyHtml?: string;
     metaTitle?: string;
     metaDescription?: string;
+    /** Sets the article excerpt (summary_html) — Shopify's teaser/fallback meta. */
+    excerptHtml?: string;
     blogHandle?: string;
   },
   apiVersion: string = DEFAULT_API_VERSION,
@@ -1083,6 +1085,9 @@ export async function updateArticle(
 
     const article: Record<string, unknown> = { id: Number(articleId) };
     if (input.bodyHtml !== undefined) article.body_html = input.bodyHtml;
+    if (input.excerptHtml !== undefined && input.excerptHtml.trim()) {
+      article.summary_html = input.excerptHtml.trim();
+    }
     if (metafields.length > 0) article.metafields = metafields;
 
     const res = await client.put<{ article: ShopifyArticle }>(

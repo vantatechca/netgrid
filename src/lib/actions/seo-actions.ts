@@ -277,3 +277,179 @@ export async function executeApprovedFix(issueId: string) {
     return { success: false, error: errorMsg };
   }
 }
+
+// ─── Consolidated SEO tracking (per client / per site) ───────────────────────
+
+export interface SeoSiteSummary {
+  blogId: string;
+  domain: string;
+  platform: "wordpress" | "shopify";
+  score: number | null;
+  lastScanAt: Date | null;
+  openIssues: number;
+  autoFixableOpen: number;
+  criticalOpen: number;
+  fixed: number;
+  failed: number;
+}
+
+export interface SeoClientSummary {
+  clientId: string;
+  clientName: string;
+  status: string | null;
+  sites: SeoSiteSummary[];
+  totals: {
+    sites: number;
+    openIssues: number;
+    autoFixableOpen: number;
+    criticalOpen: number;
+    fixed: number;
+    failed: number;
+    avgScore: number | null;
+  };
+}
+
+export interface SeoTrackingSummary {
+  clients: SeoClientSummary[];
+  grand: {
+    clients: number;
+    sites: number;
+    openIssues: number;
+    autoFixableOpen: number;
+    criticalOpen: number;
+    fixed: number;
+    failed: number;
+  };
+}
+
+/**
+ * Roll the SEO issue queue up by client → site for at-a-glance tracking:
+ * how many issues are open, how many are auto-fixable right now, how many
+ * have been fixed, and how many failed — per site and per client. One
+ * aggregate query over seo_issues plus a join against clients/blogs, so it
+ * stays cheap across the whole network.
+ */
+export async function getSeoTrackingSummary(): Promise<SeoTrackingSummary> {
+  await requireAdmin();
+
+  // Per-blog issue counts via filtered aggregates (single pass over the table).
+  const counts = await db
+    .select({
+      blogId: seoIssues.blogId,
+      openIssues: sql<number>`count(*) filter (where ${seoIssues.status} in ('detected','queued'))`,
+      autoFixableOpen: sql<number>`count(*) filter (where ${seoIssues.status} in ('detected','queued') and ${seoIssues.autoFixable} = true)`,
+      criticalOpen: sql<number>`count(*) filter (where ${seoIssues.status} in ('detected','queued') and ${seoIssues.severity} = 'critical')`,
+      fixed: sql<number>`count(*) filter (where ${seoIssues.status} in ('applied','verified'))`,
+      failed: sql<number>`count(*) filter (where ${seoIssues.status} = 'failed')`,
+    })
+    .from(seoIssues)
+    .groupBy(seoIssues.blogId);
+
+  const countByBlog = new Map(counts.map((c) => [c.blogId, c]));
+
+  // Clients + their blogs (exclude decommissioned blogs from tracking).
+  const clientRows = await db
+    .select({ id: clients.id, name: clients.name, status: clients.status })
+    .from(clients)
+    .orderBy(clients.name);
+
+  const blogRows = await db
+    .select({
+      id: blogs.id,
+      clientId: blogs.clientId,
+      domain: blogs.domain,
+      platform: blogs.platform,
+      score: blogs.currentSeoScore,
+      lastScanAt: blogs.lastSeoScanAt,
+    })
+    .from(blogs)
+    .where(inArray(blogs.status, ["active", "paused", "setup"]));
+
+  const blogsByClient = new Map<string, typeof blogRows>();
+  for (const b of blogRows) {
+    const list = blogsByClient.get(b.clientId) ?? [];
+    list.push(b);
+    blogsByClient.set(b.clientId, list);
+  }
+
+  const grand = {
+    clients: 0,
+    sites: 0,
+    openIssues: 0,
+    autoFixableOpen: 0,
+    criticalOpen: 0,
+    fixed: 0,
+    failed: 0,
+  };
+
+  const clientSummaries: SeoClientSummary[] = [];
+
+  for (const client of clientRows) {
+    const clientBlogs = blogsByClient.get(client.id) ?? [];
+    if (clientBlogs.length === 0) continue;
+
+    const sites: SeoSiteSummary[] = clientBlogs.map((b) => {
+      const c = countByBlog.get(b.id);
+      return {
+        blogId: b.id,
+        domain: b.domain,
+        platform: b.platform,
+        score: b.score,
+        lastScanAt: b.lastScanAt,
+        openIssues: Number(c?.openIssues ?? 0),
+        autoFixableOpen: Number(c?.autoFixableOpen ?? 0),
+        criticalOpen: Number(c?.criticalOpen ?? 0),
+        fixed: Number(c?.fixed ?? 0),
+        failed: Number(c?.failed ?? 0),
+      };
+    });
+
+    // Sort sites worst-first (most open critical, then most open issues).
+    sites.sort(
+      (a, b) =>
+        b.criticalOpen - a.criticalOpen ||
+        b.openIssues - a.openIssues ||
+        a.domain.localeCompare(b.domain),
+    );
+
+    const scored = sites.filter((s) => s.score !== null);
+    const totals = {
+      sites: sites.length,
+      openIssues: sites.reduce((n, s) => n + s.openIssues, 0),
+      autoFixableOpen: sites.reduce((n, s) => n + s.autoFixableOpen, 0),
+      criticalOpen: sites.reduce((n, s) => n + s.criticalOpen, 0),
+      fixed: sites.reduce((n, s) => n + s.fixed, 0),
+      failed: sites.reduce((n, s) => n + s.failed, 0),
+      avgScore:
+        scored.length > 0
+          ? Math.round(scored.reduce((n, s) => n + (s.score ?? 0), 0) / scored.length)
+          : null,
+    };
+
+    grand.clients += 1;
+    grand.sites += totals.sites;
+    grand.openIssues += totals.openIssues;
+    grand.autoFixableOpen += totals.autoFixableOpen;
+    grand.criticalOpen += totals.criticalOpen;
+    grand.fixed += totals.fixed;
+    grand.failed += totals.failed;
+
+    clientSummaries.push({
+      clientId: client.id,
+      clientName: client.name,
+      status: client.status,
+      sites,
+      totals,
+    });
+  }
+
+  // Clients with the most open work first.
+  clientSummaries.sort(
+    (a, b) =>
+      b.totals.criticalOpen - a.totals.criticalOpen ||
+      b.totals.openIssues - a.totals.openIssues ||
+      a.clientName.localeCompare(b.clientName),
+  );
+
+  return { clients: clientSummaries, grand };
+}
