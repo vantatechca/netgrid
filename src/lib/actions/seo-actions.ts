@@ -158,9 +158,12 @@ export async function getFixQueue(
   const issues = await db.select({
     issue: seoIssues,
     blogDomain: blogs.domain,
+    clientId: blogs.clientId,
+    clientName: clients.name,
   })
     .from(seoIssues)
     .innerJoin(blogs, eq(seoIssues.blogId, blogs.id))
+    .leftJoin(clients, eq(blogs.clientId, clients.id))
     .where(and(...conditions))
     .orderBy(
       sql`CASE WHEN ${seoIssues.severity} = 'critical' THEN 0 WHEN ${seoIssues.severity} = 'warning' THEN 1 ELSE 2 END`,
