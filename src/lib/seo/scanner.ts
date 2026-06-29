@@ -502,7 +502,7 @@ export async function scanBlog(blog: BlogDescriptor): Promise<ScanResult> {
 
 // ─── Result builder ──────────────────────────────────────────────────────────
 
-function buildResult(issues: RawIssue[], pagesCrawled: number, startMs: number): ScanResult {
+export function buildResult(issues: RawIssue[], pagesCrawled: number, startMs: number): ScanResult {
   const metaScore = scoreFromIssues(issues, "meta");
   const contentScore = scoreFromIssues(issues, "content");
   const technicalScore = scoreFromIssues(issues, "technical");
