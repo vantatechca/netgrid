@@ -15,18 +15,36 @@ import {
   generateHeroImage,
 } from "@/lib/services/image-generator";
 
-// Haiku 4.5 — chosen for cost: ~3x cheaper output than Sonnet, which dominates
-// per-post cost (the article body is ~90% of the bill). 200K context / 64K max
-// output is far more than this generator needs (≤4096 tokens/post).
-// const CLAUDE_MODEL = "claude-haiku-4-5";
-const CLAUDE_MODEL = "claude-haiku-4-5";
+// Generation runs DeepSeek v4-pro as PRIMARY, with Claude as the automatic
+// FALLBACK whenever DeepSeek errors (auth, rate limit, server error, timeout).
+// DeepSeek is set via env so the exact model / endpoint can change without a
+// code edit:
+//   DEEPSEEK_API_KEY   (required to enable DeepSeek; unset → Claude only)
+//   DEEPSEEK_MODEL     (default "deepseek-v4-pro")
+//   DEEPSEEK_BASE_URL  (default "https://api.deepseek.com", OpenAI-compatible)
+const CLAUDE_MODEL = "claude-sonnet-4-6";
+const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || "deepseek-v4-pro";
+const DEEPSEEK_BASE_URL = process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com";
+const DEEPSEEK_TIMEOUT_MS = 120_000;
 
-// Haiku 4.5 pricing — per-token (USD), not per-1K. Verify current rates at
-// https://www.anthropic.com/pricing before relying on cost reporting.
-// As of writing: $1 / 1M input tokens, $5 / 1M output tokens.
+function deepseekConfigured(): boolean {
+  return Boolean(process.env.DEEPSEEK_API_KEY);
+}
+
+// Claude Sonnet 4.6 pricing — per-token (USD), not per-1K. Verify current rates
+// at https://www.anthropic.com/pricing before relying on cost reporting.
+// As of writing: $3 / 1M input tokens, $15 / 1M output tokens.
 const PRICING = {
-  inputPerToken: 0.000001,
-  outputPerToken: 0.000005,
+  inputPerToken: 0.000003,
+  outputPerToken: 0.000015,
+};
+
+// DeepSeek v4-pro pricing — per-token (USD). Promotional rate as of 2026-06
+// (~$0.435 / 1M input, ~$0.870 / 1M output); post-promo list is ~$1.74 / $3.48.
+// Verify at https://api-docs.deepseek.com/quick_start/pricing.
+const DEEPSEEK_PRICING = {
+  inputPerToken: 0.000000435,
+  outputPerToken: 0.00000087,
 };
 
 // Network-wide word-count policy. Single source of truth lives in
@@ -419,12 +437,16 @@ export interface GenerationResult extends GeneratedContent, AnalysisScores {
   flaggedForReview?: boolean;
 }
 
-// ─── Claude wrapper ─────────────────────────────────────────────────────────
+// ─── Model wrapper (DeepSeek primary, Claude fallback) ──────────────────────
+
+type ModelProvider = "deepseek" | "claude";
 
 interface ClaudeCallResult {
   text: string;
   inputTokens: number;
   outputTokens: number;
+  /** Which provider actually produced this result — drives cost accounting. */
+  provider: ModelProvider;
 }
 
 /**
@@ -1102,28 +1124,123 @@ async function callClaudeOnce(
     text,
     inputTokens: response.usage.input_tokens,
     outputTokens: response.usage.output_tokens,
+    provider: "claude",
   };
 }
 
 /**
- * Public Claude wrapper with automatic retry on transient errors. Each
- * generation in this app makes 2-3 Claude calls (article, scene summary,
- * analysis); when scaling to thousands of blogs/day the network will hit
- * occasional 429s and 529 (overloaded). Without retry every transient
- * blip turned into a failed post.
- *
- * Retry budget: up to MAX_CLAUDE_RETRIES additional attempts with
- * exponential backoff (2s, 4s, 8s). Total worst-case wait: 14s + 3 calls.
+ * One DeepSeek call via its OpenAI-compatible Chat Completions endpoint
+ * (POST {base}/chat/completions, Bearer auth). Returns the same shape as
+ * callClaudeOnce so the two are interchangeable. Network/timeout/5xx/429
+ * errors are thrown with a `status` so isTransientClaudeError() treats them
+ * as retryable — and, after retries, callClaude() falls back to Claude.
  */
-async function callClaude(
+async function callDeepSeekOnce(
   system: string,
   userMessage: string,
-  options: { maxTokens?: number; temperature?: number; expectJson?: boolean } = {},
+  options: { maxTokens?: number; temperature?: number; expectJson?: boolean },
+): Promise<ClaudeCallResult> {
+  const { maxTokens = 4000, temperature = 0.7, expectJson = false } = options;
+  const apiKey = process.env.DEEPSEEK_API_KEY;
+  if (!apiKey) throw new Error("DEEPSEEK_API_KEY is not set");
+
+  const finalSystem = expectJson
+    ? `${system}\n\nOUTPUT: Return ONE valid JSON object only. Escape every \\" inside HTML attribute values. Close every string and the object before hitting the token budget — a shorter complete article beats a truncated long one.`
+    : system;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DEEPSEEK_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(`${DEEPSEEK_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: DEEPSEEK_MODEL,
+        messages: [
+          { role: "system", content: finalSystem },
+          { role: "user", content: userMessage },
+        ],
+        max_tokens: maxTokens,
+        temperature,
+        // deepseek-v4-pro enables thinking by default — the chain-of-thought
+        // goes to `reasoning_content` and can leave `content` empty (or eat the
+        // token budget and truncate it), which surfaced as "no text content".
+        // Article generation doesn't need reasoning, so disable it: `content`
+        // is then populated directly and `temperature` is honoured (thinking
+        // mode ignores temperature/top_p).
+        thinking: { type: "disabled" },
+        ...(expectJson ? { response_format: { type: "json_object" } } : {}),
+      }),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    // Network error or timeout abort → mark transient so it retries / falls back.
+    const e = err as Error;
+    const wrapped = new Error(
+      e.name === "AbortError"
+        ? "DeepSeek request timed out"
+        : `DeepSeek network error: ${e.message}`,
+    ) as Error & { status?: number };
+    wrapped.status = e.name === "AbortError" ? 504 : 503;
+    throw wrapped;
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => "");
+    const err = new Error(
+      `DeepSeek API ${response.status}: ${errText.slice(0, 200)}`,
+    ) as Error & { status?: number };
+    err.status = response.status;
+    throw err;
+  }
+
+  const data = (await response.json()) as {
+    choices?: Array<{
+      message?: { content?: string; reasoning_content?: string };
+      finish_reason?: string;
+    }>;
+    usage?: { prompt_tokens?: number; completion_tokens?: number };
+  };
+  const choice = data.choices?.[0];
+  const rawText = choice?.message?.content;
+  if (typeof rawText !== "string" || rawText.trim().length === 0) {
+    // Diagnostic: finish_reason="length" → raise max_tokens; a populated
+    // reasoning_content with empty content → thinking wasn't disabled.
+    const fr = choice?.finish_reason ?? "unknown";
+    const hadReasoning = Boolean(choice?.message?.reasoning_content);
+    throw new Error(
+      `DeepSeek returned empty content (finish_reason=${fr}, reasoning_present=${hadReasoning})`,
+    );
+  }
+  const text = expectJson ? extractJsonObject(rawText) : rawText.trim();
+
+  return {
+    text,
+    inputTokens: data.usage?.prompt_tokens ?? 0,
+    outputTokens: data.usage?.completion_tokens ?? 0,
+    provider: "deepseek",
+  };
+}
+
+/**
+ * Run `fn` with automatic retry on transient errors (429 / 5xx / network /
+ * timeout) using exponential backoff (2s, 4s, 8s). Non-transient errors throw
+ * immediately so callers can fall back fast.
+ */
+async function callWithRetry(
+  label: string,
+  fn: () => Promise<ClaudeCallResult>,
 ): Promise<ClaudeCallResult> {
   let lastErr: unknown;
   for (let attempt = 0; attempt <= MAX_CLAUDE_RETRIES; attempt++) {
     try {
-      return await callClaudeOnce(system, userMessage, options);
+      return await fn();
     } catch (err) {
       lastErr = err;
       if (attempt === MAX_CLAUDE_RETRIES) break;
@@ -1131,7 +1248,7 @@ async function callClaude(
       const delayMs = CLAUDE_BACKOFF_BASE_MS * Math.pow(2, attempt);
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(
-        `[claude] Transient error (attempt ${attempt + 1}/${MAX_CLAUDE_RETRIES + 1}), retrying in ${delayMs}ms: ${msg.slice(0, 200)}`,
+        `[${label}] Transient error (attempt ${attempt + 1}/${MAX_CLAUDE_RETRIES + 1}), retrying in ${delayMs}ms: ${msg.slice(0, 200)}`,
       );
       await new Promise((r) => setTimeout(r, delayMs));
     }
@@ -1139,10 +1256,45 @@ async function callClaude(
   throw lastErr;
 }
 
-function calcCost(inputTokens: number, outputTokens: number): number {
-  return (
-    inputTokens * PRICING.inputPerToken + outputTokens * PRICING.outputPerToken
+/**
+ * Public model wrapper. PRIMARY = DeepSeek v4-pro (when DEEPSEEK_API_KEY is
+ * set); FALLBACK = Claude. Each provider gets its own transient-error retry
+ * budget; if DeepSeek still fails (including auth / bad-request), we log and
+ * transparently fall back to Claude so a post is never lost to a DeepSeek
+ * outage. The returned `.provider` drives cost accounting.
+ *
+ * Named `callClaude` for call-site compatibility — every generation path
+ * (article, scene summary, analysis) already routes through it.
+ */
+async function callClaude(
+  system: string,
+  userMessage: string,
+  options: { maxTokens?: number; temperature?: number; expectJson?: boolean } = {},
+): Promise<ClaudeCallResult> {
+  if (deepseekConfigured()) {
+    try {
+      return await callWithRetry("deepseek", () =>
+        callDeepSeekOnce(system, userMessage, options),
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[model] DeepSeek failed — falling back to Claude: ${msg.slice(0, 200)}`,
+      );
+    }
+  }
+  return await callWithRetry("claude", () =>
+    callClaudeOnce(system, userMessage, options),
   );
+}
+
+function calcCost(
+  inputTokens: number,
+  outputTokens: number,
+  provider: ModelProvider = "claude",
+): number {
+  const p = provider === "deepseek" ? DEEPSEEK_PRICING : PRICING;
+  return inputTokens * p.inputPerToken + outputTokens * p.outputPerToken;
 }
 
 // ─── Formatting helpers ─────────────────────────────────────────────────────
@@ -2467,6 +2619,9 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
   let parsed: Partial<GeneratedContent> = {};
   let genInput = 0;
   let genOutput = 0;
+  // Accumulate cost per call, since the provider (DeepSeek vs Claude) can
+  // differ across attempts and they price differently.
+  let genCost = 0;
   let lastShapeKeys = "(empty)";
   let lastShapePreview = "";
 
@@ -2506,6 +2661,7 @@ The "content" field is the full HTML article body — at least ${MIN_WORDS} word
     });
     genInput += gen.inputTokens;
     genOutput += gen.outputTokens;
+    genCost += calcCost(gen.inputTokens, gen.outputTokens, gen.provider);
 
     // 2. Parse — safeParseClaudeJson tries direct then repaired.
     let candidate: Partial<GeneratedContent>;
@@ -2765,7 +2921,7 @@ The "content" field is the full HTML article body — at least ${MIN_WORDS} word
   const totalInputTokens = genInput;
   const totalOutputTokens = genOutput;
   const totalTokens = totalInputTokens + totalOutputTokens;
-  const costUsd = calcCost(totalInputTokens, totalOutputTokens);
+  const costUsd = genCost;
 
   return {
     title: parsed.title,
