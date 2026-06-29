@@ -522,9 +522,22 @@ export function BlogForm({
             <CardTitle>Shopify Credentials</CardTitle>
             <CardDescription>
               Create an app in Shopify&apos;s Dev Dashboard (Settings → Apps →
-              Develop apps → Build apps in Dev Dashboard), enable read_content
-              + write_content scopes, install it, then copy the Client ID and
-              Client Secret from app Settings.
+              Develop apps → Build apps in Dev Dashboard) and enable these
+              Admin API scopes:
+              <span className="mt-1 block">
+                <strong>read_content</strong>, <strong>write_content</strong>{" "}
+                (blog posts, pages &amp; their SEO meta) ·{" "}
+                <strong>read_files</strong>, <strong>write_files</strong>{" "}
+                (upload article images to the CDN) ·{" "}
+                <strong>read_themes</strong>, <strong>write_themes</strong>,{" "}
+                <strong>write_theme_code</strong> (SEO theme fixes — OG /
+                JSON-LD injection).
+              </span>
+              <span className="mt-1 block">
+                Install the app, then copy the Client ID and Client Secret from
+                app Settings. After changing scopes later, reinstall the app so
+                the new access token includes them.
+              </span>
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
