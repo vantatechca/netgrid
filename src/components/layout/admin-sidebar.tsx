@@ -52,7 +52,6 @@ const navGroups: NavGroup[] = [
       { title: "Clients", href: "/clients", icon: Users },
       { title: "Blogs", href: "/blogs", icon: FileText },
       { title: "SEO", href: "/seo", icon: Search },
-      { title: "SEO Tracking", href: "/seo/tracking", icon: BarChart3 },
       { title: "Fix Queue", href: "/seo/fix-queue", icon: AlertTriangle },
     ],
   },

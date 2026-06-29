@@ -138,13 +138,22 @@ export async function getSeoIssues(params: {
   return { issues, total: count, page, pageSize };
 }
 
-export async function getFixQueue(clientId?: string) {
+export async function getFixQueue(
+  clientId?: string,
+  opts: { blogId?: string; limit?: number } = {},
+) {
   await requireAdmin();
+
+  // Hard cap. The queue is unusable (and the request times out) if it tries to
+  // return the whole network's open issues — there can be tens of thousands.
+  // Callers scope by client/blog; the flat view shows the worst N.
+  const limit = Math.min(Math.max(opts.limit ?? 200, 1), 500);
 
   const conditions = [
     inArray(seoIssues.status, ["detected", "queued"]),
   ];
   if (clientId) conditions.push(eq(seoIssues.clientId, clientId));
+  if (opts.blogId) conditions.push(eq(seoIssues.blogId, opts.blogId));
 
   const issues = await db.select({
     issue: seoIssues,
@@ -156,7 +165,8 @@ export async function getFixQueue(clientId?: string) {
     .orderBy(
       sql`CASE WHEN ${seoIssues.severity} = 'critical' THEN 0 WHEN ${seoIssues.severity} = 'warning' THEN 1 ELSE 2 END`,
       desc(seoIssues.detectedAt)
-    );
+    )
+    .limit(limit);
 
   return issues;
 }
