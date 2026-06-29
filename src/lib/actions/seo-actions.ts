@@ -339,7 +339,9 @@ export interface SeoTrackingSummary {
  * aggregate query over seo_issues plus a join against clients/blogs, so it
  * stays cheap across the whole network.
  */
-export async function getSeoTrackingSummary(): Promise<SeoTrackingSummary> {
+export async function getSeoTrackingSummary(
+  opts: { clientId?: string } = {},
+): Promise<SeoTrackingSummary> {
   await requireAdmin();
 
   // Per-blog issue counts via filtered aggregates (single pass over the table).
@@ -358,10 +360,19 @@ export async function getSeoTrackingSummary(): Promise<SeoTrackingSummary> {
   const countByBlog = new Map(counts.map((c) => [c.blogId, c]));
 
   // Clients + their blogs (exclude decommissioned blogs from tracking).
+  // Optionally scope to a single client (the per-client SEO page).
   const clientRows = await db
     .select({ id: clients.id, name: clients.name, status: clients.status })
     .from(clients)
+    .where(opts.clientId ? eq(clients.id, opts.clientId) : undefined)
     .orderBy(clients.name);
+
+  const blogWhere = opts.clientId
+    ? and(
+        inArray(blogs.status, ["active", "paused", "setup"]),
+        eq(blogs.clientId, opts.clientId),
+      )
+    : inArray(blogs.status, ["active", "paused", "setup"]);
 
   const blogRows = await db
     .select({
@@ -373,7 +384,7 @@ export async function getSeoTrackingSummary(): Promise<SeoTrackingSummary> {
       lastScanAt: blogs.lastSeoScanAt,
     })
     .from(blogs)
-    .where(inArray(blogs.status, ["active", "paused", "setup"]));
+    .where(blogWhere);
 
   const blogsByClient = new Map<string, typeof blogRows>();
   for (const b of blogRows) {
