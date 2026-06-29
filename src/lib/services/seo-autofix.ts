@@ -134,11 +134,21 @@ async function autoFixShopifyIssue(
   };
   const articleId = payload.articleId != null ? String(payload.articleId) : null;
   if (!articleId) {
-    await markFailed(
+    // These come from the sitemap crawler (products, collections, sitemap
+    // files, anchors) which blanket-flags "missing meta description" as
+    // auto-fixable. netgrid can only write a blog ARTICLE's metafields, so a
+    // non-article page has no fix target. Demote it to manual (instead of a
+    // cryptic error) so the Apply button stops offering an impossible fix.
+    await db
+      .update(seoIssues)
+      .set({ autoFixable: false })
+      .where(eq(seoIssues.id, issueId));
+    return {
       issueId,
-      "Shopify fix is missing the article id — re-scan the blog to refresh the queue.",
-    );
-    return { issueId, applied: false, message: "Missing Shopify article id" };
+      applied: false,
+      message:
+        "This page isn't a blog article — product / collection / sitemap meta can't be auto-fixed here. Marked as manual.",
+    };
   }
 
   const platformBlog = blogToPlatformBlog(blog);

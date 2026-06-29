@@ -137,7 +137,15 @@ async function scanOneBlog(blog: BlogRow): Promise<ScanOutcome> {
           severity: issue.severity,
           title: issue.title,
           description: issue.description,
-          autoFixable: issue.autoFixable,
+          // The sitemap crawler flags "missing meta description" as auto-fixable
+          // on every URL, but on Shopify netgrid can only fix a blog ARTICLE's
+          // metafields. Only keep auto-fixable for Shopify when the page is an
+          // article (/blogs/…); products, collections and sitemap files aren't
+          // fixable here, so don't offer an impossible Apply.
+          autoFixable:
+            blog.platform === "shopify"
+              ? issue.autoFixable && /\/blogs\//.test(issue.pageUrl ?? "")
+              : issue.autoFixable,
           status: "detected" as const,
         })),
       );
