@@ -287,3 +287,189 @@ export async function injectSeoMetaTags(
     return { success: false, message: formatError(error) };
   }
 }
+
+export interface ThemeSeoInspection {
+  success: boolean;
+  message: string;
+  themeId?: number;
+  themeName?: string;
+  /** Which asset the meta tags were found in. */
+  asset?: string;
+  /** Lines from the theme that set/derive the <meta name="description">. */
+  descriptionLines?: string[];
+  /** Lines that build the <title> (to see the shop-name suffix). */
+  titleLines?: string[];
+  /**
+   * Best-effort verdict on where the rendered meta description comes from:
+   *  - "seo_field"  → uses page_description / metafields.global.description_tag
+   *                   (correct — renders netgrid's capped value)
+   *  - "body"       → uses article.content / excerpt_or_content (WRONG — this
+   *                   is why audits see the long body text)
+   *  - "excerpt"    → uses article.excerpt (renders summary_html)
+   *  - "unknown"    → couldn't classify; inspect the lines manually
+   */
+  descriptionSource?: "seo_field" | "body" | "excerpt" | "unknown";
+}
+
+/**
+ * Read-only diagnostic: pull the published theme's meta-tags source and show
+ * exactly how it builds the <meta name="description"> and <title>. This turns
+ * the recurring "meta description too long" question into ground truth —
+ * netgrid always sends a capped description_tag, so if the audit still sees the
+ * body, it's because the theme sources the description from the article body
+ * instead of the SEO field. This pinpoints the line to patch.
+ */
+export async function inspectThemeSeo(
+  creds: ShopifyCreds,
+  apiVersion: string = DEFAULT_API_VERSION,
+): Promise<ThemeSeoInspection> {
+  try {
+    const client = await createClient(creds, apiVersion, THEME_TIMEOUT_MS);
+    const theme = await getMainTheme(creds, apiVersion, client);
+    if (!theme) {
+      return { success: false, message: "No published (main) theme found for this store." };
+    }
+
+    // The description tag is usually in the meta-tags snippet; some themes
+    // inline it in the layout head instead.
+    let asset = SNIPPET_KEY;
+    let source = await getThemeAsset(creds, theme.id, SNIPPET_KEY, apiVersion, client);
+    if (source === null || !/name=["']description["']|og:description/i.test(source)) {
+      const layout = await getThemeAsset(creds, theme.id, LAYOUT_KEY, apiVersion, client);
+      if (layout && /name=["']description["']|og:description/i.test(layout)) {
+        asset = LAYOUT_KEY;
+        source = layout;
+      }
+    }
+    if (source === null) {
+      return {
+        success: false,
+        message: `Theme "${theme.name}" has no ${SNIPPET_KEY} or readable ${LAYOUT_KEY}.`,
+        themeId: theme.id,
+        themeName: theme.name,
+      };
+    }
+
+    const lines = source.split("\n");
+    // Capture the description/og:description lines plus a little context (the
+    // assign that feeds them, e.g. `assign og_description = ...`).
+    const descriptionLines = lines.filter((l) =>
+      /name=["']description["']|og:description|twitter:description|page_description|og_description/i.test(l),
+    ).map((l) => l.trim());
+    const titleLines = lines.filter((l) =>
+      /<title|page_title|shop\.name/i.test(l),
+    ).map((l) => l.trim());
+
+    const blob = descriptionLines.join("\n").toLowerCase();
+    let descriptionSource: ThemeSeoInspection["descriptionSource"] = "unknown";
+    if (/article\.content|excerpt_or_content/.test(blob)) descriptionSource = "body";
+    else if (/article\.excerpt/.test(blob)) descriptionSource = "excerpt";
+    else if (/page_description|description_tag/.test(blob)) descriptionSource = "seo_field";
+
+    return {
+      success: true,
+      message: `Read meta tags from ${asset} on theme "${theme.name}".`,
+      themeId: theme.id,
+      themeName: theme.name,
+      asset,
+      descriptionLines,
+      titleLines,
+      descriptionSource,
+    };
+  } catch (error) {
+    return { success: false, message: formatError(error) };
+  }
+}
+
+// The authoritative SEO description source: the article/page's
+// "Search engine listing" meta description (global.description_tag), exposed
+// in Liquid as `page_description`. netgrid always writes a pixel-capped value
+// here, so pointing the tags at it makes the rendered meta description match
+// the audited limit. shop.description is a sane store-level fallback.
+const PAGE_DESC_EXPR = "{{ page_description | default: shop.description | escape }}";
+// Rewrites the content="" of a description / og:description / twitter:description
+// <meta> tag, whatever expression it currently uses (article.content, excerpt,
+// a custom assign, etc.). Tag-spanning via [^>] (covers newlines); Liquid
+// {{ }} contains no '>' so the content capture is safe.
+const DESC_META_RE =
+  /(<meta\b[^>]*?(?:name|property)=["'](?:description|og:description|twitter:description)["'][^>]*?content=)"[^"]*"/gis;
+
+/**
+ * Repoint the theme's <meta name="description"> (+ og/twitter description) at
+ * `page_description` so the rendered meta description is netgrid's capped SEO
+ * value instead of the article body. Idempotent — re-running is a no-op once
+ * the tags already use page_description. Read-modify-write on the live asset,
+ * so it patches the theme's ACTUAL markup rather than an assumed shape.
+ */
+export async function fixThemeMetaDescription(
+  creds: ShopifyCreds,
+  apiVersion: string = DEFAULT_API_VERSION,
+): Promise<ThemeSeoResult> {
+  try {
+    const client = await createClient(creds, apiVersion, THEME_TIMEOUT_MS);
+    const theme = await getMainTheme(creds, apiVersion, client);
+    if (!theme) {
+      return { success: false, message: "No published (main) theme found for this store." };
+    }
+
+    // Find the asset that actually emits the description meta tags.
+    let asset = SNIPPET_KEY;
+    let source = await getThemeAsset(creds, theme.id, SNIPPET_KEY, apiVersion, client);
+    if (source === null || !DESC_META_RE.test(source)) {
+      DESC_META_RE.lastIndex = 0;
+      const layout = await getThemeAsset(creds, theme.id, LAYOUT_KEY, apiVersion, client);
+      if (layout && new RegExp(DESC_META_RE.source, "gis").test(layout)) {
+        asset = LAYOUT_KEY;
+        source = layout;
+      }
+    }
+    DESC_META_RE.lastIndex = 0;
+    if (source === null) {
+      return {
+        success: false,
+        message: `Theme "${theme.name}" has no ${SNIPPET_KEY} or readable ${LAYOUT_KEY}.`,
+        themeId: theme.id,
+        themeName: theme.name,
+      };
+    }
+
+    let count = 0;
+    const next = source.replace(new RegExp(DESC_META_RE.source, "gis"), (_m, prefix) => {
+      count += 1;
+      return `${prefix}"${PAGE_DESC_EXPR}"`;
+    });
+
+    if (count === 0) {
+      return {
+        success: false,
+        message: `No <meta name="description"> tag found in ${asset} on theme "${theme.name}". Run Inspect to see how the theme builds it.`,
+        themeId: theme.id,
+        themeName: theme.name,
+        targetAsset: asset,
+        action: "skipped",
+      };
+    }
+    if (next === source) {
+      return {
+        success: true,
+        message: `Theme "${theme.name}" already sources the meta description from page_description — no change.`,
+        themeId: theme.id,
+        themeName: theme.name,
+        targetAsset: asset,
+        action: "unchanged",
+      };
+    }
+
+    await putThemeAsset(creds, theme.id, asset, next, apiVersion, client);
+    return {
+      success: true,
+      message: `Repointed ${count} description tag${count === 1 ? "" : "s"} to page_description in ${asset} on theme "${theme.name}".`,
+      themeId: theme.id,
+      themeName: theme.name,
+      targetAsset: asset,
+      action: "updated",
+    };
+  } catch (error) {
+    return { success: false, message: formatError(error) };
+  }
+}
