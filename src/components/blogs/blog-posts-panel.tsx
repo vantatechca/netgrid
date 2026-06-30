@@ -1237,9 +1237,11 @@ export function BlogPostsPanel({ blogId, generated, live }: Props) {
               {deleting?.title ? (
                 <span>
                   &ldquo;{deleting.title}&rdquo; will be{" "}
-                  {forceDelete
-                    ? "permanently deleted"
-                    : "moved to the WordPress trash"}
+                  {live.platform === "shopify"
+                    ? "permanently deleted from your Shopify store"
+                    : forceDelete
+                      ? "permanently deleted"
+                      : "moved to the WordPress trash"}
                   .
                 </span>
               ) : (
@@ -1247,18 +1249,22 @@ export function BlogPostsPanel({ blogId, generated, live }: Props) {
               )}
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <div className="flex items-center gap-2 rounded-md border p-3 text-sm">
-            <input
-              id="force-delete"
-              type="checkbox"
-              checked={forceDelete}
-              onChange={(e) => setForceDelete(e.target.checked)}
-              className="size-4"
-            />
-            <label htmlFor="force-delete" className="text-sm">
-              Skip the trash and delete permanently
-            </label>
-          </div>
+          {/* Shopify has no trash — deletion is always permanent, so the
+              trash toggle only applies to WordPress. */}
+          {live.platform !== "shopify" && (
+            <div className="flex items-center gap-2 rounded-md border p-3 text-sm">
+              <input
+                id="force-delete"
+                type="checkbox"
+                checked={forceDelete}
+                onChange={(e) => setForceDelete(e.target.checked)}
+                className="size-4"
+              />
+              <label htmlFor="force-delete" className="text-sm">
+                Skip the trash and delete permanently
+              </label>
+            </div>
+          )}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={deletingPending}>
               Cancel
@@ -1269,7 +1275,9 @@ export function BlogPostsPanel({ blogId, generated, live }: Props) {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               {deletingPending && <Loader2 className="mr-2 size-4 animate-spin" />}
-              {forceDelete ? "Delete permanently" : "Move to trash"}
+              {live.platform === "shopify" || forceDelete
+                ? "Delete permanently"
+                : "Move to trash"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
