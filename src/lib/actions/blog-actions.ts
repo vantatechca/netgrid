@@ -58,6 +58,7 @@ import type {
 import { publishPost as platformPublishPost } from "@/lib/services/platform-client";
 import * as wp from "@/lib/services/wp-client";
 import { pingIndexNowFireAndForget } from "@/lib/services/index-now-pinger";
+import { scanPostAfterPublishFireAndForget } from "@/lib/services/post-seo-runner";
 import { revalidatePath } from "next/cache";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -1037,6 +1038,10 @@ export async function publishGeneratedPost(
         `[indexnow] SKIP — publish.postUrl is empty (platform returned no URL)`,
       );
     }
+
+    // Per-post SEO scan — once a post is live, audit that specific page.
+    // Fire-and-forget so a slow/blocked scan never delays the publish.
+    scanPostAfterPublishFireAndForget(generatedPostId);
   } else {
     await db
       .update(generatedPosts)
@@ -1147,6 +1152,8 @@ export async function regenerateBlogPost(
 ): Promise<{ success: boolean; message: string }> {
   try {
     const r = await regenerateAndUpdatePost(generatedPostId);
+    // The live page changed in place — re-audit it. Fire-and-forget.
+    if (r.success) scanPostAfterPublishFireAndForget(generatedPostId);
     return { success: r.success, message: r.message };
   } catch (e) {
     return {
