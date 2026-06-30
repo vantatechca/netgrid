@@ -23,6 +23,7 @@ import {
 import { publishPost, backfillPostSeo, resolveShopifyBlogId, type PlatformBlog } from "@/lib/services/platform-client";
 import { verticalForNiche } from "@/lib/content/verticals";
 import { pingIndexNowFireAndForget } from "@/lib/services/index-now-pinger";
+import { scanPostAfterPublishFireAndForget } from "@/lib/services/post-seo-runner";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -676,6 +677,10 @@ async function runGenerateAndPublish(
     if (publish.postUrl) {
       pingIndexNowFireAndForget(blog, publish.postUrl);
     }
+
+    // Per-post SEO scan — audit this specific page now that it's live.
+    // Fire-and-forget so it never delays or fails the auto-publish run.
+    scanPostAfterPublishFireAndForget(generatedPostId);
 
     return {
       success: true,
