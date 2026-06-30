@@ -1854,17 +1854,37 @@ export async function deleteBlogLivePost(
   await requireAdmin();
 
   const [blog] = await db
-    .select({
-      platform: blogs.platform,
-      wpUrl: blogs.wpUrl,
-      wpUsername: blogs.wpUsername,
-      wpAppPassword: blogs.wpAppPassword,
-    })
+    .select()
     .from(blogs)
     .where(eq(blogs.id, blogId))
     .limit(1);
 
   if (!blog) return { success: false, message: "Blog not found" };
+
+  // Shopify: articles are deleted via the Admin API (no trash — always
+  // permanent). postId is the live article id from the "Live on shopify" tab.
+  if (blog.platform === "shopify") {
+    const platformBlog: PlatformBlog = {
+      platform: blog.platform,
+      wpUrl: blog.wpUrl,
+      wpUsername: blog.wpUsername,
+      wpAppPassword: blog.wpAppPassword,
+      seoPlugin: blog.seoPlugin,
+      shopifyAuthMode: blog.shopifyAuthMode,
+      shopifyStoreUrl: blog.shopifyStoreUrl,
+      shopifyAdminApiToken: blog.shopifyAdminApiToken,
+      shopifyClientId: blog.shopifyClientId,
+      shopifyClientSecret: blog.shopifyClientSecret,
+      shopifyBlogHandle: blog.shopifyBlogHandle,
+    };
+    const res = await deletePublishedPost(platformBlog, String(postId));
+    if (!res.deleted) {
+      return { success: false, message: res.message ?? "Delete failed" };
+    }
+    revalidatePath(`/blogs/${blogId}`);
+    return { success: true, message: "Article deleted" };
+  }
+
   if (blog.platform !== "wordpress") {
     return {
       success: false,
