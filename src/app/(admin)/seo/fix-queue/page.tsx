@@ -348,7 +348,7 @@ function FixQueueInner() {
               disabled={globalBusy || !!scanningId}
             >
               {batchPending ? <Loader2 className="size-4 animate-spin" /> : <Wrench className="size-4" />}
-              Apply all ({autoFixableCount})
+              Fix all ({autoFixableCount})
             </Button>
           )}
         </div>
@@ -471,9 +471,14 @@ function FixQueueInner() {
 
                             <div className="flex shrink-0 items-center gap-2">
                               {canAutoFix && (
-                                <Button size="sm" onClick={() => handleApply(item.issue.id)} disabled={itemBusy}>
+                                <Button
+                                  size="sm"
+                                  onClick={() => handleApply(item.issue.id)}
+                                  disabled={itemBusy}
+                                  title="Auto-fix via the Shopify / WordPress API"
+                                >
                                   {isBusy ? <Loader2 className="size-4 animate-spin" /> : <Wrench className="size-4" />}
-                                  Apply
+                                  Fix
                                 </Button>
                               )}
                               {canAutoFix && !item.issue.suggestedFix && (
