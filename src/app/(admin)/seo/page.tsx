@@ -3,9 +3,11 @@ import { getSeoTrackingSummary } from "@/lib/actions/seo-actions";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ChevronRight } from "lucide-react";
-import { ScanAllButton } from "@/components/seo/seo-hub-actions";
+import { ScanAllButton, ResetSeoButton } from "@/components/seo/seo-hub-actions";
 
 export const dynamic = "force-dynamic";
+
+export const metadata = { title: "SEO Fix" };
 
 function Stat({
   label,
@@ -40,19 +42,14 @@ export default async function SeoHubPage() {
       {/* Header + global actions */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold">SEO</h1>
+          <h1 className="text-2xl font-bold">SEO Fix</h1>
           <p className="text-muted-foreground">
             Fix status by client. Open a client to fix their sites&apos; issues.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <ScanAllButton />
-          <Link
-            href="/seo/fix-queue"
-            className="text-sm font-medium text-primary hover:underline"
-          >
-            Open full queue →
-          </Link>
+          <ResetSeoButton />
         </div>
       </div>
 

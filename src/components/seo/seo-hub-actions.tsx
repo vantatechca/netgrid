@@ -3,8 +3,9 @@
 import { useRouter } from "next/navigation";
 import { useTransition } from "react";
 import { Button } from "@/components/ui/button";
-import { Loader2, Wrench, ScanSearch } from "lucide-react";
+import { Loader2, Wrench, ScanSearch, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { resetAllSeoTracking } from "@/lib/actions/seo-actions";
 
 /** Scan every active blog, then refresh the hub. */
 export function ScanAllButton() {
@@ -44,6 +45,54 @@ export function ScanAllButton() {
         <ScanSearch className="size-4" data-icon="inline-start" />
       )}
       Scan all blogs
+    </Button>
+  );
+}
+
+/**
+ * Wipe ALL SEO issues + scans across the network (clean slate). Double
+ * confirm because it's irreversible. Per-post scans repopulate afterward.
+ */
+export function ResetSeoButton() {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+
+  function reset() {
+    if (
+      !window.confirm(
+        "Delete ALL SEO issues and scans for every client and start fresh?\n\nThis clears the entire backlog and can't be undone. New issues will be tracked per blog post as posts are published or re-scanned.",
+      )
+    ) {
+      return;
+    }
+    start(async () => {
+      const toastId = toast.loading("Clearing all SEO data…");
+      try {
+        const res = await resetAllSeoTracking();
+        toast.success(
+          `Cleared ${res.issues.toLocaleString()} issue${res.issues === 1 ? "" : "s"} and ${res.scans.toLocaleString()} scan${res.scans === 1 ? "" : "s"}. Starting fresh.`,
+          { id: toastId },
+        );
+        router.refresh();
+      } catch {
+        toast.error("Reset failed", { id: toastId });
+      }
+    });
+  }
+
+  return (
+    <Button
+      variant="outline"
+      onClick={reset}
+      disabled={pending}
+      className="text-destructive hover:text-destructive"
+    >
+      {pending ? (
+        <Loader2 className="size-4 animate-spin" data-icon="inline-start" />
+      ) : (
+        <Trash2 className="size-4" data-icon="inline-start" />
+      )}
+      Reset
     </Button>
   );
 }

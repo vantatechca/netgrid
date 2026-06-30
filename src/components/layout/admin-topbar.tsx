@@ -44,6 +44,12 @@ interface NotificationsResponse {
 
 const NOTIFICATIONS_POLL_MS = 30000;
 
+// Label overrides for segments that shouldn't be naively title-cased
+// (e.g. "seo" → "SEO Fix" to match the sidebar and page heading).
+const SEGMENT_LABELS: Record<string, string> = {
+  seo: "SEO Fix",
+};
+
 function buildBreadcrumbs(pathname: string) {
   const segments = pathname.split("/").filter(Boolean);
   const crumbs: { label: string; href: string }[] = [];
@@ -51,9 +57,9 @@ function buildBreadcrumbs(pathname: string) {
   let currentPath = "";
   for (const segment of segments) {
     currentPath += `/${segment}`;
-    const label = segment
-      .replace(/-/g, " ")
-      .replace(/\b\w/g, (c) => c.toUpperCase());
+    const label =
+      SEGMENT_LABELS[segment] ??
+      segment.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
     crumbs.push({ label, href: currentPath });
   }
 

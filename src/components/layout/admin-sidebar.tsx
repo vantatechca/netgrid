@@ -8,7 +8,6 @@ import {
   Users,
   FileText,
   Search,
-  AlertTriangle,
   CalendarClock,
   MessageSquare,
   BarChart3,
@@ -51,8 +50,7 @@ const navGroups: NavGroup[] = [
     items: [
       { title: "Clients", href: "/clients", icon: Users },
       { title: "Blogs", href: "/blogs", icon: FileText },
-      { title: "SEO", href: "/seo", icon: Search },
-      { title: "Fix Queue", href: "/seo/fix-queue", icon: AlertTriangle },
+      { title: "SEO Fix", href: "/seo", icon: Search },
     ],
   },
   {

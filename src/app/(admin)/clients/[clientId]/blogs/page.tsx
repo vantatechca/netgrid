@@ -1,3 +1,5 @@
+import Link from "next/link";
+import { ArrowLeft } from "lucide-react";
 import { getBlogs } from "@/lib/actions/blog-actions";
 import { BlogTable } from "@/components/blogs/blog-table";
 import { CsvImportDialog } from "@/components/blogs/csv-import-dialog";
@@ -46,6 +48,13 @@ export default async function ClientBlogsPage({
 
   return (
     <div className="space-y-6">
+      <Link
+        href="/blogs"
+        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+      >
+        <ArrowLeft className="size-3.5" /> All clients
+      </Link>
+
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">

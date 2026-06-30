@@ -3,6 +3,7 @@
 import { db } from "@/lib/db";
 import { blogs, seoScans, seoIssues, clients } from "@/lib/db/schema";
 import { eq, and, desc, sql, inArray } from "drizzle-orm";
+import { revalidatePath } from "next/cache";
 import { requireAdmin, getSession } from "@/lib/auth/helpers";
 import { crawlBlog } from "@/lib/services/seo-crawler";
 import { scoreBlog } from "@/lib/services/seo-scorer";
@@ -476,4 +477,44 @@ export async function getSeoTrackingSummary(
   );
 
   return { clients: clientSummaries, grand };
+}
+
+/**
+ * CLEAN SLATE — delete every SEO issue and scan across the whole network so
+ * tracking restarts from zero. Used by the "Reset" button on the SEO Fix hub
+ * to clear the legacy whole-site/article-scan backlog. Per-post scans then
+ * repopulate as posts are published or re-scanned. Irreversible.
+ */
+export async function resetAllSeoTracking(): Promise<{
+  success: boolean;
+  issues: number;
+  scans: number;
+}> {
+  await requireAdmin();
+
+  const [{ issues }] = await db
+    .select({ issues: sql<number>`count(*)::int` })
+    .from(seoIssues);
+  const [{ scans }] = await db
+    .select({ scans: sql<number>`count(*)::int` })
+    .from(seoScans);
+
+  // Issues FK → scans, so delete issues first, then scans.
+  await db.delete(seoIssues);
+  await db.delete(seoScans);
+
+  // Zero the cached per-blog score so the hub doesn't show stale numbers.
+  await db.update(blogs).set({ currentSeoScore: null });
+
+  const session = await getSession();
+  await logActivity({
+    userId: session?.user?.id,
+    action: "seo_tracking_reset",
+    entityType: "seo",
+    details: { deletedIssues: Number(issues), deletedScans: Number(scans) },
+  });
+
+  revalidatePath("/seo");
+
+  return { success: true, issues: Number(issues), scans: Number(scans) };
 }
