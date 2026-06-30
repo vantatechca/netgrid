@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import {
   Eye,
   ExternalLink,
+  Gauge,
   Loader2,
   Pencil,
   RefreshCw,
@@ -71,6 +72,7 @@ import {
   type BlogLivePostRow,
   type GeneratedPostContent,
 } from "@/lib/actions/blog-actions";
+import { scanGeneratedPost } from "@/lib/actions/post-seo-actions";
 import { GeneratePostButton } from "./generate-post-button";
 import { ArticlePreviewHtml } from "./article-preview-html";
 
@@ -227,6 +229,27 @@ function GeneratedRowActions({
     });
   };
 
+  const handleScanSeo = () => {
+    start(async () => {
+      const t = toast.loading("Scanning SEO…", {
+        description: "Auditing this post's meta, headings and images.",
+      });
+      const res = await scanGeneratedPost(row.id);
+      if (res.success) {
+        toast.success(res.message, {
+          id: t,
+          description:
+            res.metaSource === "stored"
+              ? "Live page wasn't reachable — scanned the stored content."
+              : undefined,
+        });
+      } else {
+        toast.error(res.message, { id: t });
+      }
+      router.refresh();
+    });
+  };
+
   return (
     <div className="flex items-center justify-end gap-1">
       {canView && (
@@ -282,6 +305,22 @@ function GeneratedRowActions({
         <Button size="sm" variant="outline" disabled>
           <Loader2 className="mr-1.5 size-3.5 animate-spin" />
           {row.status === "generating" ? "Generating…" : "Publishing…"}
+        </Button>
+      )}
+
+      {isPublished && (
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={handleScanSeo}
+          disabled={pending}
+          title="Scan this post for SEO issues"
+        >
+          {pending ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <Gauge className="size-4" />
+          )}
         </Button>
       )}
 
