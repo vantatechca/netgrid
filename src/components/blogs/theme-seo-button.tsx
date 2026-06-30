@@ -6,12 +6,15 @@ import {
   applyThemeSeoFix,
   inspectThemeSeo,
   fixThemeMetaDescription,
+  optimizeThemeSeo,
 } from "@/lib/actions/theme-seo-actions";
-import { Code2, Search, FileText, CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import { Code2, Search, FileText, Sparkles, CheckCircle2, XCircle, Loader2 } from "lucide-react";
 import type {
   ThemeSeoResult,
   ThemeSeoInspection,
 } from "@/lib/services/shopify-theme-client";
+
+type ThemeResultWithDetails = ThemeSeoResult & { details?: string[] };
 
 interface ThemeSeoButtonProps {
   blogId: string;
@@ -26,11 +29,13 @@ const SOURCE_LABEL: Record<NonNullable<ThemeSeoInspection["descriptionSource"]>,
 
 export function ThemeSeoButton({ blogId }: ThemeSeoButtonProps) {
   const [pending, start] = useTransition();
-  const [busy, setBusy] = useState<"apply" | "inspect" | "fixdesc" | null>(null);
-  const [result, setResult] = useState<ThemeSeoResult | null>(null);
+  const [busy, setBusy] = useState<
+    "optimize" | "apply" | "inspect" | "fixdesc" | null
+  >(null);
+  const [result, setResult] = useState<ThemeResultWithDetails | null>(null);
   const [inspection, setInspection] = useState<ThemeSeoInspection | null>(null);
 
-  function run(which: "apply" | "inspect" | "fixdesc") {
+  function run(which: "optimize" | "apply" | "inspect" | "fixdesc") {
     setResult(null);
     setInspection(null);
     setBusy(which);
@@ -40,6 +45,8 @@ export function ThemeSeoButton({ blogId }: ThemeSeoButtonProps) {
           setInspection(await inspectThemeSeo(blogId));
         } else if (which === "fixdesc") {
           setResult(await fixThemeMetaDescription(blogId));
+        } else if (which === "optimize") {
+          setResult(await optimizeThemeSeo(blogId));
         } else {
           setResult(await applyThemeSeoFix(blogId));
         }
@@ -52,16 +59,25 @@ export function ThemeSeoButton({ blogId }: ThemeSeoButtonProps) {
   return (
     <div className="space-y-3">
       <p className="text-sm text-muted-foreground">
-        Edit the store&apos;s published theme for SEO. <strong>Inspect</strong>{" "}
-        shows how the theme builds its meta description;{" "}
-        <strong>Fix meta description</strong> repoints it at the capped SEO
-        value (instead of the article body); <strong>Apply OG / JSON-LD</strong>{" "}
-        installs the Open Graph <code>article:*</code> tags + <code>BlogPosting</code>{" "}
-        schema. All are idempotent. Requires the app&apos;s read_themes /
-        write_themes scopes.
+        Edit the store&apos;s published theme for SEO.{" "}
+        <strong>Optimize theme SEO</strong> does it all in one pass — meta
+        description (repointed to the capped SEO value, or injected if missing),
+        an apple-touch-icon favicon, and OG <code>article:*</code> +{" "}
+        <code>BlogPosting</code> schema. The other buttons run a single step:{" "}
+        <strong>Inspect</strong> (read-only), <strong>Fix meta description</strong>,
+        or <strong>Apply OG / JSON-LD</strong>. All are idempotent. Requires the
+        app&apos;s read_themes / write_themes / write_theme_code scopes.
       </p>
 
       <div className="flex flex-wrap gap-2">
+        <Button onClick={() => run("optimize")} disabled={pending}>
+          {busy === "optimize" ? (
+            <Loader2 className="size-4 animate-spin" data-icon="inline-start" />
+          ) : (
+            <Sparkles className="size-4" data-icon="inline-start" />
+          )}
+          Optimize theme SEO
+        </Button>
         <Button variant="outline" onClick={() => run("inspect")} disabled={pending}>
           {busy === "inspect" ? (
             <Loader2 className="size-4 animate-spin" data-icon="inline-start" />
@@ -112,6 +128,13 @@ export function ThemeSeoButton({ blogId }: ThemeSeoButtonProps) {
               {result.success ? "Theme updated" : "Could not update theme"}
             </p>
             <p className="text-sm text-muted-foreground">{result.message}</p>
+            {result.success && result.details && result.details.length > 0 && (
+              <ul className="list-inside list-disc pt-1 text-xs text-muted-foreground">
+                {result.details.map((d, i) => (
+                  <li key={i}>{d}</li>
+                ))}
+              </ul>
+            )}
             {result.success && (
               <div className="flex flex-wrap gap-4 pt-1 text-xs text-muted-foreground">
                 {result.themeName && <span>Theme: {result.themeName}</span>}

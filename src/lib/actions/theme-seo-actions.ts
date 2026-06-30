@@ -9,8 +9,10 @@ import {
   injectSeoMetaTags,
   inspectThemeSeo as inspectThemeSeoClient,
   fixThemeMetaDescription as fixThemeMetaDescriptionClient,
+  optimizeThemeSeo as optimizeThemeSeoClient,
   type ThemeSeoResult,
   type ThemeSeoInspection,
+  type ThemeOptimizeResult,
 } from "@/lib/services/shopify-theme-client";
 
 /** Shared: load a Shopify blog and build its API creds, or return an error. */
@@ -62,6 +64,21 @@ export async function applyThemeSeoFix(
   }
 
   return injectSeoMetaTags(built.creds);
+}
+
+/**
+ * One-click theme SEO optimization: meta description (repoint or inject),
+ * apple-touch-icon favicon, and OG + JSON-LD article schema — the programmatic
+ * equivalent of the manual theme.liquid / meta-tags.liquid edits that lift the
+ * SEO score. Idempotent. Requires read_themes / write_themes / write_theme_code.
+ */
+export async function optimizeThemeSeo(
+  blogId: string,
+): Promise<ThemeOptimizeResult> {
+  await requireAdmin();
+  const r = await shopifyCredsForBlog(blogId);
+  if (!r.ok) return { success: false, message: r.message };
+  return optimizeThemeSeoClient(r.creds);
 }
 
 /**
