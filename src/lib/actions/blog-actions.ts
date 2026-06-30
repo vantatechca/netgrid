@@ -4,7 +4,12 @@ import { db } from "@/lib/db";
 import { blogs, clients, generatedPosts } from "@/lib/db/schema";
 import { requireAdmin } from "@/lib/auth/helpers";
 import { createBlogSchema, updateBlogSchema } from "@/lib/validators/blog";
-import { testConnection as platformTestConnection } from "@/lib/services/platform-client";
+import {
+  testConnection as platformTestConnection,
+  deletePublishedPost,
+  resolveShopifyBlogId,
+  type PlatformBlog,
+} from "@/lib/services/platform-client";
 import { regenerateAndUpdatePost } from "@/lib/actions/content-generation-actions";
 import {
   testConnection as shopifyTestConnection,
@@ -46,7 +51,7 @@ async function loadOrAssignStyleProfile(blogId: string) {
   }
   return profile;
 }
-import { eq, and, like, sql, desc, asc, count, inArray } from "drizzle-orm";
+import { eq, and, like, sql, desc, asc, count, inArray, isNotNull } from "drizzle-orm";
 import { DEFAULT_PAGE_SIZE } from "@/lib/constants";
 import type {
   BlogStatus,
@@ -451,21 +456,78 @@ export async function updateBlog(id: string, data: unknown) {
 
 // ─── Delete Blog (Soft) ─────────────────────────────────────────────────────
 
+/**
+ * Permanently delete a blog: first delete every post we published to the live
+ * site (WordPress posts / Shopify articles), then hard-delete the blog row from
+ * our DB. The row delete cascades to the blog's generated posts, SEO scans /
+ * issues, style profile, and knowledge docs (all FK onDelete: cascade).
+ *
+ * Live-post deletion is best-effort and reported back — a blog whose
+ * credentials are gone, or a post already removed on the site, won't block the
+ * teardown. Returns counts so the UI can tell the operator what happened.
+ */
 export async function deleteBlog(id: string) {
   await requireAdmin();
 
-  const result = await db
-    .update(blogs)
-    .set({ status: "decommissioned", updatedAt: new Date() })
-    .where(eq(blogs.id, id))
-    .returning({ id: blogs.id });
-
-  if (result.length === 0) {
+  const [blog] = await db.select().from(blogs).where(eq(blogs.id, id)).limit(1);
+  if (!blog) {
     return { error: "Blog not found" };
   }
 
+  // Posts we published to the live site, identified by their external id.
+  const publishedPosts = await db
+    .select({ externalPostId: generatedPosts.externalPostId })
+    .from(generatedPosts)
+    .where(
+      and(
+        eq(generatedPosts.blogId, id),
+        isNotNull(generatedPosts.externalPostId),
+      ),
+    );
+
+  const platformBlog: PlatformBlog = {
+    platform: blog.platform,
+    wpUrl: blog.wpUrl,
+    wpUsername: blog.wpUsername,
+    wpAppPassword: blog.wpAppPassword,
+    seoPlugin: blog.seoPlugin,
+    shopifyAuthMode: blog.shopifyAuthMode,
+    shopifyStoreUrl: blog.shopifyStoreUrl,
+    shopifyAdminApiToken: blog.shopifyAdminApiToken,
+    shopifyClientId: blog.shopifyClientId,
+    shopifyClientSecret: blog.shopifyClientSecret,
+    shopifyBlogHandle: blog.shopifyBlogHandle,
+  };
+
+  // Resolve the Shopify blog id once so we don't re-resolve per article.
+  let shopifyBlogId: string | undefined;
+  if (blog.platform === "shopify" && publishedPosts.length > 0) {
+    shopifyBlogId = (await resolveShopifyBlogId(platformBlog))?.blogId;
+  }
+
+  let deletedLive = 0;
+  let failedLive = 0;
+  for (const post of publishedPosts) {
+    if (!post.externalPostId) continue;
+    const res = await deletePublishedPost(
+      platformBlog,
+      post.externalPostId,
+      shopifyBlogId,
+    );
+    if (res.deleted) deletedLive += 1;
+    else failedLive += 1;
+  }
+
+  // Hard-delete the blog (cascades to posts, scans, issues, profile, docs).
+  await db.delete(blogs).where(eq(blogs.id, id));
+
   revalidatePath("/blogs");
-  return { success: true };
+  return {
+    success: true,
+    deletedLivePosts: deletedLive,
+    failedLivePosts: failedLive,
+    totalLivePosts: publishedPosts.length,
+  };
 }
 
 // ─── Test Blog Connection (saved blog) ──────────────────────────────────────

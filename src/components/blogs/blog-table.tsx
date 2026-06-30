@@ -183,12 +183,29 @@ export function BlogTable({
   };
 
   const handleDelete = async (blogId: string, domain: string) => {
-    const t = toast.loading(`Decommissioning ${domain}…`);
+    if (
+      !window.confirm(
+        `Permanently delete ${domain}?\n\nThis removes the blog from netgrid AND deletes every post we published to its live site (WordPress/Shopify). This can't be undone.`,
+      )
+    ) {
+      return;
+    }
+    const t = toast.loading(`Deleting ${domain}…`);
     const result = await deleteBlog(blogId);
     if ("error" in result) {
       toast.error(result.error, { id: t });
     } else {
-      toast.success(`${domain} marked as decommissioned`, { id: t });
+      const { deletedLivePosts = 0, failedLivePosts = 0 } = result;
+      toast.success(
+        `${domain} deleted` +
+          (deletedLivePosts > 0
+            ? ` · ${deletedLivePosts} live post${deletedLivePosts === 1 ? "" : "s"} removed`
+            : "") +
+          (failedLivePosts > 0
+            ? ` · ${failedLivePosts} couldn't be removed from the site`
+            : ""),
+        { id: t },
+      );
       router.refresh();
     }
   };
@@ -346,7 +363,7 @@ export function BlogTable({
                           }}
                         >
                           <Trash2 className="size-4" />
-                          Decommission
+                          Delete
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>

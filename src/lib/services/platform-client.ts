@@ -244,6 +244,48 @@ export async function fetchLivePostBody(
 }
 
 /**
+ * Permanently delete a published post from the live platform. WordPress posts
+ * are force-deleted (skip trash); Shopify articles are removed outright. Pass a
+ * pre-resolved shopifyBlogId to avoid re-resolving per call in a loop.
+ */
+export async function deletePublishedPost(
+  blog: PlatformBlog,
+  externalPostId: string,
+  shopifyBlogId?: string,
+): Promise<{ deleted: boolean; message?: string }> {
+  const platform = resolvePlatform(blog);
+
+  if (platform === "shopify") {
+    const built = buildShopifyCreds(blog);
+    if (!built.ok) return { deleted: false, message: built.message };
+    const blogId =
+      shopifyBlogId ??
+      (await shopify.resolveBlogId(built.creds, blog.shopifyBlogHandle))?.blogId;
+    if (!blogId) return { deleted: false, message: "Could not resolve Shopify blog id" };
+    return shopify.deleteArticle(built.creds, blogId, externalPostId);
+  }
+
+  if (!blog.wpUrl || !blog.wpUsername || !blog.wpAppPassword) {
+    return { deleted: false, message: "WordPress credentials not configured" };
+  }
+  try {
+    const res = await wp.deletePost(
+      blog.wpUrl,
+      blog.wpUsername,
+      blog.wpAppPassword,
+      Number(externalPostId),
+      true, // force — skip trash, delete permanently
+    );
+    return { deleted: res.deleted };
+  } catch (error) {
+    return {
+      deleted: false,
+      message: error instanceof Error ? error.message : "WordPress delete failed",
+    };
+  }
+}
+
+/**
  * Push SEO fixes to an already-published post: optionally a new body (after
  * H1 demotion) plus the pixel-capped meta title/description. Idempotent on
  * both platforms.
