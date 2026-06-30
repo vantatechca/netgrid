@@ -1033,6 +1033,22 @@ export async function getArticle(
   }
 }
 
+/** Permanently delete an article from a blog. */
+export async function deleteArticle(
+  creds: ShopifyCreds,
+  blogId: string,
+  articleId: string | number,
+  apiVersion: string = DEFAULT_API_VERSION,
+): Promise<{ deleted: boolean; message?: string }> {
+  try {
+    const client = await createClient(creds, apiVersion, PUBLISH_TIMEOUT_MS);
+    await client.delete(`/blogs/${blogId}/articles/${articleId}.json`);
+    return { deleted: true };
+  } catch (error) {
+    return { deleted: false, message: formatError(error) };
+  }
+}
+
 /**
  * Update an existing article's body and/or SEO metafields. Used by the SEO
  * backfill to retroactively fix already-published posts:
