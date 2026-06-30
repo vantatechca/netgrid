@@ -22,6 +22,7 @@ import {
 } from "@/lib/actions/style-profile-actions";
 import { publishPost, backfillPostSeo, resolveShopifyBlogId, type PlatformBlog } from "@/lib/services/platform-client";
 import { verticalForNiche } from "@/lib/content/verticals";
+import { loadNicheProfiles } from "@/lib/content/niche-registry";
 import { pingIndexNowFireAndForget } from "@/lib/services/index-now-pinger";
 import { scanPostAfterPublishFireAndForget } from "@/lib/services/post-seo-runner";
 
@@ -475,6 +476,10 @@ async function runGenerateAndPublish(
     // text content), or persist in shape-drift even after the inner
     // shape retry. Rather than fail the post, re-ideate a fresh topic
     // that excludes the failing one and try once more.
+    // Preload generated niche profiles so getNicheContext() inside the
+    // generator sees auto-generated niches (audience/voice/keyTopics). Memoized.
+    await loadNicheProfiles();
+
     const MAX_TOPIC_ATTEMPTS = 2;
     let currentTopic = topic;
     let currentKeywords = keywords;
@@ -785,6 +790,7 @@ export async function regenerateAndUpdatePost(
 
   const keywords = Array.isArray(post.keywords) ? (post.keywords as string[]) : [];
   const internalLinkRefs = await getInternalLinkRefs(blog.id, 8);
+  await loadNicheProfiles(); // generated niche context for getNicheContext()
 
   const content = await generateContent({
     topic: post.topic,

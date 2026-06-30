@@ -10,6 +10,10 @@ import {
   allowedCompoundsForSubNiche,
 } from "@/lib/content/assignment/algorithm";
 import { SeededRng } from "@/lib/content/assignment/draw-helpers";
+import {
+  getCachedNicheProfile,
+  loadNicheProfiles,
+} from "@/lib/content/niche-registry";
 import { PEPTIDE_COMPOUNDS } from "@/lib/content/libraries/compounds";
 import { NICHES, UNIVERSAL_NICHE_KEY, PEPTIDES_NICHE_KEY, nicheConfig } from "@/lib/content/libraries/niches";
 import type {
@@ -158,6 +162,25 @@ export async function assignProfileForBlog(
     const network = await loadNetworkForNiche(nicheKey);
     const ns = buildNetworkState(network);
     const profile = assignProfile(blogId, ns, { nicheKey });
+
+    // Auto-generated niche profile: when the client niche isn't hardcoded but
+    // has a generated profile (created on client-create), the algorithm ran on
+    // the universal niche and left the compound pools empty. Fill them with the
+    // generated niche's topic terms (seeded → deterministic) so the prompt gets
+    // real, on-topic vocabulary instead of nothing.
+    await loadNicheProfiles();
+    const generatedNiche = getCachedNicheProfile(normalizedNiche);
+    if (generatedNiche && profile.primaryCompounds.length === 0) {
+      const rng = new SeededRng(`${profile.assignmentSeed ?? blogId}:niche-terms`);
+      const primary = rng.shuffle([...generatedNiche.primaryTerms]).slice(0, 2);
+      const secondaryPool = [
+        ...generatedNiche.adjacentTerms,
+        ...generatedNiche.primaryTerms,
+      ].filter((t) => !primary.includes(t));
+      const secondary = rng.shuffle(secondaryPool).slice(0, 4);
+      profile.primaryCompounds = primary;
+      profile.secondaryCompounds = secondary.length > 0 ? secondary : primary;
+    }
 
     // Persist
     await db.insert(styleProfiles).values({

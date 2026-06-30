@@ -13,6 +13,7 @@ import {
   createClientSchema,
   updateClientSchema,
 } from "@/lib/validators/client";
+import { ensureNicheProfile } from "@/lib/content/niche-profile-generator";
 import {
   eq,
   and,
@@ -138,6 +139,11 @@ export async function createClient(data: CreateClientInput) {
     details: { name: newClient.name },
   });
 
+  // Auto-generate a niche profile for niches not already hardcoded/generated.
+  // Idempotent + non-fatal (returns null on any failure; the client still
+  // saved). Adds a few seconds only the first time a brand-new niche is seen.
+  await ensureNicheProfile(parsed.niche);
+
   return newClient;
 }
 
@@ -183,6 +189,11 @@ export async function updateClient(id: string, data: UpdateClientInput) {
     entityId: id,
     details: { updatedFields: Object.keys(parsed).filter((k) => parsed[k as keyof typeof parsed] !== undefined) },
   });
+
+  // If the niche changed to a new one, generate its profile (idempotent).
+  if (parsed.niche !== undefined) {
+    await ensureNicheProfile(parsed.niche);
+  }
 
   return updatedClient;
 }

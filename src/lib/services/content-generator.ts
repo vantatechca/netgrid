@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { composeForPost } from "@/lib/content/composer/compose";
+import { getCachedNicheProfile } from "@/lib/content/niche-registry";
 import { runScrubber, runScrubberLite, type ScrubberReport } from "@/lib/content/scrubber";
 import type { StyleProfile } from "@/lib/content/types";
 import { SUB_NICHES } from "@/lib/content/libraries/sub-niches";
@@ -308,12 +309,23 @@ export function getNicheContext(niche: string | null | undefined): NicheContext 
   const registered = NICHE_CONTEXTS[key];
   if (registered) return registered;
 
-  // Unregistered niche — synthesize a context from the typed string so
-  // Claude is still grounded in the admin's intent (e.g. "Dog Grooming"
-  // produces "blog topics for a Dog Grooming niche site"). The 17 curated
-  // niches above still give sharper output because of their hand-tuned
-  // keyTopics, audience, voice, and style cues — but a synthesized context
-  // is far better than silently writing about "general" topics.
+  // Auto-generated niche profile (created on client-create, cached in memory).
+  // Gives unregistered niches the same richness as the hardcoded ones.
+  const generated = getCachedNicheProfile(key);
+  if (generated) {
+    return {
+      label: generated.name,
+      industry: generated.name,
+      defaultAudience: generated.audience,
+      defaultBrandVoice: generated.brandVoice,
+      contentStyle: generated.contentStyle,
+      keyTopics: generated.keyTopics,
+    };
+  }
+
+  // Unregistered niche with no generated profile yet — synthesize a context
+  // from the typed string so the model is still grounded in the admin's intent
+  // (e.g. "Dog Grooming" → "blog topics for a Dog Grooming niche site").
   const label = humanizeNiche(niche!);
   return {
     label,
@@ -1601,7 +1613,9 @@ function getNicheRequirements(niche: string): string {
     gym_subscription: `Use actual chain pricing (Planet Fitness $15/$25 tiers, Equinox $200-$300, LA Fitness ~$30). Address contract gotchas (annual fees, cancellation requirements, auto-renewal). Distinguish big-box vs boutique vs class-based models honestly. Include realistic personal training costs ($60-150/session). Address common frustrations (overcrowding, equipment availability, cancellation friction).`,
     gym_franchise: `Focus on NEW gym launches and franchise openings — NOT ongoing membership comparison (that's the gym_subscription niche). Cover ribbon-cutting dates, the franchise owner's background, equipment partners, opening-day promotions (first-month-free deals, founder discounts), location-specific build-out timing, and how this opening fits the local fitness scene. Name specific local chains by their real names — in Quebec: Énergie Cardio, Éconofitness, Nautilus Plus, Buzzfit, World Gym. Distinguish franchise vs corporate vs independent operations. When local news headlines about gym openings or industry shifts are provided in the prompt, cite them as inline links — this niche lives or dies on locally relevant news context.`,
   };
-  return requirements[key] || "";
+  // Hardcoded niche requirements first, then an auto-generated niche's
+  // requirements (cached), then empty.
+  return requirements[key] || getCachedNicheProfile(key)?.requirements || "";
 }
 
 /**

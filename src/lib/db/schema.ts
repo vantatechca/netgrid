@@ -393,6 +393,25 @@ export const styleProfiles = pgTable("style_profiles", {
   index("style_profiles_voice_idx").on(table.voiceId),
 ]);
 
+// ─── 11b. niche_profiles ────────────────────────────────────────────────────
+// Auto-generated niche definitions for client niches NOT hardcoded in
+// src/lib/content/libraries/niches.ts. Created once (LLM) when a client with a
+// new niche is added, cached in memory at runtime, and reused like the
+// built-in niches. `key` is the normalized niche key (e.g. "restaurant").
+export const nicheProfiles = pgTable("niche_profiles", {
+  key: varchar("key", { length: 80 }).primaryKey(),
+  name: varchar("name", { length: 160 }).notNull(),
+  audience: text("audience").notNull(),
+  brandVoice: text("brand_voice").notNull(),
+  contentStyle: text("content_style").notNull(),
+  requirements: text("requirements").notNull(),
+  keyTopics: text("key_topics").array().notNull(),
+  primaryTerms: text("primary_terms").array().notNull(),
+  adjacentTerms: text("adjacent_terms").array().notNull(),
+  source: varchar("source", { length: 24 }).notNull().default("generated"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // ─── 12. activity_log ───────────────────────────────────────────────────────
 
 export const activityLog = pgTable("activity_log", {
