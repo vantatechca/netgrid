@@ -28,7 +28,7 @@ import {
 const THEME_TIMEOUT_MS = 20000;
 
 /** Bump when the injected block changes so existing stores get re-patched. */
-export const SEO_BLOCK_VERSION = 1;
+export const SEO_BLOCK_VERSION = 2;
 const MARKER_BEGIN = `{%- comment -%} BEGIN netgrid-seo v${SEO_BLOCK_VERSION} — managed by netgrid; do not edit {%- endcomment -%}`;
 const MARKER_END = `{%- comment -%} END netgrid-seo v${SEO_BLOCK_VERSION} {%- endcomment -%}`;
 // Matches any prior version's block so an upgrade replaces it instead of
@@ -53,13 +53,40 @@ interface ShopifyTheme {
   role: string; // "main" = published, "unpublished", "demo", "development"
 }
 
+export interface SeoBlockOptions {
+  /**
+   * Emit an apple-touch-icon <link> from settings.favicon (site-wide). Set when
+   * the theme doesn't already output one, so we don't duplicate it.
+   */
+  includeFavicon?: boolean;
+  /**
+   * Emit a <meta name="description"> from page_description (site-wide). Set ONLY
+   * when the theme has NO description tag of its own — otherwise we repoint the
+   * theme's existing tag instead, to avoid a duplicate description meta.
+   */
+  includeDescription?: boolean;
+}
+
 /**
- * The self-contained Liquid block we inject. Guarded so it only emits on
- * article pages and renders nothing elsewhere. Safe to live anywhere inside
- * <head> (meta-tags.liquid already runs there).
+ * The self-contained Liquid block we inject. The favicon + description lines
+ * (when enabled) render site-wide; the OG / JSON-LD section is guarded to
+ * article pages. Safe to live anywhere inside <head> (meta-tags.liquid already
+ * runs there).
  */
-export function buildSeoMetaBlock(): string {
-  return `${MARKER_BEGIN}
+export function buildSeoMetaBlock(opts: SeoBlockOptions = {}): string {
+  const faviconLine = opts.includeFavicon
+    ? `
+{%- if settings.favicon != blank -%}
+  <link rel="apple-touch-icon" sizes="180x180" href="{{ settings.favicon | image_url: width: 180, height: 180 }}">
+{%- endif -%}`
+    : "";
+  const descriptionLine = opts.includeDescription
+    ? `
+{%- if page_description != blank -%}
+  <meta name="description" content="{{ page_description | strip_html | truncate: 150 | escape }}">
+{%- endif -%}`
+    : "";
+  return `${MARKER_BEGIN}${faviconLine}${descriptionLine}
 {%- if request.page_type == 'article' and article -%}
   {%- if article.published_at -%}
     <meta property="article:published_time" content="{{ article.published_at | date: '%Y-%m-%dT%H:%M:%SZ' }}">
@@ -282,6 +309,132 @@ export async function injectSeoMetaTags(
       themeName: theme.name,
       targetAsset: LAYOUT_KEY,
       action: hadBlock ? "updated" : "created",
+    };
+  } catch (error) {
+    return { success: false, message: formatError(error) };
+  }
+}
+
+export interface ThemeOptimizeResult extends ThemeSeoResult {
+  /** Human-readable list of what the optimize pass changed. */
+  details?: string[];
+}
+
+/**
+ * One-pass theme SEO optimization that mirrors the manual theme edits that
+ * lift Shopify SEO scores:
+ *   1. <meta name="description"> — repoint an existing one to page_description
+ *      (netgrid's capped SEO value), or inject one when the theme has none.
+ *   2. apple-touch-icon favicon — emitted from settings.favicon when absent.
+ *   3. OG article:* tags + JSON-LD BlogPosting on article pages.
+ *
+ * Single read-modify-write on the published theme's meta-tags snippet (or the
+ * layout head as a fallback). Idempotent: the managed block is stripped and
+ * re-added each run, and description repointing is a no-op once already done.
+ * Page TITLE is intentionally left untouched — netgrid already writes the
+ * capped title_tag (Liquid `page_title`), which themes render in <title>.
+ */
+export async function optimizeThemeSeo(
+  creds: ShopifyCreds,
+  apiVersion: string = DEFAULT_API_VERSION,
+): Promise<ThemeOptimizeResult> {
+  try {
+    const client = await createClient(creds, apiVersion, THEME_TIMEOUT_MS);
+    const theme = await getMainTheme(creds, apiVersion, client);
+    if (!theme) {
+      return { success: false, message: "No published (main) theme found for this store." };
+    }
+
+    // Prefer the meta-tags snippet; fall back to the layout head.
+    let asset = SNIPPET_KEY;
+    let usingLayout = false;
+    let source = await getThemeAsset(creds, theme.id, SNIPPET_KEY, apiVersion, client);
+    if (source === null) {
+      source = await getThemeAsset(creds, theme.id, LAYOUT_KEY, apiVersion, client);
+      asset = LAYOUT_KEY;
+      usingLayout = true;
+    }
+    if (source === null) {
+      return {
+        success: false,
+        message: `Theme "${theme.name}" has neither ${SNIPPET_KEY} nor ${LAYOUT_KEY} — cannot optimize.`,
+        themeId: theme.id,
+        themeName: theme.name,
+      };
+    }
+
+    // Strip any prior managed block first so we don't match our OWN injected
+    // description tag when repointing, and so the block is re-added cleanly.
+    const body = source.replace(anyBlockRe(), "").replace(/\n{3,}/g, "\n\n");
+
+    const details: string[] = [];
+
+    // 1. Description: repoint the theme's own tag, or inject one if absent.
+    const hasOwnDescription = new RegExp(DESC_META_RE.source, "gis").test(body);
+    let repointed = 0;
+    let repatchedBody = body;
+    if (hasOwnDescription) {
+      repatchedBody = body.replace(new RegExp(DESC_META_RE.source, "gis"), (_m, prefix) => {
+        repointed += 1;
+        return `${prefix}"${PAGE_DESC_EXPR}"`;
+      });
+      details.push(
+        `repointed ${repointed} existing description tag${repointed === 1 ? "" : "s"} to page_description`,
+      );
+    } else {
+      details.push("injected <meta name=\"description\"> from page_description");
+    }
+
+    // 2. Favicon: add apple-touch-icon only if the theme has none.
+    const hasFavicon = /apple-touch-icon/i.test(body);
+    if (!hasFavicon) details.push("added apple-touch-icon favicon");
+
+    const block = buildSeoMetaBlock({
+      includeFavicon: !hasFavicon,
+      includeDescription: !hasOwnDescription,
+    });
+    details.push("added OG article tags + JSON-LD schema");
+
+    // 3. Re-add the managed block (append for the snippet, before </head> for
+    //    the layout).
+    let next: string | null;
+    if (usingLayout) {
+      next = upsertBlockInLayout(repatchedBody, block);
+      if (next === null) {
+        return {
+          success: false,
+          message: `Could not find </head> in ${LAYOUT_KEY} on theme "${theme.name}".`,
+          themeId: theme.id,
+          themeName: theme.name,
+          targetAsset: LAYOUT_KEY,
+          action: "skipped",
+        };
+      }
+    } else {
+      next = `${repatchedBody.replace(/\s*$/, "")}\n\n${block}\n`;
+    }
+
+    if (next === source) {
+      return {
+        success: true,
+        message: `Theme "${theme.name}" is already optimized — no change.`,
+        themeId: theme.id,
+        themeName: theme.name,
+        targetAsset: asset,
+        action: "unchanged",
+        details,
+      };
+    }
+
+    await putThemeAsset(creds, theme.id, asset, next, apiVersion, client);
+    return {
+      success: true,
+      message: `Optimized theme "${theme.name}" SEO in ${asset}.`,
+      themeId: theme.id,
+      themeName: theme.name,
+      targetAsset: asset,
+      action: "updated",
+      details,
     };
   } catch (error) {
     return { success: false, message: formatError(error) };
