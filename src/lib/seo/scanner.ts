@@ -401,7 +401,17 @@ function analyzeShopifyArticle(blog: BlogDescriptor, article: ShopifyArticle): R
       severity: "warning",
       title: "Article title too long",
       description: `Title is ${article.title.length} chars — may be truncated in SERPs.`,
-      autoFixable: false,
+      // Auto-fixable: writes a shorter global.title_tag metafield (the SEO
+      // title the theme renders in <title>) via the API. Non-destructive —
+      // the visible article title/handle is untouched.
+      autoFixable: true,
+      fixPayload: {
+        type: "shopify_meta_title",
+        articleId: article.id,
+        articleTitle: article.title,
+        excerpt: textContent.slice(0, 600),
+        pageUrl: url,
+      },
     });
   }
 
