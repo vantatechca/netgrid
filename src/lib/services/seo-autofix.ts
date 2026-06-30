@@ -4,6 +4,7 @@ import { seoIssues, blogs, clients } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { generateSeoFix } from "@/lib/services/claude-client";
 import * as wp from "@/lib/services/wp-client";
+import { injectArticleSchema } from "@/lib/services/wp-seo-injector";
 import {
   backfillPostSeo,
   resolveShopifyBlogId,
@@ -32,6 +33,51 @@ function stripHtml(html: string): string {
     .replace(/&nbsp;/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+/** First <img src> in an HTML string, if any. */
+function firstImageSrc(html: string): string | null {
+  const m = html.match(/<img[^>]+src=["']([^"']+)["']/i);
+  return m ? m[1] : null;
+}
+
+/**
+ * Plugin-independent SEO for WordPress blogs with NO SEO plugin: inject an
+ * idempotent JSON-LD Article block carrying the meta description into the post
+ * body (Google reads JSON-LD anywhere). No-op for Yoast/RankMath sites, which
+ * already emit schema. Returns a short note to append to the fix message, or
+ * "" when nothing was done.
+ */
+async function injectSchemaForPluginlessWp(
+  blog: typeof blogs.$inferSelect,
+  post: wp.WpPost,
+  description: string,
+): Promise<string> {
+  if (blog.seoPlugin !== "none") return "";
+  if (!blog.wpUrl || !blog.wpUsername || !blog.wpAppPassword) return "";
+
+  const res = await injectArticleSchema(
+    {
+      wpUrl: blog.wpUrl,
+      username: blog.wpUsername,
+      appPassword: blog.wpAppPassword,
+    },
+    post.id,
+    {
+      url: post.link,
+      headline: stripHtml(post.title?.rendered || ""),
+      description,
+      datePublished: post.date_gmt ? `${post.date_gmt}Z` : null,
+      dateModified: post.modified_gmt ? `${post.modified_gmt}Z` : null,
+      publisherName: blog.domain,
+      imageUrl: firstImageSrc(post.content?.rendered || ""),
+    },
+  );
+
+  if (!res.ok) return ` · schema not injected: ${res.message}`;
+  return res.persisted
+    ? " · Article schema injected"
+    : ` · ${res.message}`;
 }
 
 async function markApplied(issueId: string, fixSummary: string) {
@@ -357,8 +403,15 @@ export async function autoFixIssue(issueId: string): Promise<AutoFixResult> {
         DESC_TARGET_PX,
       );
       await applyMetaDescription(blog, post.id, trimmed);
+      // Plugin-less sites can't render a <meta name="description"> — also drop
+      // the description into JSON-LD Article schema in the body so it counts.
+      const schemaNote = await injectSchemaForPluginlessWp(blog, post, trimmed);
       await markApplied(issueId, `meta description: ${trimmed}`);
-      return { issueId, applied: true, message: `Meta description set on post ${post.id}` };
+      return {
+        issueId,
+        applied: true,
+        message: `Meta description set on post ${post.id}${schemaNote}`,
+      };
     }
 
     if (kind === "meta_title") {

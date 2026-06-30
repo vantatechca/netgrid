@@ -14,6 +14,7 @@ export interface WpPost {
   date: string;
   date_gmt: string;
   modified: string;
+  modified_gmt: string;
   slug: string;
   status: string;
   title: { rendered: string };
@@ -758,7 +759,12 @@ export async function findPostByUrl(
 
   const client = createClient(wpUrl, username, appPassword);
   const res = await client.get<WpPost[]>("/wp-json/wp/v2/posts", {
-    params: { slug, per_page: 1, _fields: "id,slug,title,content,excerpt,link,status" },
+    params: {
+      slug,
+      per_page: 1,
+      _fields:
+        "id,slug,title,content,excerpt,link,status,date_gmt,modified_gmt",
+    },
     validateStatus: () => true,
   });
 
