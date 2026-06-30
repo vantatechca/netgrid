@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { verifyCronSecret } from "@/lib/auth/helpers";
 import { db } from "@/lib/db";
 import { generatedPosts, seoScans, seoIssues } from "@/lib/db/schema";
-import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { runPostSeoScan } from "@/lib/services/post-seo-runner";
 
 // Per-post scans are cheap (one best-effort fetch + in-memory analysis), so a
@@ -26,6 +26,10 @@ export const maxDuration = 300;
  *   ?purge=1        ONE-TIME: delete open issues left by the old whole-site
  *                   crawler (anything NOT from a per-post scan). Preserves
  *                   applied/failed history. Run this once after deploy.
+ *   ?reset=1        CLEAN SLATE: delete ALL seo_issues and seo_scans (every
+ *                   client, every status) so tracking starts from zero. The
+ *                   per-post scans then repopulate as posts are (re)scanned.
+ *                   Destructive and irreversible — use to wipe the legacy data.
  */
 
 interface PostOutcome {
@@ -67,6 +71,23 @@ function clampInt(
   const n = Number(v);
   if (!Number.isFinite(n) || !Number.isInteger(n)) return def;
   return Math.max(min, Math.min(max, n));
+}
+
+/**
+ * Clean slate — delete EVERY seo_issue and seo_scan so tracking restarts from
+ * zero. Issues are removed first (they FK to scans), then scans. Returns the
+ * counts removed. Irreversible; gated behind the cron secret + explicit
+ * ?reset=1.
+ */
+async function resetAllSeoData(): Promise<{ issues: number; scans: number }> {
+  const [{ issues }] = await db
+    .select({ issues: count() })
+    .from(seoIssues);
+  const [{ scans }] = await db.select({ scans: count() }).from(seoScans);
+  // Delete issues first (FK → scans), then the scans themselves.
+  await db.delete(seoIssues);
+  await db.delete(seoScans);
+  return { issues: Number(issues), scans: Number(scans) };
 }
 
 /**
@@ -113,10 +134,20 @@ export async function GET(request: Request) {
     5,
   );
   const purge = url.searchParams.get("purge") === "1";
+  const reset = url.searchParams.get("reset") === "1";
 
   try {
+    // Clean slate wins over the softer purge if both are passed.
+    let resetCounts: { issues: number; scans: number } | undefined;
+    if (reset) {
+      resetCounts = await resetAllSeoData();
+      console.info(
+        `[seo-scan] RESET — wiped ${resetCounts.issues} issue(s) and ${resetCounts.scans} scan(s)`,
+      );
+    }
+
     let purged: number | undefined;
-    if (purge) {
+    if (purge && !reset) {
       purged = await purgeCrawlerIssues();
       console.info(`[seo-scan] purged ${purged} legacy crawler issue(s)`);
     }
@@ -147,7 +178,8 @@ export async function GET(request: Request) {
           "No unscanned published posts — every published post has a per-post scan.",
         batchSize,
         concurrency,
-        ...(purge ? { purgedCrawlerIssues: purged } : {}),
+        ...(reset ? { reset: resetCounts } : {}),
+        ...(purge && !reset ? { purgedCrawlerIssues: purged } : {}),
       });
     }
 
@@ -194,7 +226,8 @@ export async function GET(request: Request) {
       batchSize,
       concurrency,
       totalDurationMs,
-      ...(purge ? { purgedCrawlerIssues: purged } : {}),
+      ...(reset ? { reset: resetCounts } : {}),
+      ...(purge && !reset ? { purgedCrawlerIssues: purged } : {}),
       results: outcomes,
     });
   } catch (error) {

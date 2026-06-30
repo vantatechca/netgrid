@@ -212,6 +212,52 @@ export async function getBlogs(
   };
 }
 
+// ─── Get Blogs Grouped By Client (for the Blogs hub cards) ──────────────────
+
+export interface ClientBlogGroup {
+  clientId: string;
+  clientName: string;
+  clientStatus: string | null;
+  totalBlogs: number;
+  activeBlogs: number;
+  avgSeoScore: number | null;
+  lastPostAt: Date | null;
+}
+
+/**
+ * One row per client that owns at least one blog, with rollup counts for the
+ * Blogs hub card grid. Clicking a card drills into /clients/[id]/blogs, where
+ * the per-client table + "Add Blog" live.
+ */
+export async function getBlogsByClient(): Promise<ClientBlogGroup[]> {
+  await requireAdmin();
+
+  const rows = await db
+    .select({
+      clientId: clients.id,
+      clientName: clients.name,
+      clientStatus: clients.status,
+      totalBlogs: count(blogs.id),
+      activeBlogs: sql<number>`count(*) filter (where ${blogs.status} = 'active')`,
+      avgSeoScore: sql<number | null>`round(avg(${blogs.currentSeoScore}))`,
+      lastPostAt: sql<Date | null>`max(${blogs.lastPostVerifiedAt})`,
+    })
+    .from(clients)
+    .innerJoin(blogs, eq(blogs.clientId, clients.id))
+    .groupBy(clients.id, clients.name, clients.status)
+    .orderBy(asc(clients.name));
+
+  return rows.map((r) => ({
+    clientId: r.clientId,
+    clientName: r.clientName,
+    clientStatus: r.clientStatus,
+    totalBlogs: Number(r.totalBlogs),
+    activeBlogs: Number(r.activeBlogs),
+    avgSeoScore: r.avgSeoScore === null ? null : Number(r.avgSeoScore),
+    lastPostAt: r.lastPostAt ? new Date(r.lastPostAt) : null,
+  }));
+}
+
 // ─── Get Single Blog ────────────────────────────────────────────────────────
 
 export async function getBlog(id: string) {
