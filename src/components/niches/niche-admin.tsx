@@ -3,12 +3,14 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Loader2, RefreshCw, Save } from "lucide-react";
+import { CheckCircle2, FileSearch, Loader2, RefreshCw, Save, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  previewNichePrompt,
   syncNichesFromCode,
   updateNiche,
   type NicheRow,
@@ -223,6 +225,85 @@ export function NicheEditor({ niche }: { niche: NicheRow }) {
           Save changes
         </Button>
       </div>
+    </div>
+  );
+}
+
+type PreviewResult = Awaited<ReturnType<typeof previewNichePrompt>>;
+
+/**
+ * Parity check: renders the article system prompt for this niche both from the
+ * live code config and from this DB row, and flags whether they're identical.
+ * Green = switching generation to the DB is a no-op; amber = the diff shows how
+ * generated posts would change. Save first, then re-run to see edits reflected.
+ */
+export function NichePromptPreview({ nicheId }: { nicheId: string }) {
+  const [pending, start] = useTransition();
+  const [result, setResult] = useState<PreviewResult | null>(null);
+
+  function run() {
+    start(async () => setResult(await previewNichePrompt(nicheId)));
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <Button variant="outline" onClick={run} disabled={pending}>
+          {pending ? (
+            <Loader2 className="size-4 animate-spin" data-icon="inline-start" />
+          ) : (
+            <FileSearch className="size-4" data-icon="inline-start" />
+          )}
+          Preview prompt (parity check)
+        </Button>
+        {result?.success &&
+          (result.identical ? (
+            <Badge className="gap-1 bg-green-600 hover:bg-green-600">
+              <CheckCircle2 className="size-3.5" /> Identical to code
+            </Badge>
+          ) : (
+            <Badge variant="destructive" className="gap-1">
+              <TriangleAlert className="size-3.5" /> Differs from code
+            </Badge>
+          ))}
+      </div>
+
+      {result && !result.success && (
+        <p className="text-sm text-destructive">{result.message}</p>
+      )}
+
+      {result?.success && (
+        <>
+          <p className="text-xs text-muted-foreground">
+            Sample prompt for niche <code>{result.nicheKey}</code> (fixed sample
+            topic/seed so only the niche config differs).
+          </p>
+          <div className="grid gap-3 lg:grid-cols-2">
+            <div className="space-y-1">
+              <p className="text-xs font-medium text-muted-foreground">
+                From code (live today)
+              </p>
+              <pre className="max-h-96 overflow-auto rounded-md border bg-muted/30 p-3 text-[11px] leading-relaxed whitespace-pre-wrap">
+                {result.fromCode}
+              </pre>
+            </div>
+            <div className="space-y-1">
+              <p className="text-xs font-medium text-muted-foreground">
+                From this DB row
+              </p>
+              <pre
+                className={`max-h-96 overflow-auto rounded-md border p-3 text-[11px] leading-relaxed whitespace-pre-wrap ${
+                  result.identical
+                    ? "bg-muted/30"
+                    : "border-amber-300 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/40"
+                }`}
+              >
+                {result.fromDb}
+              </pre>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
