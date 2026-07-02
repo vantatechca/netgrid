@@ -1,15 +1,24 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { CheckCircle2, FileSearch, Loader2, RefreshCw, Save, TriangleAlert } from "lucide-react";
+import {
+  CheckCircle2,
+  FileSearch,
+  Loader2,
+  RefreshCw,
+  Save,
+  TriangleAlert,
+  Upload,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  importNicheFromFile,
   previewNichePrompt,
   syncNichesFromCode,
   updateNiche,
@@ -43,6 +52,61 @@ export function SyncNichesButton() {
       )}
       Sync from code
     </Button>
+  );
+}
+
+/**
+ * Import a niche from an uploaded reference file (brief / style guide /
+ * compliance sheet). Converts + AI-drafts the config, then jumps to the new
+ * niche's editor for review. Automates the "read the file, hand-code it" step.
+ */
+export function ImportNicheButton() {
+  const router = useRouter();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [pending, start] = useTransition();
+
+  function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-picking the same file
+    if (!file) return;
+    start(async () => {
+      const toastId = toast.loading(`Importing ${file.name}…`, {
+        description: "Reading the file and drafting the niche config.",
+      });
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await importNicheFromFile(fd);
+      if (res.success && res.nicheId) {
+        toast.success(res.message, { id: toastId });
+        router.push(`/content-studio/niches/${res.nicheId}`);
+      } else {
+        toast.error(res.message, { id: toastId });
+      }
+    });
+  }
+
+  return (
+    <>
+      <input
+        ref={inputRef}
+        type="file"
+        className="hidden"
+        accept=".pdf,.doc,.docx,.csv,.txt,.md,.xls,.xlsx,.png,.jpg,.jpeg,.webp"
+        onChange={onFile}
+      />
+      <Button
+        variant="outline"
+        onClick={() => inputRef.current?.click()}
+        disabled={pending}
+      >
+        {pending ? (
+          <Loader2 className="size-4 animate-spin" data-icon="inline-start" />
+        ) : (
+          <Upload className="size-4" data-icon="inline-start" />
+        )}
+        Import from file
+      </Button>
+    </>
   );
 }
 
