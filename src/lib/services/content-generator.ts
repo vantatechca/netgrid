@@ -445,6 +445,13 @@ export interface GenerateOptions {
    * Injected deterministically — not LLM-generated.
    */
   cta?: { label: string; url: string; placement?: string };
+  /**
+   * Niche config resolved by the caller — e.g. from the editable `niches` DB
+   * table (Content Studio). When provided, the legacy system prompt uses it
+   * instead of the hardcoded code niche. When absent, renderSystemPrompt falls
+   * back to resolveCodeNiche(niche), so any un-migrated niche keeps working.
+   */
+  resolvedNiche?: ResolvedNiche;
 }
 
 export interface GeneratedContent {
@@ -2093,11 +2100,13 @@ JSON SHAPE — strict:
 }
 
 /**
- * Legacy article system prompt — live path. Thin wrapper that resolves the
- * niche from CODE and delegates to renderSystemPrompt, so output is unchanged.
+ * Legacy article system prompt — live path. Uses the caller-resolved niche
+ * (e.g. the editable `niches` DB row) when present, else falls back to the
+ * hardcoded code niche. The fallback runs lazily here (after loadNicheProfiles
+ * in the action), so registry-backed niches still resolve correctly.
  */
 function buildSystemPrompt(opts: GenerateOptions): string {
-  return renderSystemPrompt(opts, resolveCodeNiche(opts.niche));
+  return renderSystemPrompt(opts, opts.resolvedNiche ?? resolveCodeNiche(opts.niche));
 }
 
 /**

@@ -64,6 +64,7 @@ import { publishPost as platformPublishPost } from "@/lib/services/platform-clie
 import * as wp from "@/lib/services/wp-client";
 import { pingIndexNowFireAndForget } from "@/lib/services/index-now-pinger";
 import { scanPostAfterPublishFireAndForget } from "@/lib/services/post-seo-runner";
+import { resolveNicheConfig } from "@/lib/content/niche-config-db";
 import { revalidatePath } from "next/cache";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -823,12 +824,17 @@ export async function generateBlogPost(
 
     // Build the generation options once — only `topic` and `keywords` change
   // between attempts when we fall back to a fresh ideated topic.
+  // Niche config from the editable `niches` DB table (falls back to code when
+  // there's no row). Resolved once; reused across topic-recovery retries.
+  const resolvedNiche = await resolveNicheConfig(blog.niche);
+
   const buildOpts = (t: string, kw: string[]): GenerateOptions => ({
     topic: t,
     keywords: kw,
     wordCount: input.wordCount ?? 700,
     tone: input.tone ?? "professional",
     niche: blog.niche,
+    resolvedNiche,
     brandVoice: input.brandVoice,
     targetAudience: input.targetAudience,
     seoOptimized: input.seoOptimized ?? true,
