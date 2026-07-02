@@ -5,7 +5,13 @@ import { niches } from "@/lib/db/schema";
 import { asc, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth/helpers";
-import { exportNicheSeedData } from "@/lib/services/content-generator";
+import {
+  exportNicheSeedData,
+  renderSystemPrompt,
+  resolveCodeNiche,
+  type GenerateOptions,
+  type ResolvedNiche,
+} from "@/lib/services/content-generator";
 
 export type NicheRow = typeof niches.$inferSelect;
 
@@ -65,6 +71,63 @@ export async function updateNiche(
   revalidatePath("/content-studio/niches");
   revalidatePath(`/content-studio/niches/${id}`);
   return { success: true, message: "Niche saved" };
+}
+
+/** Deterministic sample options so the code-vs-DB prompts differ ONLY by the
+ *  niche source (fixed seed → identical per-blog quirks/word band on both). */
+function sampleOptions(nicheKey: string): GenerateOptions {
+  return {
+    topic: "(sample topic for preview)",
+    keywords: ["sample", "keyword"],
+    wordCount: 1000,
+    tone: "professional",
+    niche: nicheKey,
+    blogSeed: `preview:${nicheKey}`,
+  };
+}
+
+function rowToResolvedNiche(row: NicheRow): ResolvedNiche {
+  return {
+    label: row.label,
+    industry: row.industry,
+    defaultAudience: row.defaultAudience ?? "",
+    defaultBrandVoice: row.defaultBrandVoice ?? "",
+    contentStyle: row.contentStyle ?? "",
+    keyTopics: Array.isArray(row.keyTopics) ? (row.keyTopics as string[]) : [],
+    requirements: row.requirements ?? "",
+  };
+}
+
+/**
+ * Parity preview: render the article system prompt for this niche BOTH ways —
+ * from the current code config and from the DB row — using identical sample
+ * options. When `identical` is true, switching generation to the DB is a
+ * provable no-op. When the row has been hand-edited, the diff shows exactly how
+ * the generated prompt would change.
+ */
+export async function previewNichePrompt(id: string): Promise<{
+  success: boolean;
+  message?: string;
+  nicheKey?: string;
+  fromCode?: string;
+  fromDb?: string;
+  identical?: boolean;
+}> {
+  await requireAdmin();
+  const [row] = await db.select().from(niches).where(eq(niches.id, id)).limit(1);
+  if (!row) return { success: false, message: "Niche not found" };
+
+  const opts = sampleOptions(row.key);
+  const fromCode = renderSystemPrompt(opts, resolveCodeNiche(row.key));
+  const fromDb = renderSystemPrompt(opts, rowToResolvedNiche(row));
+
+  return {
+    success: true,
+    nicheKey: row.key,
+    fromCode,
+    fromDb,
+    identical: fromCode === fromDb,
+  };
 }
 
 /**

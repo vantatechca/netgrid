@@ -1937,8 +1937,47 @@ function ctaStyleForBlog(seed: string | undefined): {
   };
 }
 
-function buildSystemPrompt(opts: GenerateOptions): string {
-  const niche = getNicheContext(opts.niche);
+export interface ResolvedNiche {
+  label: string;
+  industry: string;
+  defaultAudience: string;
+  defaultBrandVoice: string;
+  contentStyle: string;
+  keyTopics: string[];
+  requirements: string;
+}
+
+/**
+ * The niche config as the CODE provides it today — getNicheContext (voice,
+ * style, audience) plus getNicheRequirements. This is the byte-for-byte source
+ * live generation uses. A DB-backed resolver (Phase 1) produces the SAME shape
+ * from the `niches` table; renderSystemPrompt is agnostic to the source, so the
+ * eventual switch to DB-sourced config is a provable no-op on the prompt.
+ */
+export function resolveCodeNiche(niche: string | null | undefined): ResolvedNiche {
+  const ctx = getNicheContext(niche);
+  return {
+    label: ctx.label,
+    industry: ctx.industry,
+    defaultAudience: ctx.defaultAudience,
+    defaultBrandVoice: ctx.defaultBrandVoice,
+    contentStyle: ctx.contentStyle,
+    keyTopics: ctx.keyTopics,
+    // Matches buildSystemPrompt's original guard: requirements only when a
+    // niche string was supplied.
+    requirements: niche ? getNicheRequirements(niche) : "",
+  };
+}
+
+/**
+ * Assemble the legacy article system prompt from a RESOLVED niche + per-blog
+ * options. Extracted verbatim from buildSystemPrompt so the identical assembly
+ * can render from either the code niche (live) or a DB niche (preview/parity).
+ */
+export function renderSystemPrompt(
+  opts: GenerateOptions,
+  niche: ResolvedNiche,
+): string {
   const brandVoice = opts.brandVoice || niche.defaultBrandVoice;
   const audience = opts.targetAudience || niche.defaultAudience;
   // Per-blog word band — same seed → same band always. The opts.wordCount
@@ -2036,7 +2075,7 @@ JSON SHAPE — strict:
     prompt += `\n\nTHIS BLOG'S WRITING HABITS (apply consistently across the article):\n${quirks.map((q) => `- ${q}`).join("\n")}`;
   }
 
-  const nicheReqs = opts.niche ? getNicheRequirements(opts.niche) : "";
+  const nicheReqs = niche.requirements;
   if (nicheReqs) {
     prompt += `\n\nNICHE-SPECIFIC REQUIREMENTS:\n${nicheReqs}`;
   }
@@ -2051,6 +2090,14 @@ JSON SHAPE — strict:
   }
 
   return prompt;
+}
+
+/**
+ * Legacy article system prompt — live path. Thin wrapper that resolves the
+ * niche from CODE and delegates to renderSystemPrompt, so output is unchanged.
+ */
+function buildSystemPrompt(opts: GenerateOptions): string {
+  return renderSystemPrompt(opts, resolveCodeNiche(opts.niche));
 }
 
 /**

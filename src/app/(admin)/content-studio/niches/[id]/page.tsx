@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft } from "lucide-react";
-import { NicheEditor } from "@/components/niches/niche-admin";
+import { NicheEditor, NichePromptPreview } from "@/components/niches/niche-admin";
 
 export const dynamic = "force-dynamic";
 
@@ -56,6 +56,21 @@ export default async function NicheEditPage({
         </CardHeader>
         <CardContent>
           <NicheEditor niche={niche} />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Prompt parity check</CardTitle>
+          <CardDescription>
+            Confirm this DB row reproduces the exact system prompt the code
+            produces today. Green means switching generation to the DB changes
+            nothing; a diff shows how posts would change. Save edits first, then
+            re-run.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <NichePromptPreview nicheId={niche.id} />
         </CardContent>
       </Card>
     </div>
