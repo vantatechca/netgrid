@@ -23,6 +23,7 @@ import {
 import { publishPost, backfillPostSeo, resolveShopifyBlogId, type PlatformBlog } from "@/lib/services/platform-client";
 import { verticalForNiche } from "@/lib/content/verticals";
 import { loadNicheProfiles } from "@/lib/content/niche-registry";
+import { resolveNicheConfig } from "@/lib/content/niche-config-db";
 import { pingIndexNowFireAndForget } from "@/lib/services/index-now-pinger";
 import { scanPostAfterPublishFireAndForget } from "@/lib/services/post-seo-runner";
 
@@ -453,6 +454,10 @@ async function runGenerateAndPublish(
     //    fixes — the single biggest SEO signal we were missing).
     const internalLinkRefs = await getInternalLinkRefs(blog.id, 8);
 
+    // Niche config from the editable `niches` DB table (falls back to code
+    // when there's no row). Resolved once here, reused across topic retries.
+    const resolvedNiche = await resolveNicheConfig(clientNiche);
+
     // Build genOpts as a function so the topic-recovery loop below can
     // reuse it with a fresh ideated topic on failure.
     const buildGenOpts = (t: string, kw: string[]): GenerateOptions => ({
@@ -461,6 +466,7 @@ async function runGenerateAndPublish(
       wordCount: input.wordCount ?? 1000,
       tone: input.tone ?? "professional",
       niche: clientNiche,
+      resolvedNiche,
       seoOptimized: true,
       styleProfile: styleProfile ?? undefined,
       verticalKey: verticalForPost?.key ?? null,
@@ -798,6 +804,7 @@ export async function regenerateAndUpdatePost(
     wordCount: 1000,
     tone: "professional",
     niche: ctx.clientNiche,
+    resolvedNiche: await resolveNicheConfig(ctx.clientNiche),
     seoOptimized: true,
     styleProfile: ctx.styleProfile ?? undefined,
     verticalKey: ctx.verticalKey,
