@@ -338,6 +338,37 @@ export function getNicheContext(niche: string | null | undefined): NicheContext 
   };
 }
 
+export interface NicheSeed {
+  key: string;
+  label: string;
+  industry: string;
+  defaultAudience: string;
+  defaultBrandVoice: string;
+  contentStyle: string;
+  keyTopics: string[];
+  requirements: string;
+}
+
+/**
+ * Snapshot the hardcoded niche config (context + requirements) for seeding the
+ * `niches` DB table. Reads the SAME in-code maps generation uses, so the seeded
+ * rows are byte-identical to the live prompt inputs. Consumed by the "Sync from
+ * code" admin action in Phase 0 of the content-config rebuild — generation stays
+ * on this code path until the composer is switched to read the DB.
+ */
+export function exportNicheSeedData(): NicheSeed[] {
+  return Object.entries(NICHE_CONTEXTS).map(([key, ctx]) => ({
+    key,
+    label: ctx.label,
+    industry: ctx.industry,
+    defaultAudience: ctx.defaultAudience,
+    defaultBrandVoice: ctx.defaultBrandVoice,
+    contentStyle: ctx.contentStyle,
+    keyTopics: ctx.keyTopics,
+    requirements: getNicheRequirements(key),
+  }));
+}
+
 export function getAvailableNiches(): Array<{ key: string; label: string }> {
   return Object.entries(NICHE_CONTEXTS).map(([key, ctx]) => ({ key, label: ctx.label }));
 }

@@ -8,6 +8,7 @@ import {
   Users,
   FileText,
   Search,
+  SlidersHorizontal,
   CalendarClock,
   MessageSquare,
   BarChart3,
@@ -51,6 +52,12 @@ const navGroups: NavGroup[] = [
       { title: "Clients", href: "/clients", icon: Users },
       { title: "Blogs", href: "/blogs", icon: FileText },
       { title: "SEO Fix", href: "/seo", icon: Search },
+    ],
+  },
+  {
+    label: "Content Studio",
+    items: [
+      { title: "Niches", href: "/content-studio/niches", icon: SlidersHorizontal },
     ],
   },
   {

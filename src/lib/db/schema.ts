@@ -518,6 +518,48 @@ export const knowledgeDocuments = pgTable("knowledge_documents", {
   index("knowledge_documents_active_idx").on(table.isActive),
 ]);
 
+// ─── niches ───────────────────────────────────────────────────────────────────
+//
+// The editable, per-niche generation config. Phase 0 of the content-config
+// rebuild: these rows are SEEDED from the currently-hardcoded niche rules in
+// content-generator.ts (NICHE_CONTEXTS + getNicheRequirements) so ops can review
+// and edit them in the admin "Niches" screen. Generation still reads the code
+// path in Phase 0 — this table is a shadow copy until the composer is switched
+// over to read from it.
+//
+// `key` matches normalizeNicheKey() output (e.g. "peptides", "tax_lawyer"), so a
+// blog's free-text clients.niche resolves to a row by the same normalization.
+
+export const niches = pgTable("niches", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  key: varchar("key", { length: 100 }).notNull().unique(),
+  label: varchar("label", { length: 255 }).notNull(),
+  industry: varchar("industry", { length: 255 }).notNull(),
+  defaultAudience: text("default_audience"),
+  defaultBrandVoice: text("default_brand_voice"),
+  // The long "contentStyle" directive (voice/approach) that goes into the prompt.
+  contentStyle: text("content_style"),
+  // string[] — topical anchors used by ideation + generation.
+  keyTopics: jsonb("key_topics"),
+  // The per-niche writing-requirements block (getNicheRequirements).
+  requirements: text("requirements"),
+  // string[] — compliance/legal disclaimers (locked layer; mostly empty at seed
+  // time since today's disclaimers live in the peptide/gambling phrase library).
+  disclaimers: jsonb("disclaimers"),
+  // Optional niche-level word-count override (per-blog band still wins today).
+  wordBandMin: integer("word_band_min"),
+  wordBandMax: integer("word_band_max"),
+  // Provenance: "seed" = mirrored from code, "manual" = hand-edited in the UI,
+  // "imported" = extracted from an uploaded file (Phase 2). Lets re-sync skip
+  // hand-edited rows so it never clobbers ops changes.
+  source: varchar("source", { length: 20 }).notNull().default("seed"),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("niches_key_idx").on(table.key),
+]);
+
 // ─── Relations ──────────────────────────────────────────────────────────────
 
 export const usersRelations = relations(users, ({ one }) => ({
