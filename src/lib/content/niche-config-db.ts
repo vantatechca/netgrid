@@ -42,6 +42,9 @@ export async function resolveNicheConfig(
       contentStyle: row.contentStyle ?? "",
       keyTopics: Array.isArray(row.keyTopics) ? (row.keyTopics as string[]) : [],
       requirements: row.requirements ?? "",
+      disclaimers: Array.isArray(row.disclaimers)
+        ? (row.disclaimers as string[])
+        : [],
     };
   } catch (err) {
     console.warn(

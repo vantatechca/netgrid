@@ -264,6 +264,28 @@ export async function getBlogsByClient(): Promise<ClientBlogGroup[]> {
   }));
 }
 
+/**
+ * Save a per-blog custom generation prompt. Empty clears it (falls back to the
+ * client default, then the niche/persona style). Standalone so the big blog
+ * form / validators stay untouched.
+ */
+export async function updateBlogCustomPrompt(
+  blogId: string,
+  value: string,
+): Promise<{ success: boolean; message: string }> {
+  await requireAdmin();
+  const trimmed = value.trim();
+  await db
+    .update(blogs)
+    .set({ customPrompt: trimmed || null, updatedAt: new Date() })
+    .where(eq(blogs.id, blogId));
+  revalidatePath(`/blogs/${blogId}`);
+  return {
+    success: true,
+    message: trimmed ? "Custom prompt saved" : "Custom prompt cleared",
+  };
+}
+
 // ─── Get Single Blog ────────────────────────────────────────────────────────
 
 export async function getBlog(id: string) {
@@ -295,6 +317,7 @@ export async function getBlog(id: string) {
       lastSeoScanAt: blogs.lastSeoScanAt,
       status: blogs.status,
       notesInternal: blogs.notesInternal,
+      customPrompt: blogs.customPrompt,
       createdAt: blogs.createdAt,
       updatedAt: blogs.updatedAt,
     })
@@ -719,6 +742,8 @@ export async function generateBlogPost(
       domain: blogs.domain,
       platform: blogs.platform,
       niche: clients.niche,
+      customPrompt: blogs.customPrompt,
+      clientCustomPrompt: clients.customPrompt,
       ctaEnabled: clients.ctaEnabled,
       ctaLabel: clients.ctaLabel,
       ctaUrl: clients.ctaUrl,
@@ -827,6 +852,9 @@ export async function generateBlogPost(
   // Niche config from the editable `niches` DB table (falls back to code when
   // there's no row). Resolved once; reused across topic-recovery retries.
   const resolvedNiche = await resolveNicheConfig(blog.niche);
+  // Per-blog custom prompt overrides the client-level default.
+  const customPrompt =
+    blog.customPrompt?.trim() || blog.clientCustomPrompt?.trim() || undefined;
 
   const buildOpts = (t: string, kw: string[]): GenerateOptions => ({
     topic: t,
@@ -835,6 +863,7 @@ export async function generateBlogPost(
     tone: input.tone ?? "professional",
     niche: blog.niche,
     resolvedNiche,
+    customPrompt,
     brandVoice: input.brandVoice,
     targetAudience: input.targetAudience,
     seoOptimized: input.seoOptimized ?? true,

@@ -8,6 +8,7 @@ import {
   messages,
   activityLog,
 } from "@/lib/db/schema";
+import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth/helpers";
 import {
   createClientSchema,
@@ -101,6 +102,28 @@ export async function getClient(id: string) {
   return {
     ...client,
     blogCount: blogCountResult?.count ?? 0,
+  };
+}
+
+/**
+ * Save a client-level default custom generation prompt. Empty clears it. A
+ * per-blog custom prompt overrides this. Standalone so the client form /
+ * validators stay untouched.
+ */
+export async function updateClientCustomPrompt(
+  clientId: string,
+  value: string,
+): Promise<{ success: boolean; message: string }> {
+  await requireAdmin();
+  const trimmed = value.trim();
+  await db
+    .update(clients)
+    .set({ customPrompt: trimmed || null, updatedAt: new Date() })
+    .where(eq(clients.id, clientId));
+  revalidatePath(`/clients/${clientId}`);
+  return {
+    success: true,
+    message: trimmed ? "Custom prompt saved" : "Custom prompt cleared",
   };
 }
 

@@ -452,6 +452,14 @@ export interface GenerateOptions {
    * back to resolveCodeNiche(niche), so any un-migrated niche keeps working.
    */
   resolvedNiche?: ResolvedNiche;
+  /**
+   * Optional custom generation prompt (per-blog override or client default,
+   * resolved by the caller). When set and non-empty, it drives the article
+   * system prompt instead of the niche/persona style — but the JSON output
+   * contract, the no-images rule, the anti-AI-tell guardrails, and the niche's
+   * compliance disclaimers are still appended (locked).
+   */
+  customPrompt?: string;
 }
 
 export interface GeneratedContent {
@@ -1952,6 +1960,10 @@ export interface ResolvedNiche {
   contentStyle: string;
   keyTopics: string[];
   requirements: string;
+  /** Compliance/legal disclaimers — locked into the prompt even under a custom
+   *  prompt. Empty from code today (legacy prompt injects none); populated from
+   *  the niches DB row. */
+  disclaimers: string[];
 }
 
 /**
@@ -1973,6 +1985,10 @@ export function resolveCodeNiche(niche: string | null | undefined): ResolvedNich
     // Matches buildSystemPrompt's original guard: requirements only when a
     // niche string was supplied.
     requirements: niche ? getNicheRequirements(niche) : "",
+    // The legacy code path injects no niche-level disclaimers (peptide/gambling
+    // compliance rides the profile phrase library); the DB resolver supplies
+    // them when a niches row has them.
+    disclaimers: [],
   };
 }
 
@@ -2107,6 +2123,50 @@ JSON SHAPE — strict:
  */
 function buildSystemPrompt(opts: GenerateOptions): string {
   return renderSystemPrompt(opts, opts.resolvedNiche ?? resolveCodeNiche(opts.niche));
+}
+
+/**
+ * System prompt for the CUSTOM-PROMPT path. The operator's prompt drives the
+ * article's angle, voice, and structure; a fixed guardrails block is appended
+ * that ALWAYS applies regardless of what the custom prompt says:
+ *   - the niche's compliance/legal disclaimers (locked — per the design),
+ *   - the anti-AI-tell punctuation/word rules (network footprint protection),
+ *   - the no-images rule and per-blog word band,
+ *   - the strict JSON output contract the app parses.
+ * Self-contained (does not reuse renderSystemPrompt) so the proven legacy path
+ * stays byte-for-byte untouched.
+ */
+function buildCustomSystemPrompt(
+  opts: GenerateOptions,
+  niche: ResolvedNiche,
+): string {
+  const wb = wordBandForBlog(opts.blogSeed, opts.wordCount);
+  const disclaimers = (niche.disclaimers ?? []).filter(Boolean);
+  const complianceBlock = disclaimers.length
+    ? `\n\nCOMPLIANCE (locked — include these verbatim, non-negotiable):\n${disclaimers
+        .map((d) => `- ${d}`)
+        .join("\n")}`
+    : "";
+
+  return `${(opts.customPrompt ?? "").trim()}${complianceBlock}
+
+--- REQUIRED OUTPUT & GUARDRAILS (always apply, even if the instructions above conflict) ---
+- Do NOT use em-dashes (—) or en-dashes (–), the single-character ellipsis (…), or curly/smart quotes. Use straight quotes and normal punctuation.
+- Do NOT include any <img>, <figure>, <picture>, or <figcaption> tags. A hero image is attached at publish time.
+- Length: between ${wb.min} and ${wb.max} words (target approximately ${wb.target}). Leave a small buffer under the max so the JSON never truncates mid-string.
+- Allowed HTML tags in "content": <h2>, <h3>, <p>, <ul>, <ol>, <li>, <strong>, <em>, <a>. No markdown headings, no images.
+
+OUTPUT FORMAT:
+Return ONLY valid JSON with EXACTLY these top-level keys:
+{
+  "title": "Article title, primary keyword first, ~50 characters, no site/brand name",
+  "content": "Full HTML article as ONE string, between ${wb.min} and ${wb.max} words",
+  "excerpt": "150-160 character summary",
+  "metaTitle": "SEO title tag, primary keyword FIRST, ~50 characters (must render under 580px). Use ' | ' not '-' as a separator.",
+  "metaDescription": "Meta description, primary keyword early, ~140 characters (under 1000px). One natural sentence ending with a soft call to action.",
+  "keywords": ["keyword1", "keyword2", "keyword3"]
+}
+Return the JSON object directly — no preamble, no wrapping object, field names exactly as shown.`;
 }
 
 /**
@@ -2664,7 +2724,21 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
   let system: string;
   let user: string;
   let maxTokens: number;
-  if (usingProfile && opts.styleProfile) {
+  if (opts.customPrompt && opts.customPrompt.trim()) {
+    // Custom-prompt path: the operator's prompt drives the article; the locked
+    // guardrails (compliance + AI-tells + no-images + JSON contract) are baked
+    // into buildCustomSystemPrompt. Overrides BOTH the profile and legacy paths.
+    const nicheForCustom = opts.resolvedNiche ?? resolveCodeNiche(opts.niche);
+    system =
+      buildCustomSystemPrompt(opts, nicheForCustom) +
+      languageDirective +
+      knowledgeContext +
+      SEO_QUALITY_DIRECTIVE;
+    user = buildUserPrompt(opts);
+    if (newsLinksClause) user = user + newsLinksClause;
+    if (internalLinksClause) user = user + internalLinksClause;
+    maxTokens = Math.min(4096, Math.max(3000, Math.round(MAX_WORDS * 3.2)));
+  } else if (usingProfile && opts.styleProfile) {
     const composed = composeForPost({
       profile: opts.styleProfile,
       topic: opts.topic,

@@ -86,6 +86,11 @@ export const clients = pgTable("clients", {
   niche: varchar("niche", { length: 255 }),
   totalBlogsTarget: integer("total_blogs_target").default(0),
   notesInternal: text("notes_internal"),
+  // Optional custom generation prompt (client-level default). When set, it
+  // drives article generation for this client's blogs instead of the
+  // niche/persona style — a per-blog customPrompt overrides it. Compliance and
+  // the JSON output contract stay locked regardless.
+  customPrompt: text("custom_prompt"),
   // Call-to-action button appended to the bottom of every published post for
   // this client (link to their main site / contact / registration page).
   ctaEnabled: boolean("cta_enabled").default(false).notNull(),
@@ -136,6 +141,10 @@ export const blogs = pgTable("blogs", {
   lastSeoScanAt: timestamp("last_seo_scan_at"),
   status: blogStatusEnum("status").default("setup"),
   notesInternal: text("notes_internal"),
+  // Optional per-blog custom generation prompt. Overrides the client-level
+  // customPrompt and the niche/persona style when set. Compliance + JSON
+  // output contract stay locked regardless.
+  customPrompt: text("custom_prompt"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [

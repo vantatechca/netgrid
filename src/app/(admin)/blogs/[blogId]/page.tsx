@@ -14,6 +14,7 @@ import { CredentialDisplay } from "@/components/blogs/credential-display";
 import { WpConnectionTest } from "@/components/blogs/wp-connection-test";
 import { ThemeSeoButton } from "@/components/blogs/theme-seo-button";
 import { BlogForm } from "@/components/blogs/blog-form";
+import { CustomPromptCard } from "@/components/content/custom-prompt-card";
 import { BlogPostsPanel } from "@/components/blogs/blog-posts-panel";
 import { StyleProfilePanel } from "@/components/blogs/style-profile-panel";
 import { getStyleProfileForBlog } from "@/lib/actions/style-profile-actions";
@@ -193,6 +194,12 @@ export default async function BlogDetailPage({
           </Link>
         </div>
       </div>
+
+      <CustomPromptCard
+        scope="blog"
+        id={params.blogId}
+        initial={blog.customPrompt}
+      />
 
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Identity */}
