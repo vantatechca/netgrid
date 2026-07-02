@@ -7,11 +7,16 @@ import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth/helpers";
 import {
   exportNicheSeedData,
+  normalizeNicheKey,
   renderSystemPrompt,
   resolveCodeNiche,
   type GenerateOptions,
   type ResolvedNiche,
 } from "@/lib/services/content-generator";
+import { convertToMarkdown } from "@/lib/services/knowledge-converter";
+import { extractNicheConfig } from "@/lib/services/niche-extractor";
+
+const MAX_IMPORT_BYTES = 10 * 1024 * 1024; // 10 MB
 
 export type NicheRow = typeof niches.$inferSelect;
 
@@ -71,6 +76,121 @@ export async function updateNiche(
   revalidatePath("/content-studio/niches");
   revalidatePath(`/content-studio/niches/${id}`);
   return { success: true, message: "Niche saved" };
+}
+
+/** Fallback slug for a niche key when the model gives none. */
+function slugKey(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 100);
+}
+
+/**
+ * Import a niche config from an uploaded reference file: convert to Markdown,
+ * AI-extract the config, and upsert a niches row (source="imported") for the
+ * operator to review and edit. Replaces the manual "read the file, hand-code the
+ * rules" step. Returns the niche id so the UI can jump straight to its editor.
+ */
+export async function importNicheFromFile(formData: FormData): Promise<{
+  success: boolean;
+  message: string;
+  nicheId?: string;
+  key?: string;
+  replaced?: boolean;
+}> {
+  await requireAdmin();
+
+  const file = formData.get("file");
+  if (!(file instanceof File)) return { success: false, message: "No file provided." };
+  if (file.size === 0) return { success: false, message: "The file is empty." };
+  if (file.size > MAX_IMPORT_BYTES) {
+    return {
+      success: false,
+      message: `File is too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Max is ${MAX_IMPORT_BYTES / 1024 / 1024} MB.`,
+    };
+  }
+
+  let markdown: string;
+  try {
+    const buf = Buffer.from(await file.arrayBuffer());
+    const conversion = await convertToMarkdown(buf, file.type || "", file.name);
+    markdown = conversion.markdown;
+  } catch (err) {
+    return {
+      success: false,
+      message: `Could not read the file: ${err instanceof Error ? err.message : "conversion failed"}`,
+    };
+  }
+
+  let draft;
+  try {
+    draft = await extractNicheConfig(markdown, { fileName: file.name });
+  } catch (err) {
+    return {
+      success: false,
+      message: `Extraction failed: ${err instanceof Error ? err.message : "unknown error"}`,
+    };
+  }
+
+  const key =
+    normalizeNicheKey(draft.suggestedKey) ||
+    normalizeNicheKey(draft.label) ||
+    slugKey(draft.label || file.name.replace(/\.[^.]+$/, "")) ||
+    slugKey(file.name);
+  if (!key) return { success: false, message: "Could not derive a niche key from the file." };
+  if (!draft.label) draft.label = key;
+  if (!draft.industry) draft.industry = draft.label;
+
+  const existing = await db
+    .select({ id: niches.id })
+    .from(niches)
+    .where(eq(niches.key, key))
+    .limit(1);
+  const replaced = existing.length > 0;
+
+  const [row] = await db
+    .insert(niches)
+    .values({
+      key,
+      label: draft.label,
+      industry: draft.industry,
+      defaultAudience: draft.defaultAudience || null,
+      defaultBrandVoice: draft.defaultBrandVoice || null,
+      contentStyle: draft.contentStyle || null,
+      keyTopics: draft.keyTopics,
+      requirements: draft.requirements || null,
+      disclaimers: draft.disclaimers,
+      source: "imported",
+    })
+    .onConflictDoUpdate({
+      target: niches.key,
+      set: {
+        label: draft.label,
+        industry: draft.industry,
+        defaultAudience: draft.defaultAudience || null,
+        defaultBrandVoice: draft.defaultBrandVoice || null,
+        contentStyle: draft.contentStyle || null,
+        keyTopics: draft.keyTopics,
+        requirements: draft.requirements || null,
+        disclaimers: draft.disclaimers,
+        source: "imported",
+        updatedAt: new Date(),
+      },
+    })
+    .returning({ id: niches.id, key: niches.key });
+
+  revalidatePath("/content-studio/niches");
+  return {
+    success: true,
+    nicheId: row.id,
+    key: row.key,
+    replaced,
+    message: replaced
+      ? `Updated niche "${row.key}" from ${file.name}. Review the draft below.`
+      : `Created niche "${row.key}" from ${file.name}. Review the draft below.`,
+  };
 }
 
 /** Deterministic sample options so the code-vs-DB prompts differ ONLY by the

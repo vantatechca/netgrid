@@ -11,7 +11,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { ChevronRight, Info } from "lucide-react";
-import { SyncNichesButton } from "@/components/niches/niche-admin";
+import { SyncNichesButton, ImportNicheButton } from "@/components/niches/niche-admin";
 
 export const dynamic = "force-dynamic";
 
@@ -30,7 +30,10 @@ export default async function NichesPage() {
             compliance. Edit here instead of in code.
           </p>
         </div>
-        <SyncNichesButton />
+        <div className="flex flex-wrap items-center gap-2">
+          <ImportNicheButton />
+          <SyncNichesButton />
+        </div>
       </div>
 
       {/* Shadow-mode notice */}
