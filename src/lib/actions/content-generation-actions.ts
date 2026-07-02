@@ -347,6 +347,7 @@ async function runGenerateAndPublish(
     .select({
       blog: blogs,
       clientNiche: clients.niche,
+      clientCustomPrompt: clients.customPrompt,
       ctaEnabled: clients.ctaEnabled,
       ctaLabel: clients.ctaLabel,
       ctaUrl: clients.ctaUrl,
@@ -359,6 +360,9 @@ async function runGenerateAndPublish(
 
   if (!row) throw new Error(`Blog ${input.blogId} not found`);
   const { blog, clientNiche } = row;
+  // Per-blog custom prompt overrides the client-level default. Empty → none.
+  const customPrompt =
+    blog.customPrompt?.trim() || row.clientCustomPrompt?.trim() || undefined;
   const cta = clientCta(row.ctaEnabled, row.ctaLabel, row.ctaUrl, row.ctaPlacement);
 
   if (!blogHasCredentials(blog)) {
@@ -467,6 +471,7 @@ async function runGenerateAndPublish(
       tone: input.tone ?? "professional",
       niche: clientNiche,
       resolvedNiche,
+      customPrompt,
       seoOptimized: true,
       styleProfile: styleProfile ?? undefined,
       verticalKey: verticalForPost?.key ?? null,
@@ -805,6 +810,7 @@ export async function regenerateAndUpdatePost(
     tone: "professional",
     niche: ctx.clientNiche,
     resolvedNiche: await resolveNicheConfig(ctx.clientNiche),
+    customPrompt: ctx.customPrompt,
     seoOptimized: true,
     styleProfile: ctx.styleProfile ?? undefined,
     verticalKey: ctx.verticalKey,
@@ -882,6 +888,7 @@ async function resolveIdeationContext(blogId: string) {
     .select({
       blog: blogs,
       clientNiche: clients.niche,
+      clientCustomPrompt: clients.customPrompt,
       ctaEnabled: clients.ctaEnabled,
       ctaLabel: clients.ctaLabel,
       ctaUrl: clients.ctaUrl,
@@ -894,6 +901,8 @@ async function resolveIdeationContext(blogId: string) {
   if (!row) throw new Error(`Blog ${blogId} not found`);
   const { blog, clientNiche } = row;
   const cta = clientCta(row.ctaEnabled, row.ctaLabel, row.ctaUrl, row.ctaPlacement);
+  const customPrompt =
+    blog.customPrompt?.trim() || row.clientCustomPrompt?.trim() || undefined;
 
   let styleProfile = await getStyleProfileForBlog(blog.id);
   if (!styleProfile) {
@@ -914,6 +923,7 @@ async function resolveIdeationContext(blogId: string) {
   return {
     blog,
     clientNiche,
+    customPrompt,
     styleProfile,
     verticalKey: verticalForPost?.key ?? null,
     language,

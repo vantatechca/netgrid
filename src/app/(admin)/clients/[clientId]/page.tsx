@@ -27,6 +27,7 @@ import { BlogTable } from "@/components/blogs/blog-table";
 import { MessageThread } from "@/components/messages/message-thread";
 import { ClientForm } from "@/components/clients/client-form";
 import { KnowledgeBasePanel } from "@/components/clients/knowledge-base-panel";
+import { CustomPromptCard } from "@/components/content/custom-prompt-card";
 import { ClientSeoIssues } from "@/components/seo/client-seo-issues";
 import {
   ArrowLeft,
@@ -518,7 +519,12 @@ export default async function ClientDetailPage({
         </TabsContent>
 
         {/* Knowledge Tab */}
-        <TabsContent value="knowledge" className="pt-4">
+        <TabsContent value="knowledge" className="space-y-6 pt-4">
+          <CustomPromptCard
+            scope="client"
+            id={client.id}
+            initial={client.customPrompt}
+          />
           <KnowledgeBasePanel
             clientId={client.id}
             documents={knowledgeDocs}
