@@ -52,7 +52,7 @@ export default async function ClientBlogsPage({
         href="/blogs"
         className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
       >
-        <ArrowLeft className="size-3.5" /> All clients
+        <ArrowLeft className="size-3.5" /> All blogs
       </Link>
 
       <div className="flex items-center justify-between">
