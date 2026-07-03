@@ -123,6 +123,7 @@ export default async function ClientDetailPage({
             totalBlogsTarget: client.totalBlogsTarget ?? 0,
             notesInternal: client.notesInternal ?? "",
             customPrompt: client.customPrompt ?? "",
+            stackPersona: client.stackPersona ?? false,
             ctaEnabled: client.ctaEnabled ?? false,
             ctaLabel: client.ctaLabel ?? "",
             ctaUrl: client.ctaUrl ?? "",
