@@ -43,6 +43,12 @@ export async function GET(request: Request) {
         description:
           "Views/clicks bucketed over time. Optional ?granularity=day|week, ?blogId=, ?days=/?since=.",
       },
+      {
+        method: "GET",
+        path: "/api/v1/clients/{clientId}/seo-history",
+        description:
+          "Per-site overall-SEO-score time series for trend charts. Optional ?blogId=, ?days=/?since=.",
+      },
     ],
   });
 }

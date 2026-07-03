@@ -5,6 +5,7 @@ import {
   linkEvents,
   generatedPosts,
   seoThirdPartyData,
+  seoScans,
 } from "@/lib/db/schema";
 import {
   and,
@@ -605,6 +606,69 @@ export async function clientTrafficSeries(
     return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
   } catch {
     return [];
+  }
+}
+
+// ─── SEO score history (score-over-time) ─────────────────────────────────────
+
+export interface SeoHistoryPoint {
+  /** Scan timestamp, ISO 8601. */
+  date: string;
+  /** Overall SEO score at that scan, 0–100. */
+  score: number;
+}
+
+export interface SeoHistorySite {
+  blogId: string;
+  domain: string;
+  points: SeoHistoryPoint[];
+}
+
+export interface SeoHistory {
+  clientId: string;
+  sites: SeoHistorySite[];
+}
+
+/**
+ * Per-site overall-SEO-score time series for one client, oldest point first.
+ * Optionally scoped to one site (`blogId`) and/or a time window (`since`).
+ * Sites with no scans in range are omitted. Fail-safe to no sites.
+ */
+export async function clientSeoHistory(
+  clientId: string,
+  opts?: { blogId?: string; since?: Date },
+): Promise<SeoHistory> {
+  try {
+    const conds = [eq(seoScans.clientId, clientId)];
+    if (opts?.blogId) conds.push(eq(seoScans.blogId, opts.blogId));
+    if (opts?.since) conds.push(gte(seoScans.scannedAt, opts.since));
+
+    const rows = await db
+      .select({
+        blogId: seoScans.blogId,
+        domain: blogs.domain,
+        score: seoScans.overallScore,
+        scannedAt: seoScans.scannedAt,
+      })
+      .from(seoScans)
+      .innerJoin(blogs, eq(seoScans.blogId, blogs.id))
+      .where(and(...conds))
+      .orderBy(seoScans.scannedAt);
+
+    const bySite = new Map<string, SeoHistorySite>();
+    for (const r of rows) {
+      const d = iso(r.scannedAt);
+      if (!d) continue;
+      let site = bySite.get(r.blogId);
+      if (!site) {
+        site = { blogId: r.blogId, domain: r.domain, points: [] };
+        bySite.set(r.blogId, site);
+      }
+      site.points.push({ date: d, score: Number(r.score) });
+    }
+    return { clientId, sites: Array.from(bySite.values()) };
+  } catch {
+    return { clientId, sites: [] };
   }
 }
 
