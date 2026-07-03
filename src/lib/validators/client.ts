@@ -32,6 +32,10 @@ const clientFields = z.object({
     .min(0, "Must be 0 or more")
     .optional(),
   notesInternal: z.string().optional().or(z.literal("")),
+  // Optional client-level custom generation prompt. When set, all this
+  // client's blogs are generated from it instead of the niche/persona style
+  // (a per-blog customPrompt overrides it). Compliance + JSON output stay locked.
+  customPrompt: z.string().optional().or(z.literal("")),
   status: z.enum(["onboarding", "active", "paused", "churned"]).optional(),
   // Call-to-action button appended to the bottom of every published post for
   // this client (e.g. a link to their main website / contact / registration).

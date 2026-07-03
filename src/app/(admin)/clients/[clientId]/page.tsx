@@ -122,6 +122,7 @@ export default async function ClientDetailPage({
             niche: client.niche ?? "",
             totalBlogsTarget: client.totalBlogsTarget ?? 0,
             notesInternal: client.notesInternal ?? "",
+            customPrompt: client.customPrompt ?? "",
             ctaEnabled: client.ctaEnabled ?? false,
             ctaLabel: client.ctaLabel ?? "",
             ctaUrl: client.ctaUrl ?? "",
