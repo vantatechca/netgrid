@@ -12,7 +12,7 @@ export async function GET(
   request: Request,
   { params }: { params: { clientId: string } },
 ) {
-  const denied = apiAuthGuard(request);
+  const denied = await apiAuthGuard(request);
   if (denied) return denied;
 
   const { clientId } = params;

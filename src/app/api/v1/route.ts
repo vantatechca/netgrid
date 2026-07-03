@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 
 /** GET /api/v1 — index / self-documenting endpoint list (auth-gated). */
 export async function GET(request: Request) {
-  const denied = apiAuthGuard(request);
+  const denied = await apiAuthGuard(request);
   if (denied) return denied;
 
   return NextResponse.json({

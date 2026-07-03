@@ -14,6 +14,7 @@ import {
   BarChart3,
   Activity,
   Settings,
+  Plug,
   ChevronLeft,
   ChevronRight,
   Globe,
@@ -77,6 +78,7 @@ const navGroups: NavGroup[] = [
     label: "System",
     items: [
       { title: "Activity Log", href: "/activity", icon: Activity },
+      { title: "Integrations", href: "/integrations", icon: Plug },
       { title: "Settings", href: "/settings", icon: Settings },
     ],
   },

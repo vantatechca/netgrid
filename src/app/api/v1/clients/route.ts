@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
  *   ?status=<status>   onboarding | active | paused | churned
  */
 export async function GET(request: Request) {
-  const denied = apiAuthGuard(request);
+  const denied = await apiAuthGuard(request);
   if (denied) return denied;
 
   const url = new URL(request.url);
