@@ -1,14 +1,21 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { getFixModel } from "@/lib/settings/app-settings";
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-// Current Sonnet id. The old dated snapshot ("claude-sonnet-4-20250514") was
-// retired and now 404s ("model: ... not_found_error"), which broke the SEO
-// Fix / report calls. Matches the model the content generator uses; override
-// via env if the network is pinned to a different snapshot.
-const CLAUDE_MODEL = process.env.CLAUDE_MODEL || "claude-sonnet-4-6";
+// Operator-selected Claude model for SEO fixes + reports (Settings → AI Models).
+// Defaults to CLAUDE_MODEL env / Sonnet 4.6. Resolved per call (cheap — cached
+// in app-settings) so a Settings change takes effect without a redeploy. Falls
+// back to the default on any lookup error.
+async function fixModel(): Promise<string> {
+  try {
+    return await getFixModel();
+  } catch {
+    return process.env.CLAUDE_MODEL || "claude-sonnet-4-6";
+  }
+}
 
 export async function generateSeoFix(params: {
   niche: string;
@@ -20,7 +27,7 @@ export async function generateSeoFix(params: {
   issueDescription: string;
 }): Promise<string> {
   const message = await anthropic.messages.create({
-    model: CLAUDE_MODEL,
+    model: await fixModel(),
     max_tokens: 1024,
     system: `You are an SEO specialist generating fixes for a blog in the ${params.niche} niche.
 The blog is: ${params.blogDomain}.
@@ -66,7 +73,7 @@ export async function generateMonthlyReport(params: {
   concernReason?: string;
 }): Promise<string> {
   const message = await anthropic.messages.create({
-    model: CLAUDE_MODEL,
+    model: await fixModel(),
     max_tokens: 2048,
     system: `You are a professional SEO analyst writing a monthly performance report for a client
 who invested in a private blog network to dominate the ${params.clientNiche} niche.
@@ -109,7 +116,7 @@ export async function generateIssueDescription(params: {
   technicalDetails: string;
 }): Promise<{ title: string; description: string; suggestedFix: string }> {
   const message = await anthropic.messages.create({
-    model: CLAUDE_MODEL,
+    model: await fixModel(),
     max_tokens: 512,
     messages: [
       {

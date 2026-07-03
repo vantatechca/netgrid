@@ -663,3 +663,13 @@ export const activityLogRelations = relations(activityLog, ({ one }) => ({
   user: one(users, { fields: [activityLog.userId], references: [users.id] }),
   client: one(clients, { fields: [activityLog.clientId], references: [clients.id] }),
 }));
+
+// ─── app_settings ────────────────────────────────────────────────────────────
+// Operator-global key/value settings (e.g. which model powers content
+// generation vs SEO fixes). One row per key; values are stored as text and
+// parsed by typed getters in @/lib/settings/app-settings.
+export const appSettings = pgTable("app_settings", {
+  key: varchar("key", { length: 64 }).primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});

@@ -3,6 +3,11 @@ import { composeForPost } from "@/lib/content/composer/compose";
 import { getCachedNicheProfile } from "@/lib/content/niche-registry";
 import { runScrubber, runScrubberLite, type ScrubberReport } from "@/lib/content/scrubber";
 import type { GeneratedPersona, StyleProfile } from "@/lib/content/types";
+import {
+  getContentModel,
+  DEFAULT_CONTENT_MODEL,
+  type ContentModel,
+} from "@/lib/settings/app-settings";
 import { SUB_NICHES } from "@/lib/content/libraries/sub-niches";
 import {
   truncateToPx,
@@ -1337,17 +1342,35 @@ async function callClaude(
   userMessage: string,
   options: { maxTokens?: number; temperature?: number; expectJson?: boolean } = {},
 ): Promise<ClaudeCallResult> {
-  if (deepseekConfigured()) {
+  // Operator-selected provider (Settings → AI Models). Default "auto" preserves
+  // the historical DeepSeek→Claude behavior. Falls back to "auto" on any lookup
+  // error so a settings hiccup never blocks generation.
+  let mode: ContentModel = DEFAULT_CONTENT_MODEL;
+  try {
+    mode = await getContentModel();
+  } catch {
+    mode = DEFAULT_CONTENT_MODEL;
+  }
+
+  const wantDeepseek = mode === "auto" || mode === "deepseek";
+  if (wantDeepseek && deepseekConfigured()) {
     try {
       return await callWithRetry("deepseek", () =>
         callDeepSeekOnce(system, userMessage, options),
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      // "deepseek" = exclusive: surface the error instead of silently billing
+      // Claude (the whole point of forcing DeepSeek is to avoid Claude).
+      if (mode === "deepseek") throw err;
       console.warn(
         `[model] DeepSeek failed — falling back to Claude: ${msg.slice(0, 200)}`,
       );
     }
+  } else if (mode === "deepseek") {
+    throw new Error(
+      "Content model is set to DeepSeek only, but DEEPSEEK_API_KEY is not configured.",
+    );
   }
   return await callWithRetry("claude", () =>
     callClaudeOnce(system, userMessage, options),

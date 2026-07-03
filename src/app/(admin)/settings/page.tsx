@@ -3,9 +3,31 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
+import { AiModelsCard } from "@/components/settings/ai-models-card";
+import { getModelSettings } from "@/lib/actions/settings-actions";
+import {
+  CONTENT_MODEL_LABELS,
+  FIX_MODEL_OPTIONS,
+} from "@/lib/settings/app-settings";
 
 export default async function SettingsPage() {
   const session = await requireAdmin();
+  const modelSettings = await getModelSettings();
+
+  const contentOptions = (
+    Object.entries(CONTENT_MODEL_LABELS) as [string, string][]
+  ).map(([value, label]) => ({ value, label }));
+  const fixOptions: { value: string; label: string }[] = FIX_MODEL_OPTIONS.map(
+    (o) => ({ value: o.id, label: o.label }),
+  );
+  // Ensure the currently-saved fix model is always selectable even if it came
+  // from a CLAUDE_MODEL env override not in the curated list.
+  if (!fixOptions.some((o) => o.value === modelSettings.fixModel)) {
+    fixOptions.unshift({
+      value: modelSettings.fixModel,
+      label: `${modelSettings.fixModel} (current)`,
+    });
+  }
 
   const integrations = [
     {
@@ -67,6 +89,15 @@ export default async function SettingsPage() {
           </div>
         </CardContent>
       </Card>
+
+      <AiModelsCard
+        contentModel={modelSettings.contentModel}
+        fixModel={modelSettings.fixModel}
+        deepseekConfigured={modelSettings.deepseekConfigured}
+        anthropicConfigured={modelSettings.anthropicConfigured}
+        contentOptions={contentOptions}
+        fixOptions={fixOptions}
+      />
 
       <Card>
         <CardHeader>
