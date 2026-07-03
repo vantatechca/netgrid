@@ -9,6 +9,7 @@
     "start": "cross-env NODE_OPTIONS=--dns-result-order=ipv4first next start",
     "lint": "next lint",
     "db:generate": "drizzle-kit generate",
+    "db:migrate": "node src/lib/db/migrate.mjs",
     "db:push": "drizzle-kit push",
     "db:seed": "cross-env NODE_OPTIONS=--dns-result-order=ipv4first tsx src/lib/db/seed.ts",
     "db:repair-compounds": "cross-env NODE_OPTIONS=--dns-result-order=ipv4first tsx src/lib/db/repair-compounds.ts"
