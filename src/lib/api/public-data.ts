@@ -1,6 +1,23 @@
 import { db } from "@/lib/db";
-import { clients, blogs, linkEvents, generatedPosts } from "@/lib/db/schema";
-import { and, avg, count, desc, eq, gte, ilike, max } from "drizzle-orm";
+import {
+  clients,
+  blogs,
+  linkEvents,
+  generatedPosts,
+  seoThirdPartyData,
+} from "@/lib/db/schema";
+import {
+  and,
+  avg,
+  count,
+  desc,
+  eq,
+  gte,
+  ilike,
+  inArray,
+  max,
+  sql,
+} from "drizzle-orm";
 
 /**
  * Read models for the public marketing API. These deliberately expose ONLY
@@ -157,6 +174,60 @@ async function publishedByBlog(clientId: string): Promise<Map<string, number>> {
   return map;
 }
 
+export interface PublicSiteMetrics {
+  source: string | null;
+  domainAuthority: number | null;
+  backlinks: number | null;
+  referringDomains: number | null;
+  organicKeywords: number | null;
+  organicTrafficEst: number | null;
+  topKeywords: unknown | null;
+  fetchedAt: string | null;
+}
+
+/**
+ * Latest third-party SEO snapshot (Ahrefs/Semrush) per blog, for one client.
+ * Rows are ordered newest-first and reduced to the first (latest) per blogId.
+ */
+async function thirdPartyByBlog(
+  clientId: string,
+): Promise<Map<string, PublicSiteMetrics>> {
+  const map = new Map<string, PublicSiteMetrics>();
+  try {
+    const rows = await db
+      .select({
+        blogId: seoThirdPartyData.blogId,
+        source: seoThirdPartyData.source,
+        domainAuthority: seoThirdPartyData.domainAuthority,
+        backlinks: seoThirdPartyData.backlinksTotal,
+        referringDomains: seoThirdPartyData.referringDomains,
+        organicKeywords: seoThirdPartyData.organicKeywords,
+        organicTrafficEst: seoThirdPartyData.organicTrafficEst,
+        topKeywords: seoThirdPartyData.topKeywords,
+        fetchedAt: seoThirdPartyData.fetchedAt,
+      })
+      .from(seoThirdPartyData)
+      .where(eq(seoThirdPartyData.clientId, clientId))
+      .orderBy(desc(seoThirdPartyData.fetchedAt));
+    for (const r of rows) {
+      if (!r.blogId || map.has(r.blogId)) continue; // keep the latest only
+      map.set(r.blogId, {
+        source: r.source ?? null,
+        domainAuthority: r.domainAuthority ?? null,
+        backlinks: r.backlinks ?? null,
+        referringDomains: r.referringDomains ?? null,
+        organicKeywords: r.organicKeywords ?? null,
+        organicTrafficEst: r.organicTrafficEst ?? null,
+        topKeywords: r.topKeywords ?? null,
+        fetchedAt: iso(r.fetchedAt),
+      });
+    }
+  } catch {
+    /* leave empty */
+  }
+  return map;
+}
+
 /** Count of posts published in the last 30 days for one client. */
 async function publishedLast30(clientId: string): Promise<number> {
   try {
@@ -207,6 +278,8 @@ export interface PublicSite {
   postCount: number;
   views: number;
   clicks: number;
+  /** Latest third-party SEO snapshot (Ahrefs/Semrush), or null if none. */
+  metrics: PublicSiteMetrics | null;
 }
 
 export interface PublicClientDetail extends PublicClientSummary {
@@ -291,25 +364,27 @@ export async function getPublicClient(
     .limit(1);
   if (!c) return null;
 
-  const [siteRows, blogTraffic, blogPosts, postsLast30Days] = await Promise.all([
-    db
-      .select({
-        id: blogs.id,
-        domain: blogs.domain,
-        platform: blogs.platform,
-        status: blogs.status,
-        seoScore: blogs.currentSeoScore,
-        lastPostAt: blogs.lastPostVerifiedAt,
-        lastPostTitle: blogs.lastPostTitle,
-        lastScanAt: blogs.lastSeoScanAt,
-      })
-      .from(blogs)
-      .where(eq(blogs.clientId, clientId))
-      .orderBy(desc(blogs.currentSeoScore)),
-    trafficByBlog(clientId, since),
-    publishedByBlog(clientId),
-    publishedLast30(clientId),
-  ]);
+  const [siteRows, blogTraffic, blogPosts, postsLast30Days, blogMetrics] =
+    await Promise.all([
+      db
+        .select({
+          id: blogs.id,
+          domain: blogs.domain,
+          platform: blogs.platform,
+          status: blogs.status,
+          seoScore: blogs.currentSeoScore,
+          lastPostAt: blogs.lastPostVerifiedAt,
+          lastPostTitle: blogs.lastPostTitle,
+          lastScanAt: blogs.lastSeoScanAt,
+        })
+        .from(blogs)
+        .where(eq(blogs.clientId, clientId))
+        .orderBy(desc(blogs.currentSeoScore)),
+      trafficByBlog(clientId, since),
+      publishedByBlog(clientId),
+      publishedLast30(clientId),
+      thirdPartyByBlog(clientId),
+    ]);
 
   const sites: PublicSite[] = siteRows.map((s) => {
     const t = blogTraffic.get(s.id) ?? { views: 0, clicks: 0 };
@@ -325,6 +400,7 @@ export async function getPublicClient(
       postCount: blogPosts.get(s.id) ?? 0,
       views: t.views,
       clicks: t.clicks,
+      metrics: blogMetrics.get(s.id) ?? null,
     };
   });
 
@@ -361,5 +437,221 @@ export async function getPublicClient(
     views,
     clicks,
     sites,
+  };
+}
+
+// ─── Published posts ─────────────────────────────────────────────────────────
+
+export interface PublicPost {
+  id: string;
+  blogId: string;
+  title: string | null;
+  topic: string;
+  excerpt: string | null;
+  keywords: unknown | null;
+  /** Live URL on the client's site, when the platform returned one. */
+  url: string | null;
+  publishedAt: string | null;
+  wordCount: number | null;
+  seoScore: number | null;
+  readabilityScore: number | null;
+  views: number;
+  clicks: number;
+}
+
+export interface PublicPostsPage {
+  clientId: string;
+  total: number;
+  limit: number;
+  offset: number;
+  posts: PublicPost[];
+}
+
+/** Per-post views/clicks for a set of post ids. */
+async function trafficForPosts(
+  postIds: string[],
+): Promise<Map<string, Traffic>> {
+  const map = new Map<string, Traffic>();
+  if (postIds.length === 0) return map;
+  try {
+    const rows = await db
+      .select({ postId: linkEvents.postId, type: linkEvents.type, c: count() })
+      .from(linkEvents)
+      .where(inArray(linkEvents.postId, postIds))
+      .groupBy(linkEvents.postId, linkEvents.type);
+    for (const r of rows) {
+      if (!r.postId) continue;
+      const t = map.get(r.postId) ?? { views: 0, clicks: 0 };
+      if (r.type === "view") t.views = Number(r.c);
+      else if (r.type === "cta_click") t.clicks = Number(r.c);
+      map.set(r.postId, t);
+    }
+  } catch {
+    /* leave empty */
+  }
+  return map;
+}
+
+/**
+ * Published posts for one client (optionally one site), newest first, with a
+ * live URL and per-post traffic. Paginated: limit is clamped 1–100.
+ */
+export async function listClientPosts(
+  clientId: string,
+  opts?: { blogId?: string; limit?: number; offset?: number },
+): Promise<PublicPostsPage> {
+  const limit = Math.min(100, Math.max(1, opts?.limit ?? 20));
+  const offset = Math.max(0, opts?.offset ?? 0);
+
+  const conds = [
+    eq(generatedPosts.clientId, clientId),
+    eq(generatedPosts.status, "published"),
+  ];
+  if (opts?.blogId) conds.push(eq(generatedPosts.blogId, opts.blogId));
+  const where = and(...conds);
+
+  const [countRow] = await db
+    .select({ c: count() })
+    .from(generatedPosts)
+    .where(where);
+  const total = Number(countRow?.c ?? 0);
+
+  const rows = await db
+    .select({
+      id: generatedPosts.id,
+      blogId: generatedPosts.blogId,
+      title: generatedPosts.title,
+      topic: generatedPosts.topic,
+      excerpt: generatedPosts.excerpt,
+      keywords: generatedPosts.keywords,
+      url: generatedPosts.externalPostUrl,
+      publishedAt: generatedPosts.publishedAt,
+      wordCount: generatedPosts.wordCount,
+      seoScore: generatedPosts.seoScore,
+      readabilityScore: generatedPosts.readabilityScore,
+    })
+    .from(generatedPosts)
+    .where(where)
+    .orderBy(desc(generatedPosts.publishedAt))
+    .limit(limit)
+    .offset(offset);
+
+  const traffic = await trafficForPosts(rows.map((r) => r.id));
+
+  const posts: PublicPost[] = rows.map((r) => {
+    const t = traffic.get(r.id) ?? { views: 0, clicks: 0 };
+    return {
+      id: r.id,
+      blogId: r.blogId,
+      title: r.title,
+      topic: r.topic,
+      excerpt: r.excerpt,
+      keywords: r.keywords ?? null,
+      url: r.url,
+      publishedAt: iso(r.publishedAt),
+      wordCount: r.wordCount ?? null,
+      seoScore: r.seoScore ?? null,
+      readabilityScore: r.readabilityScore ?? null,
+      views: t.views,
+      clicks: t.clicks,
+    };
+  });
+
+  return { clientId, total, limit, offset, posts };
+}
+
+// ─── Traffic time series ─────────────────────────────────────────────────────
+
+export type TrafficGranularity = "day" | "week";
+
+export interface TrafficPoint {
+  /** Bucket start, ISO 8601 (midnight UTC for day, week-start for week). */
+  date: string;
+  views: number;
+  clicks: number;
+}
+
+/**
+ * Views/clicks bucketed by day or week for one client (optionally one site).
+ * Only buckets with activity are returned, oldest first. Fail-safe to [].
+ */
+export async function clientTrafficSeries(
+  clientId: string,
+  opts?: { granularity?: TrafficGranularity; since?: Date; blogId?: string },
+): Promise<TrafficPoint[]> {
+  const granularity: TrafficGranularity =
+    opts?.granularity === "week" ? "week" : "day";
+  try {
+    const bucket = sql<string>`date_trunc(${granularity}, ${linkEvents.createdAt})`;
+    const conds = [eq(linkEvents.clientId, clientId)];
+    if (opts?.blogId) conds.push(eq(linkEvents.blogId, opts.blogId));
+    if (opts?.since) conds.push(gte(linkEvents.createdAt, opts.since));
+
+    const rows = await db
+      .select({ bucket, type: linkEvents.type, c: count() })
+      .from(linkEvents)
+      .where(and(...conds))
+      .groupBy(bucket, linkEvents.type)
+      .orderBy(bucket);
+
+    const map = new Map<string, TrafficPoint>();
+    for (const r of rows) {
+      const key = iso(r.bucket) ?? String(r.bucket);
+      const p = map.get(key) ?? { date: key, views: 0, clicks: 0 };
+      if (r.type === "view") p.views = Number(r.c);
+      else if (r.type === "cta_click") p.clicks = Number(r.c);
+      map.set(key, p);
+    }
+    return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
+  } catch {
+    return [];
+  }
+}
+
+// ─── Network rollup ──────────────────────────────────────────────────────────
+
+export interface NetworkSummary {
+  clients: number;
+  sites: number;
+  publishedPosts: number;
+  views: number;
+  clicks: number;
+  avgSeoScore: number | null;
+}
+
+/** Network-wide totals for a dashboard overview widget. */
+export async function getNetworkSummary(): Promise<NetworkSummary> {
+  const [clientCount, siteAgg, postCount, trafficRows] = await Promise.all([
+    db.select({ c: count() }).from(clients),
+    db
+      .select({ c: count(), avgSeo: avg(blogs.currentSeoScore) })
+      .from(blogs),
+    db
+      .select({ c: count() })
+      .from(generatedPosts)
+      .where(eq(generatedPosts.status, "published"))
+      .catch(() => [{ c: 0 }]),
+    db
+      .select({ type: linkEvents.type, c: count() })
+      .from(linkEvents)
+      .groupBy(linkEvents.type)
+      .catch(() => [] as { type: string; c: number }[]),
+  ]);
+
+  let views = 0;
+  let clicks = 0;
+  for (const r of trafficRows) {
+    if (r.type === "view") views = Number(r.c);
+    else if (r.type === "cta_click") clicks = Number(r.c);
+  }
+
+  const avgSeoRaw = siteAgg[0]?.avgSeo;
+  return {
+    clients: Number(clientCount[0]?.c ?? 0),
+    sites: Number(siteAgg[0]?.c ?? 0),
+    publishedPosts: Number(postCount[0]?.c ?? 0),
+    views,
+    clicks,
+    avgSeoScore: avgSeoRaw != null ? Math.round(Number(avgSeoRaw)) : null,
   };
 }

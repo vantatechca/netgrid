@@ -46,6 +46,34 @@ Self-documenting index — lists the available endpoints.
 
 ---
 
+### `GET /api/v1/summary`
+
+Network-wide totals for an overview widget. No parameters.
+
+**Response** `200`:
+
+```json
+{
+  "clients": 24,
+  "sites": 210,
+  "publishedPosts": 5820,
+  "views": 148300,
+  "clicks": 4120,
+  "avgSeoScore": 94
+}
+```
+
+| Field            | Type           | Notes |
+|------------------|----------------|-------|
+| `clients`        | number         | total clients |
+| `sites`          | number         | total sites (blogs) |
+| `publishedPosts` | number         | published posts across the network |
+| `views`          | number         | all tracked page views |
+| `clicks`         | number         | all tracked CTA clicks |
+| `avgSeoScore`    | number \| null | 0–100, averaged over all scored sites |
+
+---
+
 ### `GET /api/v1/clients`
 
 List clients with rolled-up stats.
@@ -139,7 +167,17 @@ A single client with its sites (blogs) and per-site SEO scores.
       "lastScanAt": "2026-07-03T16:02:00.000Z",
       "postCount": 42,
       "views": 1620,
-      "clicks": 48
+      "clicks": 48,
+      "metrics": {
+        "source": "ahrefs",
+        "domainAuthority": 38,
+        "backlinks": 1240,
+        "referringDomains": 96,
+        "organicKeywords": 512,
+        "organicTrafficEst": 3400,
+        "topKeywords": ["sourdough pizza montreal", "best pizza mile end"],
+        "fetchedAt": "2026-07-01T04:00:00.000Z"
+      }
     }
   ]
 }
@@ -169,6 +207,20 @@ Top-level fields are the same as the list item, plus:
 | `postCount`     | number          | published posts on this site |
 | `views`         | number          | tracked page views on this site |
 | `clicks`        | number          | tracked CTA clicks on this site |
+| `metrics`       | object \| null  | latest third-party SEO snapshot (see below); `null` if never fetched |
+
+**`sites[].metrics`** (third-party SEO — from Ahrefs/Semrush, latest snapshot):
+
+| Field               | Type            | Notes |
+|---------------------|-----------------|-------|
+| `source`            | string \| null  | `ahrefs` \| `semrush` \| … |
+| `domainAuthority`   | number \| null  | |
+| `backlinks`         | number \| null  | total backlinks |
+| `referringDomains`  | number \| null  | |
+| `organicKeywords`   | number \| null  | keywords the site ranks for |
+| `organicTrafficEst` | number \| null  | estimated monthly organic visits |
+| `topKeywords`       | array \| null   | ranking keywords (shape as stored by the provider) |
+| `fetchedAt`         | string \| null  | ISO 8601, when the snapshot was pulled |
 
 **Errors:**
 
@@ -176,6 +228,102 @@ Top-level fields are the same as the list item, plus:
 |--------|------|
 | `400`  | `clientId` isn't a valid UUID |
 | `404`  | No client with that id |
+
+---
+
+### `GET /api/v1/clients/{clientId}/posts`
+
+Published posts for a client, newest first, each with its live URL and per-post
+traffic. Paginated.
+
+**Query parameters** (all optional):
+
+| Param    | Description |
+|----------|-------------|
+| `blogId` | Restrict to one site (UUID). |
+| `limit`  | Page size, `1`–`100` (default `20`). |
+| `offset` | Pagination offset (default `0`). |
+
+**Response** `200`:
+
+```json
+{
+  "clientId": "96c4f390-67f5-4687-8376-8c7c400972a2",
+  "total": 396,
+  "limit": 20,
+  "offset": 0,
+  "posts": [
+    {
+      "id": "b2e0f1a2-1111-2222-3333-444455556666",
+      "blogId": "71fb73bd-ec69-491b-8026-0a0c3ea1d32f",
+      "title": "Pizzeria Crosta's Sourdough Secret",
+      "topic": "sourdough pizza crust",
+      "excerpt": "How a 48-hour ferment builds the crust…",
+      "keywords": ["sourdough", "montreal pizza"],
+      "url": "https://crostapizza.store/blogs/news/sourdough-secret",
+      "publishedAt": "2026-07-03T15:36:00.000Z",
+      "wordCount": 1280,
+      "seoScore": 96,
+      "readabilityScore": 72,
+      "views": 210,
+      "clicks": 8
+    }
+  ]
+}
+```
+
+| Field              | Type            | Notes |
+|--------------------|-----------------|-------|
+| `total`            | number          | total published posts matching the filter |
+| `limit` / `offset` | number          | echo of the effective paging |
+| `posts[].id`       | string (UUID)   | generated-post id |
+| `posts[].blogId`   | string (UUID)   | site the post belongs to |
+| `posts[].title`    | string \| null  | |
+| `posts[].topic`    | string          | |
+| `posts[].excerpt`  | string \| null  | |
+| `posts[].keywords` | array \| null   | target keywords (shape as stored) |
+| `posts[].url`      | string \| null  | live URL on the client's site; `null` if the platform returned none |
+| `posts[].publishedAt`      | string \| null | ISO 8601 |
+| `posts[].wordCount`        | number \| null | |
+| `posts[].seoScore`         | number \| null | 0–100 at generation time |
+| `posts[].readabilityScore` | number \| null | 0–100 |
+| `posts[].views` / `clicks` | number         | tracked views/CTA clicks on this post |
+
+**Errors:** `400` when `clientId` or `blogId` isn't a valid UUID.
+
+---
+
+### `GET /api/v1/clients/{clientId}/traffic`
+
+Views/clicks bucketed over time — for a trend chart. Only buckets with activity
+are returned, oldest first.
+
+**Query parameters** (all optional):
+
+| Param         | Description |
+|---------------|-------------|
+| `granularity` | `day` (default) or `week`. |
+| `blogId`      | Restrict to one site (UUID). |
+| `days`        | Window: last N days (`1`–`365`, clamped). Omit for all-time. |
+| `since`       | Window lower bound as ISO 8601. Ignored when `days` is set. |
+
+**Response** `200`:
+
+```json
+{
+  "clientId": "96c4f390-67f5-4687-8376-8c7c400972a2",
+  "granularity": "day",
+  "series": [
+    { "date": "2026-06-30T00:00:00.000Z", "views": 180, "clicks": 6 },
+    { "date": "2026-07-01T00:00:00.000Z", "views": 240, "clicks": 9 }
+  ]
+}
+```
+
+`series[].date` is the bucket start (ISO 8601, UTC — midnight for `day`,
+week-start for `week`).
+
+**Errors:** `400` when `clientId` or `blogId` isn't a valid UUID.
 
 ---
 
@@ -192,9 +340,21 @@ curl -H "Authorization: Bearer $MARKETING_API_KEY" \
 curl -H "Authorization: Bearer $MARKETING_API_KEY" \
   "https://netgrid-16f6.onrender.com/api/v1/clients?email=owner@pizzacrosta.ca"
 
-# One client with sites + scores
+# One client with sites + scores + third-party metrics
 curl -H "Authorization: Bearer $MARKETING_API_KEY" \
   https://netgrid-16f6.onrender.com/api/v1/clients/96c4f390-67f5-4687-8376-8c7c400972a2
+
+# A client's published posts (with live URLs + per-post traffic)
+curl -H "Authorization: Bearer $MARKETING_API_KEY" \
+  "https://netgrid-16f6.onrender.com/api/v1/clients/96c4f390-67f5-4687-8376-8c7c400972a2/posts?limit=20"
+
+# Daily traffic for the last 30 days
+curl -H "Authorization: Bearer $MARKETING_API_KEY" \
+  "https://netgrid-16f6.onrender.com/api/v1/clients/96c4f390-67f5-4687-8376-8c7c400972a2/traffic?granularity=day&days=30"
+
+# Network overview totals
+curl -H "Authorization: Bearer $MARKETING_API_KEY" \
+  https://netgrid-16f6.onrender.com/api/v1/summary
 ```
 
 ### Node (marketing app backend)
@@ -227,14 +387,19 @@ async function getClientDashboard(email: string) {
 ## Notes
 
 - **Read-only.** Responses are field-whitelisted — platform credentials
-  (WordPress passwords, Shopify tokens/secrets), internal notes, and custom
-  prompts are never exposed.
+  (WordPress passwords, Shopify tokens/secrets), internal notes, custom
+  prompts, and cost/token economics are never exposed.
 - All timestamps are ISO 8601 (UTC).
-- No pagination yet — the list returns all clients. (Fine for the current
-  client count; add pagination if it grows large.)
+- **Pagination:** `/clients/{id}/posts` is paginated (`limit`/`offset`). The
+  `/clients` list is not paginated — it returns all clients (fine for the
+  current count; add paging if it grows large).
+- **Traffic** counts posts published after tracking was enabled, plus site-wide
+  (homepage / non-article) views on Shopify stores with the netgrid theme block
+  installed. `0` until traffic accrues.
 
 ## Roadmap (not yet implemented)
 
-- **Score history** — per-site SEO score time-series for trend charts.
-- **Posts** — published post titles / URLs per site.
+- **Score history** — per-site SEO **sub-score** breakdown (meta / content /
+  technical / links / images) and score-over-time series for trend charts.
+- **Monthly reports** — the client-visible monthly performance summaries.
 - Per-client API keys / rate limiting if the API is exposed more widely.
