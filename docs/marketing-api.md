@@ -69,7 +69,10 @@ List clients with rolled-up stats.
       "status": "active",
       "blogCount": 10,
       "avgSeoScore": 98,
-      "lastPostAt": "2026-07-03T15:36:00.000Z"
+      "lastPostAt": "2026-07-03T15:36:00.000Z",
+      "postCount": 396,
+      "views": 12840,
+      "clicks": 372
     }
   ]
 }
@@ -84,6 +87,11 @@ List clients with rolled-up stats.
 | `blogCount`   | number            | number of sites for this client |
 | `avgSeoScore` | number \| null    | 0–100, averaged over the client's sites; `null` if none scored yet |
 | `lastPostAt`  | string \| null    | ISO 8601; most recent verified post across the client's sites |
+| `postCount`   | number            | published posts across the client's sites |
+| `views`       | number            | tracked page views across the client's sites |
+| `clicks`      | number            | tracked CTA clicks across the client's sites |
+
+> Traffic (`views`/`clicks`) counts only posts published after tracking was enabled; `0` until traffic accrues. CTR = `clicks / views`.
 
 ---
 
@@ -106,6 +114,10 @@ A single client with its sites (blogs) and per-site SEO scores.
   "activeBlogCount": 10,
   "avgSeoScore": 98,
   "lastPostAt": "2026-07-03T15:36:00.000Z",
+  "postCount": 396,
+  "postsLast30Days": 41,
+  "views": 12840,
+  "clicks": 372,
   "sites": [
     {
       "id": "71fb73bd-ec69-491b-8026-0a0c3ea1d32f",
@@ -115,7 +127,10 @@ A single client with its sites (blogs) and per-site SEO scores.
       "seoScore": 100,
       "lastPostAt": "2026-07-03T15:36:00.000Z",
       "lastPostTitle": "Pizzeria Crosta's Sourdough Secret",
-      "lastScanAt": "2026-07-03T16:02:00.000Z"
+      "lastScanAt": "2026-07-03T16:02:00.000Z",
+      "postCount": 42,
+      "views": 1620,
+      "clicks": 48
     }
   ]
 }
@@ -127,6 +142,7 @@ Top-level fields are the same as the list item, plus:
 |-------------------|----------------|-------|
 | `contactEmail`    | string \| null | |
 | `activeBlogCount` | number         | sites with status `active` |
+| `postsLast30Days` | number         | posts published in the last 30 days |
 | `sites`           | array          | see below, ordered by SEO score (highest first) |
 
 **`sites[]`:**
@@ -141,6 +157,9 @@ Top-level fields are the same as the list item, plus:
 | `lastPostAt`    | string \| null  | ISO 8601, last verified post |
 | `lastPostTitle` | string \| null  | |
 | `lastScanAt`    | string \| null  | ISO 8601, last SEO scan |
+| `postCount`     | number          | published posts on this site |
+| `views`         | number          | tracked page views on this site |
+| `clicks`        | number          | tracked CTA clicks on this site |
 
 **Errors:**
 
