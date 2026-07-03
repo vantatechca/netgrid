@@ -5,6 +5,7 @@ import { blogs } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { requireAdmin } from "@/lib/auth/helpers";
 import { buildShopifyCreds } from "@/lib/services/platform-client";
+import { blogTrackingPixelUrl } from "@/lib/services/link-tracker";
 import {
   injectSeoMetaTags,
   inspectThemeSeo as inspectThemeSeoClient,
@@ -63,7 +64,7 @@ export async function applyThemeSeoFix(
     return { success: false, message: built.message };
   }
 
-  return injectSeoMetaTags(built.creds);
+  return injectSeoMetaTags(built.creds, undefined, blogTrackingPixelUrl(blogId));
 }
 
 /**
@@ -78,7 +79,7 @@ export async function optimizeThemeSeo(
   await requireAdmin();
   const r = await shopifyCredsForBlog(blogId);
   if (!r.ok) return { success: false, message: r.message };
-  return optimizeThemeSeoClient(r.creds);
+  return optimizeThemeSeoClient(r.creds, undefined, blogTrackingPixelUrl(blogId));
 }
 
 /**

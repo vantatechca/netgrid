@@ -1,6 +1,6 @@
 import "server-only";
 import { db } from "@/lib/db";
-import { linkEvents, generatedPosts, clients } from "@/lib/db/schema";
+import { linkEvents, generatedPosts, clients, blogs } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 
 /**
@@ -32,6 +32,16 @@ export function trackingPixelImg(postId: string): string {
     `alt="" aria-hidden="true" style="position:absolute;width:1px;height:1px;` +
     `opacity:0;pointer-events:none;" />`
   );
+}
+
+/**
+ * Blog-level (site-wide) page-view pixel. Logs a view keyed to the blog with no
+ * postId — used for the homepage and other non-article pages, where there is no
+ * per-post body pixel. Injected into the Shopify theme <head> (see
+ * shopify-theme-client) so it fires on every page load of the store.
+ */
+export function blogTrackingPixelUrl(blogId: string): string {
+  return `${getAppBaseUrl()}/api/track/px/blog/${blogId}`;
 }
 
 export type LinkEventType = "view" | "cta_click";
@@ -67,6 +77,26 @@ export interface PostRedirectContext {
   blogId: string | null;
   clientId: string | null;
   ctaUrl: string | null;
+}
+
+/** Resolve a blog → its client, for attributing a site-wide (postId-less) view. */
+export async function resolveBlogClient(
+  blogId: string,
+): Promise<{ blogId: string; clientId: string } | null> {
+  try {
+    const [row] = await db
+      .select({ blogId: blogs.id, clientId: blogs.clientId })
+      .from(blogs)
+      .where(eq(blogs.id, blogId))
+      .limit(1);
+    return row ?? null;
+  } catch (err) {
+    console.warn(
+      "[link-tracker] resolve blog failed:",
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
 }
 
 /** Resolve a generated post → its blog/client + the client's CTA URL. */

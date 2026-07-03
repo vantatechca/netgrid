@@ -65,6 +65,13 @@ export interface SeoBlockOptions {
    * theme's existing tag instead, to avoid a duplicate description meta.
    */
   includeDescription?: boolean;
+  /**
+   * netgrid blog-level tracking-pixel URL (see link-tracker.blogTrackingPixelUrl).
+   * When set, a page-view beacon fires on every NON-article page (homepage,
+   * collections, pages, ...). Article pages carry the per-post body pixel, so
+   * excluding them here keeps views from being double-counted.
+   */
+  trackingPixelUrl?: string;
 }
 
 /**
@@ -87,7 +94,18 @@ export function buildSeoMetaBlock(opts: SeoBlockOptions = {}): string {
   <meta name="description" content="{{ page_description | strip_html | truncate: 150 | escape }}">
 {%- endif -%}`
     : "";
-  return `${MARKER_BEGIN}${faviconLine}${descriptionLine}
+  // Site-wide page-view beacon, fired on every page EXCEPT articles (those
+  // carry the per-post body pixel). new Image() so it works from <head>; the
+  // cache-buster forces a request on each navigation.
+  const trackingLine = opts.trackingPixelUrl
+    ? `
+{%- unless request.page_type == 'article' -%}
+  <script>(function(){try{(new Image()).src=${JSON.stringify(
+    opts.trackingPixelUrl,
+  )}+"?t="+Date.now();}catch(e){}})();</script>
+{%- endunless -%}`
+    : "";
+  return `${MARKER_BEGIN}${faviconLine}${descriptionLine}${trackingLine}
 {%- if request.page_type == 'article' and article -%}
   {%- if article.published_at -%}
     <meta property="article:published_time" content="{{ article.published_at | date: '%Y-%m-%dT%H:%M:%SZ' }}">
@@ -232,6 +250,7 @@ export interface ThemeSeoResult {
 export async function injectSeoMetaTags(
   creds: ShopifyCreds,
   apiVersion: string = DEFAULT_API_VERSION,
+  trackingPixelUrl?: string,
 ): Promise<ThemeSeoResult> {
   try {
     const client = await createClient(creds, apiVersion, THEME_TIMEOUT_MS);
@@ -241,7 +260,7 @@ export async function injectSeoMetaTags(
       return { success: false, message: "No published (main) theme found for this store." };
     }
 
-    const block = buildSeoMetaBlock();
+    const block = buildSeoMetaBlock({ trackingPixelUrl });
 
     // Preferred target: the meta-tags snippet, which already runs in <head>.
     const snippet = await getThemeAsset(creds, theme.id, SNIPPET_KEY, apiVersion, client);
@@ -385,6 +404,7 @@ function patchTitleSuffix(layout: string): {
 export async function optimizeThemeSeo(
   creds: ShopifyCreds,
   apiVersion: string = DEFAULT_API_VERSION,
+  trackingPixelUrl?: string,
 ): Promise<ThemeOptimizeResult> {
   try {
     const client = await createClient(creds, apiVersion, THEME_TIMEOUT_MS);
@@ -443,6 +463,7 @@ export async function optimizeThemeSeo(
     const block = buildSeoMetaBlock({
       includeFavicon: !hasFavicon,
       includeDescription: !hasOwnDescription,
+      trackingPixelUrl,
     });
     details.push("added OG article tags + JSON-LD schema");
 
