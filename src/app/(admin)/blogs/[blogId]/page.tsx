@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { getBlog, getBlogPosts, getClientsForSelect } from "@/lib/actions/blog-actions";
+import { getBlog, getClientsForSelect } from "@/lib/actions/blog-actions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -16,7 +16,6 @@ import { ThemeSeoButton } from "@/components/blogs/theme-seo-button";
 import { BlogForm } from "@/components/blogs/blog-form";
 import { PersonaCard } from "@/components/content/persona-card";
 import type { GeneratedPersona } from "@/lib/content/types";
-import { BlogPostsPanel } from "@/components/blogs/blog-posts-panel";
 import { StyleProfilePanel } from "@/components/blogs/style-profile-panel";
 import { getStyleProfileForBlog } from "@/lib/actions/style-profile-actions";
 import {
@@ -133,21 +132,6 @@ export default async function BlogDetailPage({
       </div>
     );
   }
-
-  // Detail view — also fetch posts in parallel with the rest of the page render.
-  const postsResult = await getBlogPosts(params.blogId).catch((err) => ({
-    generated: [],
-    live: {
-      available: false,
-      platform: blog.platform,
-      posts: [],
-      page: 1,
-      perPage: 20,
-      total: 0,
-      totalPages: 0,
-      error: err instanceof Error ? err.message : "Failed to load posts",
-    },
-  }));
 
   // Style profile (peptide blogs only — returns null otherwise).
   const styleProfile = await getStyleProfileForBlog(params.blogId).catch(() => null);

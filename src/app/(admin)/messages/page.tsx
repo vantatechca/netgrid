@@ -1,7 +1,7 @@
 import { requireAdmin } from "@/lib/auth/helpers";
 import { db } from "@/lib/db";
 import { clients, messages } from "@/lib/db/schema";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { AutoRefresh } from "@/components/messages/auto-refresh";

@@ -1,4 +1,4 @@
-import type { CitationStyleId, SchemaId, SubNicheId, TagSetId, VoiceId } from "../types";
+import type { SubNicheId, VoiceId } from "../types";
 
 /**
  * Cross-niche registry. Each niche (matching `clients.niche` after

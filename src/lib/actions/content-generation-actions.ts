@@ -9,7 +9,6 @@ import {
   generateContent,
   ideateTopic,
   suggestKeywords,
-  resolvePostLanguage,
   postLanguageForDomain,
   estimateImageCostUsd,
   type GenerateOptions,
@@ -730,16 +729,6 @@ async function runGenerateAndPublish(
       message,
     };
   }
-}
-
-// ─── Public actions ─────────────────────────────────────────────────────────
-
-/** Admin-triggered manual generate-and-publish for a single blog. */
-export async function generateAndPublishForBlog(
-  input: GenerateAndPublishInput,
-): Promise<GenerateAndPublishResult> {
-  await requireAdmin();
-  return runGenerateAndPublish(input);
 }
 
 /** Resolve a client's CTA columns into a generation-ready CTA (or undefined). */

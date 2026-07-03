@@ -1,5 +1,4 @@
 import type {
-  ArchetypeId,
   CadenceId,
   CitationStyleId,
   CompliancePhraseId,
@@ -27,20 +26,16 @@ import {
   COMPLIANCE_PHRASE_IDS,
   PLACEMENT_DISTRIBUTION,
 } from "../libraries/compliance-phrases";
-import { COMPOUND_CANON, ALL_COMPOUNDS, PEPTIDE_COMPOUNDS, GLP1_COMPOUNDS, canonForSubNiche } from "../libraries/compounds";
+import { PEPTIDE_COMPOUNDS, GLP1_COMPOUNDS, canonForSubNiche } from "../libraries/compounds";
 import {
   defaultStrictness,
-  isSkeletonCompatibleWithCadence,
-  isSkeletonCompatibleWithStrictness,
-  isSkeletonCompatibleWithSubNiche,
   isSkeletonCompatibleWithVoice,
   schemaBiasForVoice,
 } from "../libraries/compatibility";
 import { SCHEMA_IDS } from "../libraries/schemas";
 import { SKELETON_IDS } from "../libraries/skeletons";
-import { SUB_NICHES, SUB_NICHE_IDS } from "../libraries/sub-niches";
+import { SUB_NICHES } from "../libraries/sub-niches";
 import {
-  TAG_SETS,
   TAG_SET_DISTRIBUTION,
   TAG_SET_IDS,
 } from "../libraries/tag-sets";
@@ -50,9 +45,7 @@ import {
   TEMPLATES,
   TEMPLATE_IDS,
   WEIRD_IDS,
-  WORD_BANDS,
   WORKHORSE_IDS,
-  wordBandForTier,
 } from "../libraries/templates";
 import { QUIRK_IDS, quirksByCategory, quirksConflict } from "../libraries/quirks";
 import { VOICES, VOICE_IDS, voicesForSubNiche } from "../libraries/voices";
@@ -415,10 +408,8 @@ function buildStructuralPool(
   voiceId: VoiceId,
   subNiche: SubNicheId,
   tagSetId: TagSetId,
-  cadence: CadenceId,
 ): TemplateId[] {
   const archetype = archetypeForVoice(voiceId);
-  const tagSetAllowed = new Set(TAG_SETS[tagSetId].allowedTags);
 
   function isCompatible(t: StructuralTemplate): boolean {
     if (t.voiceArchetypeFit.length > 0 && !t.voiceArchetypeFit.includes(archetype)) {
@@ -717,10 +708,6 @@ function nicheScopedCompoundPool(canon: { primary: string[]; adjacent: string[] 
 
 // ─── Compile + Hamming reroll ──────────────────────────────────────────────
 
-interface DrawResult {
-  profile: StyleProfile;
-}
-
 function compose(
   blogId: string,
   nicheKey: string,
@@ -812,7 +799,7 @@ export function assignProfile(
   // Phase 8
   const quirks = pickQuirks(rng, network, voice);
   // Phase 9
-  const structuralPool = buildStructuralPool(rng, voiceId, subNicheId, tagSetId, cadenceId);
+  const structuralPool = buildStructuralPool(rng, voiceId, subNicheId, tagSetId);
   // Phase 12 (strictness) — needed before Phase 10 phrase pick (phrase 16 rule)
   const scrubberStrictness = defaultStrictness(voiceId, subNicheId);
   // Phase 10
@@ -891,7 +878,6 @@ function rerollRedundant(
       profile.voiceId,
       profile.subNicheId,
       profile.tagSetId,
-      profile.cadenceId,
     );
     if (hammingDistance(next, other) >= MIN_HAMMING_REQUIRED) return next;
   }

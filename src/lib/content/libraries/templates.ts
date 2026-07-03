@@ -2,7 +2,6 @@ import type {
   ArchetypeId,
   CompliancePlacement,
   FlowStep,
-  SchemaId,
   StructuralTemplate,
   SubNicheId,
   TagSetId,

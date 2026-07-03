@@ -12,7 +12,7 @@ import {
   users,
 } from "@/lib/db/schema";
 import { eq, and, desc, sql, gte, lte, lt } from "drizzle-orm";
-import { requireAdmin, getClientScope, getSession } from "@/lib/auth/helpers";
+import { requireAdmin, getClientScope } from "@/lib/auth/helpers";
 import { generateMonthlyReport } from "@/lib/services/claude-client";
 import { logActivity } from "@/lib/services/activity-logger";
 // PDF renderer is dynamically imported inside emailReportPdfInternal()

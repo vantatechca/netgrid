@@ -827,7 +827,6 @@ function repairTruncatedJson(text: string): string {
   }
 
   // Recount open brackets at the truncated position and close them.
-  let d = 0;
   let inStr = false;
   let esc = false;
   const closeStack: string[] = [];
@@ -845,11 +844,9 @@ function repairTruncatedJson(text: string): string {
     if (ch === '"') inStr = true;
     else if (ch === "{") {
       closeStack.push("{");
-      d++;
     } else if (ch === "[") closeStack.push("[");
     else if (ch === "}") {
       closeStack.pop();
-      d--;
     } else if (ch === "]") closeStack.pop();
   }
   if (inStr) result += '"';
@@ -2673,84 +2670,6 @@ Suggest the target keywords.`;
     throw new Error(
       `Keyword suggestion returned invalid JSON: ${msg} | response preview: ${text.slice(0, 200)}`,
     );
-  }
-}
-
-// ─── Analysis (combined SEO/readability/brand voice) ────────────────────────
-
-interface AnalysisOutcome {
-  scores: AnalysisScores;
-  inputTokens: number;
-  outputTokens: number;
-}
-
-async function analyzeContent(
-  content: string,
-  title: string,
-  opts: GenerateOptions,
-): Promise<AnalysisOutcome> {
-  const truncated = content.length > 3000 ? content.substring(0, 3000) + "..." : content;
-  const scores: AnalysisScores = { seoScore: 60, readabilityScore: 65, brandVoiceScore: 65 };
-
-  const system = `You evaluate written content on three dimensions and return numeric scores 1-100.
-
-SEO SCORE (1-100):
-- Primary keyword in title, first paragraph, headings
-- Natural keyword density 1-3%
-- Heading hierarchy and content structure
-- Search intent alignment
-- Title length under 60 chars; meta description 150-160 chars
-
-READABILITY SCORE (1-100):
-- Average sentence length under 20 words
-- Sentence length variety
-- Active voice
-- Clear paragraph structure and transitions
-- Vocabulary appropriate to audience
-
-BRAND VOICE SCORE (1-100):
-- Maintains specified tone throughout
-- Word choice matches brand voice
-- Audience appropriateness
-- Authority level matches positioning
-
-Return ONLY JSON: { "seoScore": number, "readabilityScore": number, "brandVoiceScore": number }`;
-
-  const user = `Evaluate this content.
-
-TITLE: ${title}
-TARGET KEYWORDS: ${opts.keywords.join(", ")}
-SPECIFIED TONE: ${opts.tone}
-BRAND VOICE: ${opts.brandVoice || "(use tone)"}
-TARGET AUDIENCE: ${opts.targetAudience || "general audience"}
-
-CONTENT:
-${truncated}`;
-
-  try {
-    const { text, inputTokens, outputTokens } = await callClaude(system, user, {
-      maxTokens: 200,
-      temperature: 0.1,
-      expectJson: true,
-    });
-    const parsed = safeParseClaudeJson<{
-      seoScore?: number;
-      readabilityScore?: number;
-      brandVoiceScore?: number;
-    }>(text);
-    if (typeof parsed.seoScore === "number") {
-      scores.seoScore = Math.max(1, Math.min(100, Math.round(parsed.seoScore)));
-    }
-    if (typeof parsed.readabilityScore === "number") {
-      scores.readabilityScore = Math.max(1, Math.min(100, Math.round(parsed.readabilityScore)));
-    }
-    if (typeof parsed.brandVoiceScore === "number") {
-      scores.brandVoiceScore = Math.max(1, Math.min(100, Math.round(parsed.brandVoiceScore)));
-    }
-    return { scores, inputTokens, outputTokens };
-  } catch (err) {
-    console.warn("Content analysis failed, using fallback scores:", err);
-    return { scores, inputTokens: 0, outputTokens: 0 };
   }
 }
 
