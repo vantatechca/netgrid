@@ -795,6 +795,11 @@ export async function generateBlogPost(
   let topic = input.topic?.trim() || "";
   let keywords = input.keywords ?? [];
 
+  // Custom prompts are client-wide. Resolved once here and reused for BOTH
+  // topic ideation and article generation, so topics stay on-brand for the
+  // brief instead of drifting to the niche's generic topics.
+  const customPrompt = blog.clientCustomPrompt?.trim() || undefined;
+
   if (!topic) {
     const recent = await db
       .select({ title: generatedPosts.title })
@@ -811,6 +816,7 @@ export async function generateBlogPost(
           verticalKey: verticalForPost?.key ?? null,
           styleProfile: styleProfile ?? undefined,
           language: postLanguage,
+          customPrompt,
         },
       );
       topic = idea.topic;
@@ -851,8 +857,7 @@ export async function generateBlogPost(
   // Niche config from the editable `niches` DB table (falls back to code when
   // there's no row). Resolved once; reused across topic-recovery retries.
   const resolvedNiche = await resolveNicheConfig(blog.niche);
-  // Custom prompts are client-wide; the persona-stack toggle is client-level.
-  const customPrompt = blog.clientCustomPrompt?.trim() || undefined;
+  // customPrompt resolved above (reused for ideation); persona-stack is client-level.
   const applyPersona = Boolean(customPrompt) && Boolean(blog.clientStackPersona);
 
   const buildOpts = (t: string, kw: string[]): GenerateOptions => ({
@@ -943,6 +948,7 @@ export async function generateBlogPost(
           verticalKey: verticalForPost?.key ?? null,
           styleProfile: styleProfile ?? undefined,
           language: postLanguage,
+          customPrompt,
         });
         if (!newIdea.topic || newIdea.topic.trim() === currentTopic.trim()) {
           throw new Error("Re-ideation returned an empty or duplicate topic");

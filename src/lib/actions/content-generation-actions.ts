@@ -430,6 +430,7 @@ async function runGenerateAndPublish(
       styleProfile: styleProfile ?? undefined,
       language: postLanguage,
       knowledge,
+      customPrompt,
     });
     topic = ideated.topic;
     if (keywords.length === 0) keywords = ideated.keywords;
@@ -545,6 +546,7 @@ async function runGenerateAndPublish(
             styleProfile: styleProfile ?? undefined,
             language: postLanguage,
             knowledge,
+            customPrompt,
           },
         );
         if (!newIdea.topic || newIdea.topic.trim() === currentTopic.trim()) {
@@ -956,6 +958,7 @@ export async function suggestTopicForBlog(
     styleProfile: ctx.styleProfile ?? undefined,
     language: ctx.language,
     knowledge: ctx.knowledge,
+    customPrompt: ctx.customPrompt,
   });
 }
 

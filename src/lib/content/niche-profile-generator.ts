@@ -184,8 +184,20 @@ export async function ensureNicheProfile(
   // Hardcoded niche → nothing to generate.
   if (NICHES[key]) return null;
 
-  // Already generated → reuse.
-  if (await hasNicheProfile(key)) return getCachedNicheProfile(key) ?? null;
+  // Already generated → reuse. Wrapped so a DB error here (e.g. the
+  // niche_profiles table missing on a not-yet-migrated environment) can never
+  // escape and 500 the caller's client save — this whole function is
+  // contractually non-fatal. On lookup failure we simply skip generation and
+  // let the niche fall back to "universal".
+  try {
+    if (await hasNicheProfile(key)) return getCachedNicheProfile(key) ?? null;
+  } catch (err) {
+    console.error(
+      `[niche-profile] lookup failed for "${label}":`,
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
 
   const user = buildUserPrompt(label);
   let rawText: string;

@@ -2404,9 +2404,18 @@ export async function ideateTopic(
      * list, so posts reflect the material the client actually gave us.
      */
     knowledge?: { keywords: string[]; topics: string[] };
+    /**
+     * Client/blog custom generation prompt. When set, topic ideation is driven
+     * by this brief (its subject, business, and keywords) INSTEAD of the niche's
+     * generic key topics — otherwise a "restaurant" niche would keep suggesting
+     * generic B2B management topics even when the operator's brief is a foodie
+     * review of one specific pizzeria. Keeps posts on-brand for what was asked.
+     */
+    customPrompt?: string;
   } = {},
 ): Promise<{ topic: string; keywords: string[] }> {
   const ctx = getNicheContext(niche);
+  const brief = (opts.customPrompt ?? "").trim();
   const recentList = recentTitles.length
     ? recentTitles.slice(0, 20).map((t) => `- ${t}`).join("\n")
     : "(none yet — first post for this blog)";
@@ -2448,7 +2457,17 @@ export async function ideateTopic(
   // generic keyTopics list.
   let focusLine: string;
   let profileAnchorSection = "";
-  if (opts.styleProfile) {
+  if (brief) {
+    // A custom prompt is an explicit content brief — it defines the exact
+    // subject/business the post is about. Anchor topic selection on it and
+    // ignore the niche's generic key-topic list (which is what caused a
+    // pizzeria to get a "restaurant employee handbook" topic).
+    focusLine =
+      `- The topic MUST be a specific, on-brand angle for the exact subject/business described in the CONTENT BRIEF below\n` +
+      `- Draw on the brief's own target keywords, locale, and terminology\n` +
+      `- Vary the angle from recent titles, but never drift off the brief's subject\n` +
+      `- Do NOT suggest generic ${ctx.industry} topics that aren't about the brief's subject`;
+  } else if (opts.styleProfile) {
     const sp = opts.styleProfile;
     const subNiche = SUB_NICHES[sp.subNicheId];
     const subNicheName = subNiche?.name ?? "general";
@@ -2502,8 +2521,14 @@ Return JSON only:
 
   const knowledgeSection = buildKnowledgeSection(opts.knowledge);
 
+  // The operator's brief takes priority over every other signal — it names the
+  // exact business/subject and target keywords the topic must fit.
+  const briefSection = brief
+    ? `\n\nCONTENT BRIEF (operator instructions — every topic MUST fit this exactly; it overrides the niche's generic topics):\n${brief}`
+    : "";
+
   const user = `Recent titles on this site (avoid duplicating these):
-${recentList}${profileAnchorSection}${knowledgeSection}${newsSection}
+${recentList}${briefSection}${profileAnchorSection}${knowledgeSection}${newsSection}
 
 Suggest the next post's topic.`;
 

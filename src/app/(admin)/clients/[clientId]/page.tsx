@@ -123,6 +123,7 @@ export default async function ClientDetailPage({
             totalBlogsTarget: client.totalBlogsTarget ?? 0,
             notesInternal: client.notesInternal ?? "",
             customPrompt: client.customPrompt ?? "",
+            stackPersona: client.stackPersona ?? false,
             ctaEnabled: client.ctaEnabled ?? false,
             ctaLabel: client.ctaLabel ?? "",
             ctaUrl: client.ctaUrl ?? "",
@@ -334,6 +335,32 @@ export default async function ClientDetailPage({
                     <p className="text-xs font-medium text-muted-foreground">Blog Target</p>
                     <p className="text-sm">{client.totalBlogsTarget ?? 0} blogs</p>
                   </div>
+                </div>
+
+                <div className="border-t pt-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-medium text-muted-foreground">
+                      Custom generation prompt
+                    </p>
+                    {client.customPrompt?.trim() && client.stackPersona && (
+                      <Badge variant="secondary" className="text-[10px]">
+                        Persona layered on top
+                      </Badge>
+                    )}
+                  </div>
+                  {client.customPrompt?.trim() ? (
+                    <p className="mt-1 whitespace-pre-wrap rounded-md bg-muted p-3 font-mono text-xs">
+                      {client.customPrompt}
+                    </p>
+                  ) : (
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      — (using the niche/persona style)
+                    </p>
+                  )}
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Applies to all this client&apos;s blogs. Edit it on the
+                    Knowledge tab or via Edit Client.
+                  </p>
                 </div>
               </CardContent>
             </Card>
