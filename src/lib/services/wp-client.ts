@@ -451,6 +451,75 @@ export async function getPostContentById(
 }
 
 /**
+ * Read the site's reading settings — specifically how the homepage is built.
+ * `showOnFront` is "page" when a static Page is the homepage (then
+ * `pageOnFront` is that page's id) or "posts" when the homepage is the blog
+ * index. Requires a user who can manage_options (the app-password admin).
+ */
+export async function getReadingSettings(
+  wpUrl: string,
+  username: string,
+  appPassword: string,
+): Promise<{ showOnFront: string | null; pageOnFront: number | null } | null> {
+  try {
+    const client = createClient(wpUrl, username, appPassword);
+    const res = await client.get<{
+      show_on_front?: string;
+      page_on_front?: number;
+    }>("/wp-json/wp/v2/settings", { validateStatus: () => true });
+    if (res.status >= 400) return null;
+    return {
+      showOnFront: res.data.show_on_front ?? null,
+      pageOnFront: res.data.page_on_front ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Raw (unrendered) content of a Page, or null. */
+export async function getPageRawContent(
+  wpUrl: string,
+  username: string,
+  appPassword: string,
+  pageId: number,
+): Promise<string | null> {
+  try {
+    const client = createClient(wpUrl, username, appPassword);
+    const res = await client.get<WpPost>(`/wp-json/wp/v2/pages/${pageId}`, {
+      params: { context: "edit", _fields: "id,content" },
+      validateStatus: () => true,
+    });
+    if (res.status >= 400) return null;
+    const content = res.data.content as { rendered?: string; raw?: string };
+    return content?.raw ?? content?.rendered ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Overwrite a Page's content. Returns true on success. */
+export async function updatePageContent(
+  wpUrl: string,
+  username: string,
+  appPassword: string,
+  pageId: number,
+  content: string,
+): Promise<boolean> {
+  try {
+    const client = createClient(wpUrl, username, appPassword);
+    const res = await client.post(
+      `/wp-json/wp/v2/pages/${pageId}`,
+      { content },
+      { validateStatus: () => true },
+    );
+    return res.status < 400;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Backfill an existing post's SEO fields: optionally replace the body
  * (after H1 demotion) and write the meta title/description to the site's
  * SEO plugin. Mirrors what createPost now does at publish time. Best-effort

@@ -13,6 +13,7 @@ import {
 import { CredentialDisplay } from "@/components/blogs/credential-display";
 import { WpConnectionTest } from "@/components/blogs/wp-connection-test";
 import { ThemeSeoButton } from "@/components/blogs/theme-seo-button";
+import { WpHomepageTrackerButton } from "@/components/blogs/wp-homepage-tracker-button";
 import { BlogForm } from "@/components/blogs/blog-form";
 import { PersonaCard } from "@/components/content/persona-card";
 import type { GeneratedPersona } from "@/lib/content/types";
@@ -269,6 +270,24 @@ export default async function BlogDetailPage({
             <CardContent className="space-y-4">
               <CredentialDisplay label="Username" value={blog.wpUsername} />
               <CredentialDisplay label="Application Password" value={blog.wpAppPassword} />
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {!isShopify ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <BarChart3 className="size-4" />
+                Homepage tracking
+              </CardTitle>
+              <CardDescription>
+                Count visitors who land on the site&apos;s homepage without
+                opening a blog post. Requires a static-page homepage.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <WpHomepageTrackerButton blogId={params.blogId} />
             </CardContent>
           </Card>
         ) : null}
