@@ -62,6 +62,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import {
   deleteBlogLivePost,
+  deleteGeneratedPost,
   editBlogLivePost,
   getGeneratedPostContent,
   publishGeneratedPost,
@@ -162,12 +163,14 @@ function GeneratedRowActions({
   row,
   onView,
   onEdit,
+  onDelete,
   viewLoadingId,
   editLoadingId,
 }: {
   row: BlogGeneratedPostRow;
   onView: (row: BlogGeneratedPostRow) => void;
   onEdit: (row: BlogGeneratedPostRow) => void;
+  onDelete: (row: BlogGeneratedPostRow) => void;
   // ID of the row whose body is currently being fetched (if any) — lets
   // this specific eye button show a spinner instead of the icon.
   viewLoadingId: string | null;
@@ -352,6 +355,21 @@ function GeneratedRowActions({
           </Button>
         </a>
       )}
+
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={() => onDelete(row)}
+        disabled={pending || isInFlight}
+        title={
+          isPublished
+            ? "Delete post (app + live site)"
+            : "Delete generated post"
+        }
+        className="text-destructive hover:text-destructive"
+      >
+        <Trash2 className="size-4" />
+      </Button>
     </div>
   );
 }
@@ -386,10 +404,17 @@ export function BlogPostsPanel({ blogId, generated, live }: Props) {
   >("publish");
   const [savingEdit, setSavingEdit] = useState(false);
 
-  // Delete confirmation state
+  // Delete confirmation state (Live tab)
   const [deleting, setDeleting] = useState<BlogLivePostRow | null>(null);
   const [forceDelete, setForceDelete] = useState(false);
   const [deletingPending, setDeletingPending] = useState(false);
+
+  // Delete confirmation state (Generated tab)
+  const [deletingGen, setDeletingGen] = useState<BlogGeneratedPostRow | null>(
+    null,
+  );
+  const [deleteGenLive, setDeleteGenLive] = useState(true);
+  const [deleteGenPending, setDeleteGenPending] = useState(false);
 
   // View-generated-post dialog state. Body/excerpt/meta are not in the
   // table row payload — fetched on demand when the eye icon is clicked.
@@ -536,6 +561,30 @@ export function BlogPostsPanel({ blogId, generated, live }: Props) {
     }
   }
 
+  function openDeleteGen(row: BlogGeneratedPostRow) {
+    // Default to also removing the live post for published rows.
+    setDeleteGenLive(true);
+    setDeletingGen(row);
+  }
+
+  async function handleConfirmDeleteGen() {
+    if (!deletingGen) return;
+    const isPublished = deletingGen.status === "published";
+    setDeleteGenPending(true);
+    const result = await deleteGeneratedPost(
+      deletingGen.id,
+      isPublished ? deleteGenLive : false,
+    );
+    setDeleteGenPending(false);
+    if (result.success) {
+      toast.success(result.message);
+      setDeletingGen(null);
+      router.refresh();
+    } else {
+      toast.error(result.message);
+    }
+  }
+
   function handleRefresh() {
     startRefresh(() => router.refresh());
   }
@@ -662,6 +711,7 @@ export function BlogPostsPanel({ blogId, generated, live }: Props) {
                           row={row}
                           onView={openView}
                           onEdit={openEditGen}
+                          onDelete={openDeleteGen}
                           viewLoadingId={viewLoading ? viewingRow?.id ?? null : null}
                           editLoadingId={editGenLoading ? editingGenRow?.id ?? null : null}
                         />
@@ -1278,6 +1328,64 @@ export function BlogPostsPanel({ blogId, generated, live }: Props) {
               {live.platform === "shopify" || forceDelete
                 ? "Delete permanently"
                 : "Move to trash"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Delete confirmation — Generated tab */}
+      <AlertDialog
+        open={deletingGen !== null}
+        onOpenChange={(open) => {
+          if (!open && !deleteGenPending) setDeletingGen(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete generated post?</AlertDialogTitle>
+            <AlertDialogDescription>
+              &ldquo;{deletingGen?.title || deletingGen?.topic}&rdquo; will be
+              removed from this app.
+              {deletingGen?.status === "published" &&
+                deletingGen?.externalPostId &&
+                deleteGenLive && (
+                  <>
+                    {" "}
+                    The live post will also be permanently deleted from the
+                    destination site.
+                  </>
+                )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {deletingGen?.status === "published" &&
+            deletingGen?.externalPostId && (
+              <div className="flex items-center gap-2 rounded-md border p-3 text-sm">
+                <input
+                  id="delete-gen-live"
+                  type="checkbox"
+                  checked={deleteGenLive}
+                  onChange={(e) => setDeleteGenLive(e.target.checked)}
+                  className="size-4"
+                />
+                <label htmlFor="delete-gen-live" className="text-sm">
+                  Also delete the live post from the site (uncheck to only remove
+                  the app record)
+                </label>
+              </div>
+            )}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteGenPending}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleConfirmDeleteGen}
+              disabled={deleteGenPending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleteGenPending && (
+                <Loader2 className="mr-2 size-4 animate-spin" />
+              )}
+              Delete
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
