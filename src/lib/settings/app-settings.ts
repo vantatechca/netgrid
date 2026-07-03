@@ -10,6 +10,8 @@ export const SETTING_KEYS = {
   contentModel: "content_model",
   /** Which Claude model powers SEO fixes + reports. */
   fixModel: "fix_model",
+  /** Shared secret for the public marketing API (/api/v1). */
+  marketingApiKey: "marketing_api_key",
 } as const;
 
 // ─── Content generation model ────────────────────────────────────────────────
@@ -101,4 +103,37 @@ export async function getContentModel(): Promise<ContentModel> {
 export async function getFixModel(): Promise<string> {
   const raw = (await readSetting(SETTING_KEYS.fixModel))?.trim();
   return raw || DEFAULT_FIX_MODEL;
+}
+
+// ─── Marketing API key ───────────────────────────────────────────────────────
+
+/**
+ * The effective marketing API key: an in-app generated key (stored in
+ * app_settings, set from the Integrations page) takes precedence, falling back
+ * to the MARKETING_API_KEY env var. Returns null when neither is set.
+ */
+export async function getMarketingApiKey(): Promise<string | null> {
+  const stored = (await readSetting(SETTING_KEYS.marketingApiKey))?.trim();
+  if (stored) return stored;
+  const env = process.env.MARKETING_API_KEY?.trim();
+  return env || null;
+}
+
+/** Source of the effective key — for display in the admin UI. */
+export async function getMarketingApiKeySource(): Promise<
+  "stored" | "env" | "none"
+> {
+  const stored = (await readSetting(SETTING_KEYS.marketingApiKey))?.trim();
+  if (stored) return "stored";
+  if (process.env.MARKETING_API_KEY?.trim()) return "env";
+  return "none";
+}
+
+export async function setMarketingApiKey(value: string): Promise<void> {
+  await setAppSetting(SETTING_KEYS.marketingApiKey, value.trim());
+}
+
+/** Clear the stored key (falls back to the env var, if any). */
+export async function clearMarketingApiKey(): Promise<void> {
+  await setAppSetting(SETTING_KEYS.marketingApiKey, "");
 }
