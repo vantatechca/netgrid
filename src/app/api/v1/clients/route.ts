@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { apiAuthGuard } from "@/lib/api/auth";
-import { listPublicClients } from "@/lib/api/public-data";
+import { listPublicClients, parseSince } from "@/lib/api/public-data";
 
 export const dynamic = "force-dynamic";
 
@@ -10,6 +10,8 @@ export const dynamic = "force-dynamic";
  * Query params (optional):
  *   ?email=<address>   case-insensitive exact match (resolve a user → client)
  *   ?status=<status>   onboarding | active | paused | churned
+ *   ?days=<1..365>     traffic window (views/clicks counted over the last N days)
+ *   ?since=<ISO>       traffic window lower bound (ignored if ?days is set)
  */
 export async function GET(request: Request) {
   const denied = await apiAuthGuard(request);
@@ -18,9 +20,10 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const email = url.searchParams.get("email")?.trim() || undefined;
   const status = url.searchParams.get("status")?.trim() || undefined;
+  const since = parseSince(url.searchParams);
 
   try {
-    const clients = await listPublicClients({ email, status });
+    const clients = await listPublicClients({ email, status, since });
     return NextResponse.json({ clients });
   } catch (err) {
     console.error("[api/v1/clients] failed:", err);

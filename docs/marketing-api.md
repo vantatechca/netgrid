@@ -56,6 +56,8 @@ List clients with rolled-up stats.
 |----------|-------------|
 | `email`  | Case-insensitive exact match on the client's contact email. Use to resolve a logged-in marketing-app user to their netgrid client. |
 | `status` | Filter by client status: `onboarding` \| `active` \| `paused` \| `churned`. |
+| `days`   | Traffic window: count `views`/`clicks` over the last N days (`1`–`365`, clamped). Omit for all-time. |
+| `since`  | Traffic window lower bound as an ISO 8601 timestamp. Ignored when `days` is set. Omit for all-time. |
 
 **Response** `200`:
 
@@ -91,7 +93,7 @@ List clients with rolled-up stats.
 | `views`       | number            | tracked page views across the client's sites |
 | `clicks`      | number            | tracked CTA clicks across the client's sites |
 
-> Traffic (`views`/`clicks`) counts only posts published after tracking was enabled; `0` until traffic accrues. CTR = `clicks / views`.
+> Traffic (`views`/`clicks`) counts only posts published after tracking was enabled; `0` until traffic accrues. CTR = `clicks / views`. By default the counts are all-time; pass `days` or `since` to scope them to a window (e.g. `?days=30` for the trailing 30 days).
 
 ---
 
@@ -100,6 +102,13 @@ List clients with rolled-up stats.
 A single client with its sites (blogs) and per-site SEO scores.
 
 `clientId` must be a UUID.
+
+**Query parameters** (all optional):
+
+| Param   | Description |
+|---------|-------------|
+| `days`  | Traffic window: count `views`/`clicks` (client total and per-site) over the last N days (`1`–`365`, clamped). Omit for all-time. |
+| `since` | Traffic window lower bound as an ISO 8601 timestamp. Ignored when `days` is set. Omit for all-time. |
 
 **Response** `200`:
 
