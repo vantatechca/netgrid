@@ -93,7 +93,7 @@ List clients with rolled-up stats.
 | `views`       | number            | tracked page views across the client's sites |
 | `clicks`      | number            | tracked CTA clicks across the client's sites |
 
-> Traffic (`views`/`clicks`) counts only posts published after tracking was enabled; `0` until traffic accrues. CTR = `clicks / views`. By default the counts are all-time; pass `days` or `since` to scope them to a window (e.g. `?days=30` for the trailing 30 days).
+> Traffic (`views`/`clicks`) counts posts published after tracking was enabled, plus site-wide (homepage / non-article) views on Shopify stores that have the netgrid theme block installed; `0` until traffic accrues. CTR = `clicks / views`. By default the counts are all-time; pass `days` or `since` to scope them to a window (e.g. `?days=30` for the trailing 30 days).
 
 ---
 
