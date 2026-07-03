@@ -1,11 +1,14 @@
 "use server";
 
 import { db } from "@/lib/db";
-import { blogs } from "@/lib/db/schema";
+import { blogs, clients } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { requireAdmin } from "@/lib/auth/helpers";
 import { buildShopifyCreds } from "@/lib/services/platform-client";
-import { blogTrackingPixelUrl } from "@/lib/services/link-tracker";
+import {
+  blogTrackingPixelUrl,
+  blogCtaRedirectUrl,
+} from "@/lib/services/link-tracker";
 import {
   injectSeoMetaTags,
   inspectThemeSeo as inspectThemeSeoClient,
@@ -29,7 +32,17 @@ async function shopifyCredsForBlog(blogId: string) {
   }
   const built = buildShopifyCreds(blog);
   if (!built.ok) return { ok: false as const, message: built.message };
-  return { ok: true as const, creds: built.creds };
+  return { ok: true as const, creds: built.creds, clientId: blog.clientId };
+}
+
+/** The client's active CTA URL for a blog, or undefined when no CTA is set. */
+async function ctaUrlForClient(clientId: string): Promise<string | undefined> {
+  const [c] = await db
+    .select({ ctaEnabled: clients.ctaEnabled, ctaUrl: clients.ctaUrl })
+    .from(clients)
+    .where(eq(clients.id, clientId))
+    .limit(1);
+  return c?.ctaEnabled && c.ctaUrl ? c.ctaUrl : undefined;
 }
 
 /**
@@ -64,7 +77,14 @@ export async function applyThemeSeoFix(
     return { success: false, message: built.message };
   }
 
-  return injectSeoMetaTags(built.creds, undefined, blogTrackingPixelUrl(blogId));
+  const ctaUrl = await ctaUrlForClient(blog.clientId);
+  return injectSeoMetaTags(
+    built.creds,
+    undefined,
+    blogTrackingPixelUrl(blogId),
+    ctaUrl,
+    ctaUrl ? blogCtaRedirectUrl(blogId) : undefined,
+  );
 }
 
 /**
@@ -79,7 +99,14 @@ export async function optimizeThemeSeo(
   await requireAdmin();
   const r = await shopifyCredsForBlog(blogId);
   if (!r.ok) return { success: false, message: r.message };
-  return optimizeThemeSeoClient(r.creds, undefined, blogTrackingPixelUrl(blogId));
+  const ctaUrl = await ctaUrlForClient(r.clientId);
+  return optimizeThemeSeoClient(
+    r.creds,
+    undefined,
+    blogTrackingPixelUrl(blogId),
+    ctaUrl,
+    ctaUrl ? blogCtaRedirectUrl(blogId) : undefined,
+  );
 }
 
 /**

@@ -1,7 +1,7 @@
 "use server";
 
 import { db } from "@/lib/db";
-import { blogs } from "@/lib/db/schema";
+import { blogs, clients } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { requireAdmin } from "@/lib/auth/helpers";
 import {
@@ -9,7 +9,10 @@ import {
   getPageRawContent,
   updatePageContent,
 } from "@/lib/services/wp-client";
-import { blogTrackingPixelImg } from "@/lib/services/link-tracker";
+import {
+  blogTrackingPixelImg,
+  blogCtaRedirectUrl,
+} from "@/lib/services/link-tracker";
 
 export interface WpHomepageTrackerResult {
   success: boolean;
@@ -21,6 +24,27 @@ const MARK_BEGIN = "<!-- netgrid:homepage-tracker -->";
 const MARK_END = "<!-- /netgrid:homepage-tracker -->";
 const BLOCK_RE =
   /<!-- netgrid:homepage-tracker -->[\s\S]*?<!-- \/netgrid:homepage-tracker -->/g;
+
+/**
+ * Repoint homepage links whose href is the client's CTA URL to the tracked
+ * blog-level redirect, so CTA clicks on the homepage are logged. Only touches
+ * `href="..."` / `href='...'` attributes that exactly match, and is idempotent
+ * (once rewritten, the raw CTA URL no longer matches).
+ */
+function rewriteCtaHrefs(
+  html: string,
+  ctaUrl: string,
+  redirectUrl: string,
+): { html: string; count: number } {
+  const esc = ctaUrl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`href=(["'])${esc}\\1`, "g");
+  let count = 0;
+  const out = html.replace(re, (_m, q) => {
+    count++;
+    return `href=${q}${redirectUrl}${q}`;
+  });
+  return { html: out, count };
+}
 
 /**
  * Install (or refresh) a site-wide page-view pixel on a WordPress blog's
@@ -84,8 +108,28 @@ export async function installWpHomepageTracker(
     };
   }
 
+  // The client's active CTA URL, so we can also track homepage CTA clicks.
+  const [client] = await db
+    .select({ ctaEnabled: clients.ctaEnabled, ctaUrl: clients.ctaUrl })
+    .from(clients)
+    .where(eq(clients.id, blog.clientId))
+    .limit(1);
+  const ctaUrl = client?.ctaEnabled && client.ctaUrl ? client.ctaUrl : null;
+
   const hadBlock = BLOCK_RE.test(raw);
-  const stripped = raw.replace(BLOCK_RE, "").replace(/\s+$/, "");
+  let stripped = raw.replace(BLOCK_RE, "").replace(/\s+$/, "");
+
+  let ctaRewrites = 0;
+  if (ctaUrl) {
+    const rewritten = rewriteCtaHrefs(
+      stripped,
+      ctaUrl,
+      blogCtaRedirectUrl(blogId),
+    );
+    stripped = rewritten.html;
+    ctaRewrites = rewritten.count;
+  }
+
   const block = `${MARK_BEGIN}\n${blogTrackingPixelImg(blogId)}\n${MARK_END}`;
   const next = stripped ? `${stripped}\n\n${block}\n` : `${block}\n`;
 
@@ -105,9 +149,16 @@ export async function installWpHomepageTracker(
     };
   }
 
+  const ctaNote =
+    ctaRewrites > 0
+      ? ` ${ctaRewrites} CTA link${ctaRewrites === 1 ? "" : "s"} now tracked.`
+      : ctaUrl
+        ? " No CTA links matching the client's CTA URL were found in the homepage content."
+        : "";
+
   return {
     success: true,
-    message: `Tracking pixel ${hadBlock ? "updated" : "installed"} on the homepage (page #${pageId}). New posts already carry their own pixel.`,
+    message: `Tracking pixel ${hadBlock ? "updated" : "installed"} on the homepage (page #${pageId}).${ctaNote} New posts already carry their own pixel.`,
     action: hadBlock ? "updated" : "installed",
   };
 }
