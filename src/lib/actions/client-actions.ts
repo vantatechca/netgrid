@@ -144,6 +144,7 @@ export async function createClient(data: CreateClientInput) {
       niche: parsed.niche || null,
       totalBlogsTarget: parsed.totalBlogsTarget ?? 0,
       notesInternal: parsed.notesInternal || null,
+      customPrompt: parsed.customPrompt?.trim() || null,
       ctaEnabled: parsed.ctaEnabled ?? false,
       ctaLabel: parsed.ctaLabel || null,
       ctaUrl: parsed.ctaUrl || null,
@@ -187,6 +188,7 @@ export async function updateClient(id: string, data: UpdateClientInput) {
   if (parsed.niche !== undefined) updateData.niche = parsed.niche || null;
   if (parsed.totalBlogsTarget !== undefined) updateData.totalBlogsTarget = parsed.totalBlogsTarget;
   if (parsed.notesInternal !== undefined) updateData.notesInternal = parsed.notesInternal || null;
+  if (parsed.customPrompt !== undefined) updateData.customPrompt = parsed.customPrompt?.trim() || null;
   if (parsed.ctaEnabled !== undefined) updateData.ctaEnabled = parsed.ctaEnabled;
   if (parsed.ctaLabel !== undefined) updateData.ctaLabel = parsed.ctaLabel || null;
   if (parsed.ctaUrl !== undefined) updateData.ctaUrl = parsed.ctaUrl || null;

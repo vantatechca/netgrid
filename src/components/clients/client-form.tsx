@@ -44,6 +44,7 @@ export function ClientForm({ mode, defaultValues }: ClientFormProps) {
       niche: defaultValues?.niche ?? "",
       totalBlogsTarget: defaultValues?.totalBlogsTarget ?? 0,
       notesInternal: defaultValues?.notesInternal ?? "",
+      customPrompt: defaultValues?.customPrompt ?? "",
       ctaEnabled: defaultValues?.ctaEnabled ?? false,
       ctaLabel: defaultValues?.ctaLabel ?? "",
       ctaUrl: defaultValues?.ctaUrl ?? "",
@@ -174,6 +175,32 @@ export function ClientForm({ mode, defaultValues }: ClientFormProps) {
               until you edit this number higher.
             </p>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Custom generation prompt */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Custom generation prompt</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <Label htmlFor="customPrompt" className="sr-only">
+            Custom generation prompt
+          </Label>
+          <Textarea
+            id="customPrompt"
+            rows={6}
+            placeholder="Optional. e.g. Write as a 15-year commercial roofer talking to facility managers. Lead with a real cost range, then walk through the decision. Blunt, no fluff, cite manufacturer warranties by name..."
+            className="font-mono text-xs"
+            {...register("customPrompt")}
+          />
+          <p className="text-xs text-muted-foreground">
+            When set, <strong>all this client&apos;s blogs</strong> are generated
+            from this prompt instead of the niche/persona style. A per-blog custom
+            prompt (on the blog page) overrides it. Compliance disclaimers and the
+            required output format are always enforced on top. Leave blank to use
+            the niche/persona style.
+          </p>
         </CardContent>
       </Card>
 
