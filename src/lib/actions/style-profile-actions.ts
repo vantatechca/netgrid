@@ -2,7 +2,13 @@
 
 import { db } from "@/lib/db";
 import { styleProfiles, blogs, clients } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { and, eq, isNotNull, ne } from "drizzle-orm";
+import { revalidatePath } from "next/cache";
+import { requireAdmin } from "@/lib/auth/helpers";
+import {
+  generateBlogPersona,
+  type GeneratedPersona,
+} from "@/lib/content/persona-generator";
 import {
   assignProfile,
   buildNetworkState,
@@ -58,6 +64,9 @@ function rowToProfile(row: typeof styleProfiles.$inferSelect): StyleProfile {
       row.minHammingAtAssign != null
         ? Number(row.minHammingAtAssign)
         : undefined,
+    generatedPersona:
+      (row.generatedPersona as StyleProfile["generatedPersona"]) ?? null,
+    generatedPersonaSeed: row.generatedPersonaSeed ?? null,
   };
 }
 
@@ -94,6 +103,91 @@ export async function getStyleProfileForBlog(
     .limit(1);
   if (!row) return null;
   return rowToProfile(row);
+}
+
+/**
+ * Generate (or regenerate) an LLM persona for a blog and store it on its style
+ * profile. Ensures a profile row exists first, gathers the personas already in
+ * use for the same niche so the new one is distinct, and honors optional
+ * operator seed direction. When set, composeForPost uses this persona for the
+ * voice slots instead of the library voice.
+ */
+export async function generatePersonaForBlog(
+  blogId: string,
+  seedInputs?: string,
+): Promise<{ success: boolean; message: string; label?: string }> {
+  await requireAdmin();
+
+  let profile = await getStyleProfileForBlog(blogId);
+  if (!profile) {
+    await assignProfileForBlog(blogId);
+    profile = await getStyleProfileForBlog(blogId);
+  }
+  if (!profile) {
+    return { success: false, message: "No style profile for this blog yet." };
+  }
+
+  const [blogRow] = await db
+    .select({ niche: clients.niche, clientName: clients.name })
+    .from(blogs)
+    .leftJoin(clients, eq(blogs.clientId, clients.id))
+    .where(eq(blogs.id, blogId))
+    .limit(1);
+  const nicheLabel = blogRow?.niche || profile.nicheKey || "general";
+
+  // Personas already in use for this niche (excluding this blog) — for diversity.
+  const existingRows = await db
+    .select({ gp: styleProfiles.generatedPersona })
+    .from(styleProfiles)
+    .where(
+      and(
+        eq(styleProfiles.nicheKey, profile.nicheKey),
+        isNotNull(styleProfiles.generatedPersona),
+        ne(styleProfiles.blogId, blogId),
+      ),
+    )
+    .limit(20);
+  const existingPersonas = existingRows
+    .map((r) => (r.gp as GeneratedPersona | null)?.persona)
+    .filter((s): s is string => !!s);
+
+  const seed = seedInputs?.trim() || profile.generatedPersonaSeed || undefined;
+  const persona = await generateBlogPersona({
+    nicheLabel,
+    clientName: blogRow?.clientName ?? undefined,
+    seedInputs: seed,
+    existingPersonas,
+  });
+  if (!persona) {
+    return { success: false, message: "Persona generation failed — try again." };
+  }
+
+  await db
+    .update(styleProfiles)
+    .set({ generatedPersona: persona, generatedPersonaSeed: seed ?? null })
+    .where(eq(styleProfiles.blogId, blogId));
+
+  revalidatePath(`/blogs/${blogId}`);
+  return {
+    success: true,
+    message: persona.label
+      ? `Persona generated: ${persona.label}`
+      : "Persona generated.",
+    label: persona.label,
+  };
+}
+
+/** Clear a blog's generated persona — reverts to the library voice. */
+export async function clearBlogPersona(
+  blogId: string,
+): Promise<{ success: boolean; message: string }> {
+  await requireAdmin();
+  await db
+    .update(styleProfiles)
+    .set({ generatedPersona: null })
+    .where(eq(styleProfiles.blogId, blogId));
+  revalidatePath(`/blogs/${blogId}`);
+  return { success: true, message: "Reverted to the library voice." };
 }
 
 export interface AssignProfileResult {

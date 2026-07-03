@@ -76,6 +76,20 @@ export type ScrubberStrictness = "loose" | "standard" | "strict";
 
 // ─── Locked profile (mirrors the styleProfiles table) ───────────────────────
 
+/**
+ * LLM-generated per-blog writing persona (Phase 3). When present on a profile,
+ * composeForPost uses it for the {voice.*} prompt slots instead of the library
+ * voice, giving the blog a unique generated voice.
+ */
+export interface GeneratedPersona {
+  persona: string;
+  registerSignature: string;
+  examplePara1: string;
+  examplePara2: string;
+  toneNotes?: string;
+  label?: string;
+}
+
 export interface StyleProfile {
   blogId: string;
   nicheKey: string;
@@ -97,6 +111,10 @@ export interface StyleProfile {
   secondaryCompounds: string[]; // 4
   assignmentSeed?: string;
   minHammingAtAssign?: number;
+  /** Optional LLM-generated persona — overrides the library voice when set. */
+  generatedPersona?: GeneratedPersona | null;
+  /** Operator seed direction used to generate the persona (for regeneration). */
+  generatedPersonaSeed?: string | null;
 }
 
 // ─── Library row shapes ─────────────────────────────────────────────────────
