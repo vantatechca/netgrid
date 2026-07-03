@@ -198,11 +198,25 @@ export function composeForPost(input: ComposeInput): ComposeResult {
   // ── Placeholder substitution ──
   // Order matters slightly — replace longer placeholders first so we don't
   // accidentally consume a substring.
+  // Phase 3: an LLM-generated persona, when present on the profile, overrides
+  // the library voice for the {voice.*} slots — a unique generated voice per
+  // blog. Absent → the library voice (unchanged behavior).
+  const gp = profile.generatedPersona ?? null;
+  const voicePersona = gp?.persona || voice.persona;
+  const voiceRegister =
+    (gp?.registerSignature || gp?.toneNotes) ?? voice.registerSignature;
+  const voiceEx1 =
+    gp?.examplePara1 ||
+    (voice.examplePara1 ?? "(example paragraph not yet provided for this voice)");
+  const voiceEx2 =
+    gp?.examplePara2 ||
+    (voice.examplePara2 ?? "(example paragraph not yet provided for this voice)");
+
   const substitutions: Array<[string, string]> = [
-    ["{voice.persona}", voice.persona],
-    ["{voice.register_signature}", voice.registerSignature],
-    ["{voice.example_paragraph_1}", voice.examplePara1 ?? "(example paragraph not yet provided for this voice)"],
-    ["{voice.example_paragraph_2}", voice.examplePara2 ?? "(example paragraph not yet provided for this voice)"],
+    ["{voice.persona}", voicePersona],
+    ["{voice.register_signature}", voiceRegister],
+    ["{voice.example_paragraph_1}", voiceEx1],
+    ["{voice.example_paragraph_2}", voiceEx2],
     ["{cadence.numbers.avgWords}", String(cadence.numbers.avgWords)],
     ["{cadence.numbers.stdDev}", String(cadence.numbers.stdDev)],
     ["{cadence.numbers.shortExample}", String(cadence.numbers.shortExample)],

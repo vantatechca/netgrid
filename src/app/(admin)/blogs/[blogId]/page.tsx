@@ -15,6 +15,8 @@ import { WpConnectionTest } from "@/components/blogs/wp-connection-test";
 import { ThemeSeoButton } from "@/components/blogs/theme-seo-button";
 import { BlogForm } from "@/components/blogs/blog-form";
 import { CustomPromptCard } from "@/components/content/custom-prompt-card";
+import { PersonaCard } from "@/components/content/persona-card";
+import type { GeneratedPersona } from "@/lib/content/types";
 import { BlogPostsPanel } from "@/components/blogs/blog-posts-panel";
 import { StyleProfilePanel } from "@/components/blogs/style-profile-panel";
 import { getStyleProfileForBlog } from "@/lib/actions/style-profile-actions";
@@ -199,6 +201,14 @@ export default async function BlogDetailPage({
         scope="blog"
         id={params.blogId}
         initial={blog.customPrompt}
+      />
+
+      <PersonaCard
+        blogId={params.blogId}
+        initialPersona={
+          (styleProfile?.generatedPersona as GeneratedPersona | null) ?? null
+        }
+        initialSeed={styleProfile?.generatedPersonaSeed ?? null}
       />
 
       <div className="grid gap-6 lg:grid-cols-2">

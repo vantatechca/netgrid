@@ -395,6 +395,14 @@ export const styleProfiles = pgTable("style_profiles", {
   // produces fractional values (e.g. 9.55 means 8 single-valued
   // mismatches + ~1.55 fractional set-distance).
   minHammingAtAssign: decimal("min_hamming_at_assign", { precision: 5, scale: 2 }),
+  // Phase 3: optional LLM-generated per-blog persona. Shape mirrors
+  // GeneratedPersona in src/lib/content/persona-generator.ts. When present,
+  // composeForPost uses it for the voice slots instead of the library voice —
+  // a unique generated voice per blog. Null → use the library voiceId
+  // (behavior unchanged). generatedPersonaSeed keeps the operator's seed inputs
+  // so the persona can be regenerated with the same direction.
+  generatedPersona: jsonb("generated_persona"),
+  generatedPersonaSeed: text("generated_persona_seed"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [
   index("style_profiles_blog_id_idx").on(table.blogId),
