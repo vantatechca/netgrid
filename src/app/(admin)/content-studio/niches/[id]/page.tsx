@@ -42,8 +42,9 @@ export default async function NicheEditPage({
                 </span>
               </CardTitle>
               <CardDescription>
-                Editing here marks the niche as hand-edited. Generation is
-                unaffected until the composer is switched to read from the DB.
+                Editing here marks the niche as hand-edited and takes effect on
+                the next generated posts for this niche. Use Preview prompt below
+                to see exactly what changes before you rely on it.
               </CardDescription>
             </div>
             <Badge
