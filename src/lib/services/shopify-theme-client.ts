@@ -332,9 +332,56 @@ export interface ThemeOptimizeResult extends ThemeSeoResult {
  * Single read-modify-write on the published theme's meta-tags snippet (or the
  * layout head as a fallback). Idempotent: the managed block is stripped and
  * re-added each run, and description repointing is a no-op once already done.
- * Page TITLE is intentionally left untouched — netgrid already writes the
- * capped title_tag (Liquid `page_title`), which themes render in <title>.
+ * Also patches the layout <title> once to drop the theme's " – Shop Name"
+ * suffix on article pages (see patchTitleSuffix) so netgrid's capped SEO title
+ * renders without the suffix that pushes blog titles over the pixel limit.
  */
+// Marker left inside the patched <title> so the strip is idempotent (we detect
+// it and skip re-patching on subsequent runs).
+const TITLE_PATCH_MARKER = "netgrid:title";
+
+/**
+ * Strip the theme's " – Shop Name" suffix from the <title> on ARTICLE pages
+ * only. Most Shopify themes build `<title>{{ page_title }} &ndash; {{ shop.name }}</title>`
+ * (or similar), which pushes blog-post titles over the 580px audit limit even
+ * when netgrid already writes a capped SEO title. We wrap the existing <title>
+ * inner in a page-type conditional: article pages emit bare `{{ page_title }}`
+ * (which is netgrid's SEO title_tag when set), every other page keeps the
+ * theme's original markup untouched. Idempotent via TITLE_PATCH_MARKER; a no-op
+ * when there's no <title> to patch.
+ */
+function patchTitleSuffix(layout: string): {
+  next: string;
+  changed: boolean;
+  note: string;
+} {
+  if (layout.includes(TITLE_PATCH_MARKER)) {
+    return {
+      next: layout,
+      changed: false,
+      note: "title suffix already stripped on article pages",
+    };
+  }
+  const match = layout.match(/<title>([\s\S]*?)<\/title>/i);
+  if (!match) {
+    return {
+      next: layout,
+      changed: false,
+      note: "no <title> tag in layout — suffix not changed",
+    };
+  }
+  const inner = match[1];
+  const replacement =
+    `<title>{%- comment -%}${TITLE_PATCH_MARKER}{%- endcomment -%}` +
+    `{%- if request.page_type == 'article' -%}{{ page_title }}` +
+    `{%- else -%}${inner}{%- endif -%}</title>`;
+  return {
+    next: layout.replace(match[0], replacement),
+    changed: true,
+    note: "stripped shop-name suffix from <title> on article pages",
+  };
+}
+
 export async function optimizeThemeSeo(
   creds: ShopifyCreds,
   apiVersion: string = DEFAULT_API_VERSION,
@@ -418,7 +465,47 @@ export async function optimizeThemeSeo(
       next = `${repatchedBody.replace(/\s*$/, "")}\n\n${block}\n`;
     }
 
-    if (next === source) {
+    // 4. Strip the shop-name suffix from <title> on article pages. The <title>
+    //    lives in the LAYOUT — patch `next` directly when we're already editing
+    //    the layout, otherwise read+write the layout as a second asset.
+    let layoutTitleWritten = false;
+    try {
+      if (usingLayout) {
+        const patched = patchTitleSuffix(next);
+        next = patched.next;
+        details.push(patched.note);
+      } else {
+        const layoutSource = await getThemeAsset(
+          creds,
+          theme.id,
+          LAYOUT_KEY,
+          apiVersion,
+          client,
+        );
+        if (layoutSource === null) {
+          details.push(`title suffix: ${LAYOUT_KEY} not found — skipped`);
+        } else {
+          const patched = patchTitleSuffix(layoutSource);
+          if (patched.changed) {
+            await putThemeAsset(
+              creds,
+              theme.id,
+              LAYOUT_KEY,
+              patched.next,
+              apiVersion,
+              client,
+            );
+            layoutTitleWritten = true;
+          }
+          details.push(patched.note);
+        }
+      }
+    } catch (err) {
+      details.push(`title suffix: layout patch skipped (${formatError(err)})`);
+    }
+
+    const primaryChanged = next !== source;
+    if (!primaryChanged && !layoutTitleWritten) {
       return {
         success: true,
         message: `Theme "${theme.name}" is already optimized — no change.`,
@@ -430,10 +517,12 @@ export async function optimizeThemeSeo(
       };
     }
 
-    await putThemeAsset(creds, theme.id, asset, next, apiVersion, client);
+    if (primaryChanged) {
+      await putThemeAsset(creds, theme.id, asset, next, apiVersion, client);
+    }
     return {
       success: true,
-      message: `Optimized theme "${theme.name}" SEO in ${asset}.`,
+      message: `Optimized theme "${theme.name}" SEO${primaryChanged ? ` in ${asset}` : ""}${layoutTitleWritten && asset !== LAYOUT_KEY ? ` + ${LAYOUT_KEY} title` : ""}.`,
       themeId: theme.id,
       themeName: theme.name,
       targetAsset: asset,
