@@ -77,6 +77,7 @@ export function buildSeoMetaBlock(opts: SeoBlockOptions = {}): string {
   const faviconLine = opts.includeFavicon
     ? `
 {%- if settings.favicon != blank -%}
+  <link rel="icon" type="image/png" href="{{ settings.favicon | image_url: width: 32, height: 32 }}">
   <link rel="apple-touch-icon" sizes="180x180" href="{{ settings.favicon | image_url: width: 180, height: 180 }}">
 {%- endif -%}`
     : "";
@@ -385,9 +386,12 @@ export async function optimizeThemeSeo(
       details.push("injected <meta name=\"description\"> from page_description");
     }
 
-    // 2. Favicon: add apple-touch-icon only if the theme has none.
-    const hasFavicon = /apple-touch-icon/i.test(body);
-    if (!hasFavicon) details.push("added apple-touch-icon favicon");
+    // 2. Favicon: add <link rel="icon"> + apple-touch-icon only if the theme
+    //    has no icon link at all (matches rel="icon", "shortcut icon", or
+    //    "apple-touch-icon"). Both render from settings.favicon, so the store
+    //    must still have a favicon set in the Shopify theme editor.
+    const hasFavicon = /rel=["'][^"']*icon[^"']*["']/i.test(body);
+    if (!hasFavicon) details.push("added favicon + apple-touch-icon");
 
     const block = buildSeoMetaBlock({
       includeFavicon: !hasFavicon,

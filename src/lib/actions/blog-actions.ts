@@ -11,6 +11,7 @@ import {
   type PlatformBlog,
 } from "@/lib/services/platform-client";
 import { regenerateAndUpdatePost } from "@/lib/actions/content-generation-actions";
+import { getActiveKnowledgeForBlog } from "@/lib/actions/knowledge-actions";
 import {
   testConnection as shopifyTestConnection,
   fetchAllLiveArticles as shopifyFetchAllLive,
@@ -802,6 +803,12 @@ export async function generateBlogPost(
   // brief instead of drifting to the niche's generic topics.
   const customPrompt = blog.clientCustomPrompt?.trim() || undefined;
 
+  // Client Knowledge Base (client-wide + per-blog active docs). Previously the
+  // manual "Generate post" path skipped this entirely — only the cron path used
+  // it — so manual posts ignored uploaded briefs/keyword sheets. Fetch it here
+  // and feed it into BOTH ideation and writing, matching the auto path.
+  const knowledge = await getActiveKnowledgeForBlog(input.blogId);
+
   if (!topic) {
     const recent = await db
       .select({ title: generatedPosts.title })
@@ -819,6 +826,7 @@ export async function generateBlogPost(
           styleProfile: styleProfile ?? undefined,
           language: postLanguage,
           customPrompt,
+          knowledge,
         },
       );
       topic = idea.topic;
@@ -871,6 +879,7 @@ export async function generateBlogPost(
     resolvedNiche,
     customPrompt,
     applyPersona,
+    knowledgeSummaries: knowledge.summaries,
     brandVoice: input.brandVoice,
     targetAudience: input.targetAudience,
     seoOptimized: input.seoOptimized ?? true,
@@ -951,6 +960,7 @@ export async function generateBlogPost(
           styleProfile: styleProfile ?? undefined,
           language: postLanguage,
           customPrompt,
+          knowledge,
         });
         if (!newIdea.topic || newIdea.topic.trim() === currentTopic.trim()) {
           throw new Error("Re-ideation returned an empty or duplicate topic");
