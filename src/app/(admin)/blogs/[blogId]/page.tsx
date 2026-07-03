@@ -14,6 +14,7 @@ import { CredentialDisplay } from "@/components/blogs/credential-display";
 import { WpConnectionTest } from "@/components/blogs/wp-connection-test";
 import { ThemeSeoButton } from "@/components/blogs/theme-seo-button";
 import { WpHomepageTrackerButton } from "@/components/blogs/wp-homepage-tracker-button";
+import { TrackingBackfillButton } from "@/components/blogs/tracking-backfill-button";
 import { BlogForm } from "@/components/blogs/blog-form";
 import { PersonaCard } from "@/components/content/persona-card";
 import type { GeneratedPersona } from "@/lib/content/types";
@@ -29,6 +30,7 @@ import {
   BarChart3,
   ShoppingBag,
   Newspaper,
+  History,
 } from "lucide-react";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -291,6 +293,23 @@ export default async function BlogDetailPage({
             </CardContent>
           </Card>
         ) : null}
+
+        {/* Backfill tracking into already-published posts (both platforms) */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <History className="size-4" />
+              Backfill post tracking
+            </CardTitle>
+            <CardDescription>
+              Add the tracked CTA + page-view pixel to posts published before
+              tracking existed, so their traffic starts counting.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <TrackingBackfillButton blogId={params.blogId} />
+          </CardContent>
+        </Card>
 
         {/* Posting Config */}
         <Card>
