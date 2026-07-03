@@ -18,7 +18,7 @@
  *   - At generation time → prompt instructs Claude to stay >= this
  *   - At scrubber time   → Layer 1F flags posts below this as too short
  */
-export const GLOBAL_WORD_BAND_MIN = 800;
+export const GLOBAL_WORD_BAND_MIN = 1000;
 
 /**
  * Maximum word count for every generated blog post.
@@ -27,4 +27,4 @@ export const GLOBAL_WORD_BAND_MIN = 800;
  * up to MAX × 1.10 as a soft-trim zone before flagging as a regenerate
  * candidate.
  */
-export const GLOBAL_WORD_BAND_MAX = 1000;
+export const GLOBAL_WORD_BAND_MAX = 2000;
