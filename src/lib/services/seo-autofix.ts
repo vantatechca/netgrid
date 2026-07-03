@@ -99,6 +99,22 @@ async function markFailed(issueId: string, reason: string) {
 }
 
 /**
+ * Resolve the value to write for a meta title/description fix. Prefers the
+ * existing on-page text (a "too long" field just needs trimming — no LLM call,
+ * so it also works when the model's credit is out); only generates when there's
+ * no usable source text. Returns whitespace-collapsed text (still needs the
+ * caller's pixel truncation).
+ */
+async function resolveMetaValue(opts: {
+  source: string | null | undefined;
+  generate: () => Promise<string>;
+}): Promise<string> {
+  const s = (opts.source ?? "").replace(/\s+/g, " ").trim();
+  if (s) return s;
+  return (await opts.generate()).replace(/\s+/g, " ").trim();
+}
+
+/**
  * Decide what kind of fix this issue calls for from its title text.
  * scoreBlog generates titles like "Missing meta description" or
  * "Meta description too short (under 120 chars)".
@@ -211,16 +227,29 @@ async function autoFixShopifyIssue(
     }
 
     const issueType = kind === "meta_title" ? "meta_title" : "meta_description";
-    const newValue = await generateSeoFix({
-      niche,
-      blogDomain: blog.domain,
-      pageUrl,
-      pageTitle: payload.articleTitle || "",
-      pageContentExcerpt: payload.excerpt || "",
-      issueType,
-      issueDescription: issue.description || issue.title,
-    });
-    const cleaned = newValue.replace(/\s+/g, " ").trim();
+    // Prefer a mechanical fix: a "too long" title/description just needs the
+    // existing text trimmed to the pixel budget — no LLM call (which also fails
+    // when the model's credit is out). Fall back to generating only when we
+    // have no source text (e.g. a genuinely missing field with no body).
+    const source =
+      kind === "meta_title"
+        ? (payload.articleTitle || "").trim()
+        : (payload.excerpt || "").trim();
+    let cleaned: string;
+    if (source) {
+      cleaned = source.replace(/\s+/g, " ").trim();
+    } else {
+      const generated = await generateSeoFix({
+        niche,
+        blogDomain: blog.domain,
+        pageUrl,
+        pageTitle: payload.articleTitle || "",
+        pageContentExcerpt: payload.excerpt || "",
+        issueType,
+        issueDescription: issue.description || issue.title,
+      });
+      cleaned = generated.replace(/\s+/g, " ").trim();
+    }
     const trimmed =
       kind === "meta_title"
         ? truncateToPx(cleaned, TITLE_FONT_PX, TITLE_TARGET_PX)
@@ -388,20 +417,20 @@ export async function autoFixIssue(issueId: string): Promise<AutoFixResult> {
 
   try {
     if (kind === "meta_description") {
-      const newValue = await generateSeoFix({
-        niche,
-        blogDomain: blog.domain,
-        pageUrl: issue.pageUrl || "",
-        pageTitle,
-        pageContentExcerpt: pageExcerpt,
-        issueType: "meta_description",
-        issueDescription: issue.description || issue.title,
+      const cleaned = await resolveMetaValue({
+        source: pageExcerpt,
+        generate: () =>
+          generateSeoFix({
+            niche,
+            blogDomain: blog.domain,
+            pageUrl: issue.pageUrl || "",
+            pageTitle,
+            pageContentExcerpt: pageExcerpt,
+            issueType: "meta_description",
+            issueDescription: issue.description || issue.title,
+          }),
       });
-      const trimmed = truncateToPx(
-        newValue.replace(/\s+/g, " ").trim(),
-        DESC_FONT_PX,
-        DESC_TARGET_PX,
-      );
+      const trimmed = truncateToPx(cleaned, DESC_FONT_PX, DESC_TARGET_PX);
       await applyMetaDescription(blog, post.id, trimmed);
       // Plugin-less sites can't render a <meta name="description"> — also drop
       // the description into JSON-LD Article schema in the body so it counts.
@@ -415,20 +444,20 @@ export async function autoFixIssue(issueId: string): Promise<AutoFixResult> {
     }
 
     if (kind === "meta_title") {
-      const newValue = await generateSeoFix({
-        niche,
-        blogDomain: blog.domain,
-        pageUrl: issue.pageUrl || "",
-        pageTitle,
-        pageContentExcerpt: pageExcerpt,
-        issueType: "meta_title",
-        issueDescription: issue.description || issue.title,
+      const cleaned = await resolveMetaValue({
+        source: pageTitle,
+        generate: () =>
+          generateSeoFix({
+            niche,
+            blogDomain: blog.domain,
+            pageUrl: issue.pageUrl || "",
+            pageTitle,
+            pageContentExcerpt: pageExcerpt,
+            issueType: "meta_title",
+            issueDescription: issue.description || issue.title,
+          }),
       });
-      const trimmed = truncateToPx(
-        newValue.replace(/\s+/g, " ").trim(),
-        TITLE_FONT_PX,
-        TITLE_TARGET_PX,
-      );
+      const trimmed = truncateToPx(cleaned, TITLE_FONT_PX, TITLE_TARGET_PX);
       await applyMetaTitle(blog, post.id, trimmed);
       await markApplied(issueId, `meta title: ${trimmed}`);
       return { issueId, applied: true, message: `Meta title set on post ${post.id}` };
@@ -438,16 +467,19 @@ export async function autoFixIssue(issueId: string): Promise<AutoFixResult> {
       // Yoast/RankMath default OG fields to meta_title/meta_description when
       // OG-specific aren't set — so we set the regular meta and they cascade.
       const issueType = kind === "og_title" ? "meta_title" : "meta_description";
-      const newValue = await generateSeoFix({
-        niche,
-        blogDomain: blog.domain,
-        pageUrl: issue.pageUrl || "",
-        pageTitle,
-        pageContentExcerpt: pageExcerpt,
-        issueType,
-        issueDescription: issue.description || issue.title,
+      const cleaned = await resolveMetaValue({
+        source: kind === "og_title" ? pageTitle : pageExcerpt,
+        generate: () =>
+          generateSeoFix({
+            niche,
+            blogDomain: blog.domain,
+            pageUrl: issue.pageUrl || "",
+            pageTitle,
+            pageContentExcerpt: pageExcerpt,
+            issueType,
+            issueDescription: issue.description || issue.title,
+          }),
       });
-      const cleaned = newValue.replace(/\s+/g, " ").trim();
       const trimmed =
         kind === "og_title"
           ? truncateToPx(cleaned, TITLE_FONT_PX, TITLE_TARGET_PX)
