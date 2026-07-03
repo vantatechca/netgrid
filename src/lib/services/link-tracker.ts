@@ -44,6 +44,19 @@ export function blogTrackingPixelUrl(blogId: string): string {
   return `${getAppBaseUrl()}/api/track/px/blog/${blogId}`;
 }
 
+/**
+ * Hidden blog-level tracking-pixel <img>. Used when embedding into page BODY
+ * content (e.g. a WordPress static homepage), where an <img> renders — unlike
+ * the Shopify <head> beacon, which is script-based.
+ */
+export function blogTrackingPixelImg(blogId: string): string {
+  return (
+    `<img src="${blogTrackingPixelUrl(blogId)}" width="1" height="1" ` +
+    `alt="" aria-hidden="true" style="position:absolute;width:1px;height:1px;` +
+    `opacity:0;pointer-events:none;" />`
+  );
+}
+
 export type LinkEventType = "view" | "cta_click";
 
 /** Best-effort append to the traffic log — never throws to the caller. */
