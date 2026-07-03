@@ -36,17 +36,18 @@ export default async function NichesPage() {
         </div>
       </div>
 
-      {/* Shadow-mode notice */}
-      <Card className="border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/40">
+      {/* Live notice */}
+      <Card className="border-blue-200 bg-blue-50 dark:border-blue-900 dark:bg-blue-950/40">
         <CardContent className="flex items-start gap-3 py-4 text-sm">
-          <Info className="mt-0.5 size-4 shrink-0 text-amber-600" />
-          <p className="text-amber-800 dark:text-amber-200">
-            <strong>Review mode.</strong> These rows are a copy of the rules
-            currently hardcoded in the generator. Blog generation still uses the
-            code path — editing a niche here does <strong>not</strong> change
-            generated posts yet. Use{" "}
-            <strong>Sync from code</strong> to (re)seed any missing niches, review
-            the values, then we&apos;ll switch generation over to read from here.
+          <Info className="mt-0.5 size-4 shrink-0 text-blue-600" />
+          <p className="text-blue-800 dark:text-blue-200">
+            <strong>These rows drive generation.</strong> Editing a niche and
+            saving <strong>changes the next generated posts</strong> for that
+            niche — no deploy needed. Seeded rows are byte-identical to the old
+            hardcoded rules (confirm with <strong>Preview prompt</strong> inside a
+            niche). If a niche has no row, generation falls back to code, so
+            nothing breaks. Use <strong>Sync from code</strong> to (re)seed any
+            missing niches.
           </p>
         </CardContent>
       </Card>
