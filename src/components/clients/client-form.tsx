@@ -45,6 +45,7 @@ export function ClientForm({ mode, defaultValues }: ClientFormProps) {
       totalBlogsTarget: defaultValues?.totalBlogsTarget ?? 0,
       notesInternal: defaultValues?.notesInternal ?? "",
       customPrompt: defaultValues?.customPrompt ?? "",
+      stackPersona: defaultValues?.stackPersona ?? false,
       ctaEnabled: defaultValues?.ctaEnabled ?? false,
       ctaLabel: defaultValues?.ctaLabel ?? "",
       ctaUrl: defaultValues?.ctaUrl ?? "",
@@ -201,6 +202,31 @@ export function ClientForm({ mode, defaultValues }: ClientFormProps) {
             required output format are always enforced on top. Leave blank to use
             the niche/persona style.
           </p>
+
+          <div className="flex items-center justify-between rounded-md border p-3">
+            <div className="pr-4">
+              <Label htmlFor="stackPersona" className="text-sm">
+                Keep each blog&apos;s persona on top of this prompt
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                When on, the blog&apos;s generated voice/persona is layered onto
+                the custom prompt instead of being replaced by it. Only affects
+                blogs that already have a generated persona. Leave off for a plain
+                custom-prompt voice.
+              </p>
+            </div>
+            <Controller
+              control={control}
+              name="stackPersona"
+              render={({ field }) => (
+                <Switch
+                  id="stackPersona"
+                  checked={!!field.value}
+                  onCheckedChange={field.onChange}
+                />
+              )}
+            />
+          </div>
         </CardContent>
       </Card>
 

@@ -522,9 +522,9 @@ export default async function ClientDetailPage({
         {/* Knowledge Tab */}
         <TabsContent value="knowledge" className="space-y-6 pt-4">
           <CustomPromptCard
-            scope="client"
             id={client.id}
             initial={client.customPrompt}
+            initialStackPersona={client.stackPersona}
           />
           <KnowledgeBasePanel
             clientId={client.id}

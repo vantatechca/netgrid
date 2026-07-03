@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { composeForPost } from "@/lib/content/composer/compose";
 import { getCachedNicheProfile } from "@/lib/content/niche-registry";
 import { runScrubber, runScrubberLite, type ScrubberReport } from "@/lib/content/scrubber";
-import type { StyleProfile } from "@/lib/content/types";
+import type { GeneratedPersona, StyleProfile } from "@/lib/content/types";
 import { SUB_NICHES } from "@/lib/content/libraries/sub-niches";
 import {
   truncateToPx,
@@ -460,6 +460,14 @@ export interface GenerateOptions {
    * compliance disclaimers are still appended (locked).
    */
   customPrompt?: string;
+  /**
+   * When a custom prompt is in effect, also layer the blog's generated
+   * persona/voice on top of it (rather than the custom prompt fully replacing
+   * the persona). Resolved by the caller from the client/blog "stack persona"
+   * toggle. Only takes effect when both a customPrompt and a styleProfile with
+   * a generatedPersona are present; otherwise it's a no-op.
+   */
+  applyPersona?: boolean;
 }
 
 export interface GeneratedContent {
@@ -2126,6 +2134,34 @@ function buildSystemPrompt(opts: GenerateOptions): string {
 }
 
 /**
+ * Render the blog's generated persona as a voice block for the custom-prompt
+ * path. Only used when the "stack persona" toggle is on — it lets the operator
+ * keep the blog's unique voice while still steering angle/structure with a
+ * custom prompt. Mirrors the {voice.*} slots the composer fills on the profile
+ * path, so the same persona reads consistently across both paths.
+ */
+function renderPersonaBlock(persona: GeneratedPersona): string {
+  const lines: string[] = [
+    "\n\n--- VOICE & PERSONA (write in this voice on top of the instructions above) ---",
+    `Persona: ${persona.persona}`,
+    `Register / tone: ${persona.registerSignature}`,
+  ];
+  if (persona.toneNotes && persona.toneNotes.trim()) {
+    lines.push(`Tone notes: ${persona.toneNotes.trim()}`);
+  }
+  const examples = [persona.examplePara1, persona.examplePara2]
+    .map((p) => (p ?? "").trim())
+    .filter(Boolean);
+  if (examples.length > 0) {
+    lines.push(
+      "Match the rhythm, sentence length, and word choice of these example paragraphs (do not copy their content):",
+      ...examples.map((p) => `  ${p}`),
+    );
+  }
+  return lines.join("\n");
+}
+
+/**
  * System prompt for the CUSTOM-PROMPT path. The operator's prompt drives the
  * article's angle, voice, and structure; a fixed guardrails block is appended
  * that ALWAYS applies regardless of what the custom prompt says:
@@ -2148,7 +2184,18 @@ function buildCustomSystemPrompt(
         .join("\n")}`
     : "";
 
-  return `${(opts.customPrompt ?? "").trim()}${complianceBlock}
+  // Optional persona layer: when the operator has opted to STACK the persona
+  // (instead of letting the custom prompt fully replace it) AND this blog has
+  // a generated persona, render its voice as a block between the custom prompt
+  // and the guardrails. This matches the layered model — instructions, then
+  // persona, then locked rules. No-op when the toggle is off or no persona
+  // exists (a plain custom prompt keeps replacing the voice).
+  const personaBlock =
+    opts.applyPersona && opts.styleProfile?.generatedPersona
+      ? renderPersonaBlock(opts.styleProfile.generatedPersona)
+      : "";
+
+  return `${(opts.customPrompt ?? "").trim()}${personaBlock}${complianceBlock}
 
 --- REQUIRED OUTPUT & GUARDRAILS (always apply, even if the instructions above conflict) ---
 - Do NOT use em-dashes (—) or en-dashes (–), the single-character ellipsis (…), or curly/smart quotes. Use straight quotes and normal punctuation.

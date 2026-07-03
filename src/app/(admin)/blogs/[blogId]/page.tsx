@@ -14,7 +14,6 @@ import { CredentialDisplay } from "@/components/blogs/credential-display";
 import { WpConnectionTest } from "@/components/blogs/wp-connection-test";
 import { ThemeSeoButton } from "@/components/blogs/theme-seo-button";
 import { BlogForm } from "@/components/blogs/blog-form";
-import { CustomPromptCard } from "@/components/content/custom-prompt-card";
 import { PersonaCard } from "@/components/content/persona-card";
 import type { GeneratedPersona } from "@/lib/content/types";
 import { BlogPostsPanel } from "@/components/blogs/blog-posts-panel";
@@ -196,12 +195,6 @@ export default async function BlogDetailPage({
           </Link>
         </div>
       </div>
-
-      <CustomPromptCard
-        scope="blog"
-        id={params.blogId}
-        initial={blog.customPrompt}
-      />
 
       <PersonaCard
         blogId={params.blogId}

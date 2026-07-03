@@ -13,33 +13,33 @@ import {
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { updateBlogCustomPrompt } from "@/lib/actions/blog-actions";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { updateClientCustomPrompt } from "@/lib/actions/client-actions";
 
 interface Props {
-  scope: "blog" | "client";
+  /** Client id — custom prompts are client-wide. */
   id: string;
   initial: string | null | undefined;
+  initialStackPersona?: boolean | null;
 }
 
 /**
- * Set an optional custom generation prompt. Client scope = default for all the
- * client's blogs; blog scope = per-blog override. When set, generation follows
- * this prompt instead of the niche/persona style — compliance disclaimers and
- * the JSON output contract stay locked automatically.
+ * Set a client-wide custom generation prompt. When set, ALL of this client's
+ * blogs are generated from this prompt instead of the niche/persona style —
+ * compliance disclaimers and the JSON output contract stay locked automatically.
+ * The "keep persona" toggle optionally layers each blog's own generated voice on
+ * top of the prompt (persona is per-blog, so each site keeps its own voice).
  */
-export function CustomPromptCard({ scope, id, initial }: Props) {
+export function CustomPromptCard({ id, initial, initialStackPersona }: Props) {
   const router = useRouter();
   const [value, setValue] = useState(initial ?? "");
+  const [stackPersona, setStackPersona] = useState(!!initialStackPersona);
   const [saving, setSaving] = useState(false);
-
-  const isBlog = scope === "blog";
 
   async function save() {
     setSaving(true);
-    const res = isBlog
-      ? await updateBlogCustomPrompt(id, value)
-      : await updateClientCustomPrompt(id, value);
+    const res = await updateClientCustomPrompt(id, value, stackPersona);
     setSaving(false);
     if (res.success) {
       toast.success(res.message);
@@ -60,17 +60,9 @@ export function CustomPromptCard({ scope, id, initial }: Props) {
           </span>
         </CardTitle>
         <CardDescription>
-          {isBlog ? (
-            <>
-              When set, this blog&apos;s posts are generated from this prompt
-              instead of the niche/persona style. Overrides the client default.
-            </>
-          ) : (
-            <>
-              Default prompt for all this client&apos;s blogs. A per-blog custom
-              prompt overrides it. Leave blank to use the niche/persona style.
-            </>
-          )}{" "}
+          Client-wide prompt applied to <strong>all this client&apos;s blogs</strong>.
+          When set, posts are generated from this prompt instead of the
+          niche/persona style. Leave blank to use the niche/persona style.
           Compliance disclaimers and the required JSON output are always enforced
           on top of your prompt.
         </CardDescription>
@@ -85,6 +77,26 @@ export function CustomPromptCard({ scope, id, initial }: Props) {
           }
           className="font-mono text-xs"
         />
+
+        <div className="flex items-center justify-between rounded-md border p-3">
+          <div className="pr-4">
+            <Label htmlFor="stackPersona" className="text-sm">
+              Keep each blog&apos;s persona on top of this prompt
+            </Label>
+            <p className="text-xs text-muted-foreground">
+              When on, each blog&apos;s generated voice/persona is layered onto
+              the custom prompt instead of being replaced by it. Persona is
+              per-blog, so every site keeps its own voice. Only affects blogs
+              that already have a generated persona.
+            </p>
+          </div>
+          <Switch
+            id="stackPersona"
+            checked={stackPersona}
+            onCheckedChange={setStackPersona}
+          />
+        </div>
+
         <div className="flex items-center justify-between gap-2">
           <p className="text-xs text-muted-foreground">
             {value.trim()
