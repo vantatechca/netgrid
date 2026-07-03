@@ -4,7 +4,6 @@ import { runLayer2Uniformity } from "./layer2";
 import type {
   ScrubberReport,
   ScrubberResult,
-  Severity,
   Violation,
 } from "./types";
 

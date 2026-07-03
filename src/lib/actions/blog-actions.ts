@@ -20,7 +20,6 @@ import {
 import {
   generateContent,
   ideateTopic,
-  resolvePostLanguage,
   postLanguageForDomain,
   estimateImageCostUsd,
   normalizeMetaTitle,
@@ -265,28 +264,6 @@ export async function getBlogsByClient(): Promise<ClientBlogGroup[]> {
     avgSeoScore: r.avgSeoScore === null ? null : Number(r.avgSeoScore),
     lastPostAt: r.lastPostAt ? new Date(r.lastPostAt) : null,
   }));
-}
-
-/**
- * Save a per-blog custom generation prompt. Empty clears it (falls back to the
- * client default, then the niche/persona style). Standalone so the big blog
- * form / validators stay untouched.
- */
-export async function updateBlogCustomPrompt(
-  blogId: string,
-  value: string,
-): Promise<{ success: boolean; message: string }> {
-  await requireAdmin();
-  const trimmed = value.trim();
-  await db
-    .update(blogs)
-    .set({ customPrompt: trimmed || null, updatedAt: new Date() })
-    .where(eq(blogs.id, blogId));
-  revalidatePath(`/blogs/${blogId}`);
-  return {
-    success: true,
-    message: trimmed ? "Custom prompt saved" : "Custom prompt cleared",
-  };
 }
 
 // ─── Get Single Blog ────────────────────────────────────────────────────────

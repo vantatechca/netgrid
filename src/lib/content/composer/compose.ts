@@ -103,10 +103,6 @@ function renderCompliancePhrases(profile: StyleProfile): string {
     .join(" OR ");
 }
 
-function hasCompliance(profile: StyleProfile): boolean {
-  return Array.isArray(profile.compliancePhraseIds) && profile.compliancePhraseIds.length > 0;
-}
-
 function effectivePlacement(
   profile: StyleProfile,
   template: StructuralTemplate,
