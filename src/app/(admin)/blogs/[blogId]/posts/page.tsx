@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { getBlog, getBlogPosts } from "@/lib/actions/blog-actions";
+import { getBlogTrafficTotals } from "@/lib/actions/analytics-actions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { BlogPostsPanel } from "@/components/blogs/blog-posts-panel";
@@ -21,19 +22,22 @@ export default async function BlogPostsPage({ params }: PostsPageProps) {
   const blog = await getBlog(params.blogId);
   if ("error" in blog) notFound();
 
-  const postsResult = await getBlogPosts(params.blogId).catch((err) => ({
-    generated: [],
-    live: {
-      available: false,
-      platform: blog.platform,
-      posts: [],
-      page: 1,
-      perPage: 20,
-      total: 0,
-      totalPages: 0,
-      error: err instanceof Error ? err.message : "Failed to load posts",
-    },
-  }));
+  const [postsResult, traffic] = await Promise.all([
+    getBlogPosts(params.blogId).catch((err) => ({
+      generated: [],
+      live: {
+        available: false,
+        platform: blog.platform,
+        posts: [],
+        page: 1,
+        perPage: 20,
+        total: 0,
+        totalPages: 0,
+        error: err instanceof Error ? err.message : "Failed to load posts",
+      },
+    })),
+    getBlogTrafficTotals(params.blogId),
+  ]);
 
   return (
     <div className="space-y-6">
@@ -54,8 +58,22 @@ export default async function BlogPostsPage({ params }: PostsPageProps) {
             </div>
             <p className="text-muted-foreground">
               {blog.clientName} · {blog.platform}
-        
             </p>
+            <div className="mt-1 flex items-center gap-3 text-xs text-muted-foreground">
+              <span>
+                <strong className="text-foreground">
+                  {traffic.views.toLocaleString()}
+                </strong>{" "}
+                views
+              </span>
+              <span aria-hidden>·</span>
+              <span>
+                <strong className="text-foreground">
+                  {traffic.clicks.toLocaleString()}
+                </strong>{" "}
+                CTA clicks
+              </span>
+            </div>
           </div>
         </div>
         <div className="flex items-center gap-2">

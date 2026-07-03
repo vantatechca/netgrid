@@ -1,0 +1,96 @@
+import "server-only";
+import { db } from "@/lib/db";
+import { linkEvents, generatedPosts, clients } from "@/lib/db/schema";
+import { eq } from "drizzle-orm";
+
+/**
+ * Netgrid-hosted link tracking for published posts. CTA buttons point at
+ * /r/{postId} (logs a click, then 302s to the client's real CTA URL); each post
+ * body carries a 1x1 pixel at /api/track/px/{postId} (logs a page view). Both
+ * need netgrid's PUBLIC origin, since the markup renders on external Shopify/WP
+ * sites — set NEXT_PUBLIC_APP_URL to the production host.
+ */
+
+export function getAppBaseUrl(): string {
+  const raw =
+    process.env.NEXT_PUBLIC_APP_URL || "https://netgrid-16f6.onrender.com";
+  return raw.replace(/\/+$/, "");
+}
+
+export function ctaRedirectUrl(postId: string): string {
+  return `${getAppBaseUrl()}/r/${postId}`;
+}
+
+export function trackingPixelUrl(postId: string): string {
+  return `${getAppBaseUrl()}/api/track/px/${postId}`;
+}
+
+/** Hidden tracking-pixel <img> appended to a published post body. */
+export function trackingPixelImg(postId: string): string {
+  return (
+    `<img src="${trackingPixelUrl(postId)}" width="1" height="1" ` +
+    `alt="" aria-hidden="true" style="position:absolute;width:1px;height:1px;` +
+    `opacity:0;pointer-events:none;" />`
+  );
+}
+
+export type LinkEventType = "view" | "cta_click";
+
+/** Best-effort append to the traffic log — never throws to the caller. */
+export async function logLinkEvent(input: {
+  postId?: string | null;
+  blogId?: string | null;
+  clientId?: string | null;
+  type: LinkEventType;
+  referrer?: string | null;
+  userAgent?: string | null;
+}): Promise<void> {
+  try {
+    await db.insert(linkEvents).values({
+      postId: input.postId ?? null,
+      blogId: input.blogId ?? null,
+      clientId: input.clientId ?? null,
+      type: input.type,
+      referrer: input.referrer?.slice(0, 2000) ?? null,
+      userAgent: input.userAgent?.slice(0, 1000) ?? null,
+    });
+  } catch (err) {
+    console.warn(
+      "[link-tracker] log failed:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
+export interface PostRedirectContext {
+  postId: string;
+  blogId: string | null;
+  clientId: string | null;
+  ctaUrl: string | null;
+}
+
+/** Resolve a generated post → its blog/client + the client's CTA URL. */
+export async function resolvePostRedirect(
+  postId: string,
+): Promise<PostRedirectContext | null> {
+  try {
+    const [row] = await db
+      .select({
+        postId: generatedPosts.id,
+        blogId: generatedPosts.blogId,
+        clientId: generatedPosts.clientId,
+        ctaUrl: clients.ctaUrl,
+      })
+      .from(generatedPosts)
+      .leftJoin(clients, eq(generatedPosts.clientId, clients.id))
+      .where(eq(generatedPosts.id, postId))
+      .limit(1);
+    return row ?? null;
+  } catch (err) {
+    console.warn(
+      "[link-tracker] resolve failed:",
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
+}
