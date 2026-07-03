@@ -1975,3 +1975,77 @@ export async function deleteBlogLivePost(
     };
   }
 }
+
+/**
+ * Delete a GENERATED post (the "Generated" tab). Always removes the app's
+ * generated_posts row. When the post is published and `deleteLive` is set, the
+ * live post is also deleted from the destination site first (full teardown, the
+ * same behaviour as the Live tab's delete) — if that live delete fails we abort
+ * and keep the row so nothing is silently orphaned. Drafts/failed/pending rows
+ * (no live post) just drop the row.
+ */
+export async function deleteGeneratedPost(
+  generatedPostId: string,
+  deleteLive: boolean = true,
+): Promise<{ success: boolean; message: string }> {
+  await requireAdmin();
+
+  const [post] = await db
+    .select({
+      id: generatedPosts.id,
+      blogId: generatedPosts.blogId,
+      status: generatedPosts.status,
+      externalPostId: generatedPosts.externalPostId,
+    })
+    .from(generatedPosts)
+    .where(eq(generatedPosts.id, generatedPostId))
+    .limit(1);
+
+  if (!post) return { success: false, message: "Generated post not found" };
+
+  const hasLivePost =
+    post.status === "published" && Boolean(post.externalPostId);
+
+  if (hasLivePost && deleteLive) {
+    const [blog] = await db
+      .select()
+      .from(blogs)
+      .where(eq(blogs.id, post.blogId))
+      .limit(1);
+    if (!blog) return { success: false, message: "Blog not found" };
+
+    const platformBlog: PlatformBlog = {
+      platform: blog.platform,
+      wpUrl: blog.wpUrl,
+      wpUsername: blog.wpUsername,
+      wpAppPassword: blog.wpAppPassword,
+      seoPlugin: blog.seoPlugin,
+      shopifyAuthMode: blog.shopifyAuthMode,
+      shopifyStoreUrl: blog.shopifyStoreUrl,
+      shopifyAdminApiToken: blog.shopifyAdminApiToken,
+      shopifyClientId: blog.shopifyClientId,
+      shopifyClientSecret: blog.shopifyClientSecret,
+      shopifyBlogHandle: blog.shopifyBlogHandle,
+    };
+    const res = await deletePublishedPost(
+      platformBlog,
+      String(post.externalPostId),
+    );
+    if (!res.deleted) {
+      return {
+        success: false,
+        message: `Live post not deleted (${res.message ?? "unknown error"}) — kept the record so you can retry`,
+      };
+    }
+  }
+
+  await db.delete(generatedPosts).where(eq(generatedPosts.id, generatedPostId));
+  revalidatePath(`/blogs/${post.blogId}`);
+  return {
+    success: true,
+    message:
+      hasLivePost && deleteLive
+        ? "Post deleted from the app and the live site"
+        : "Post deleted",
+  };
+}
