@@ -1506,6 +1506,32 @@ export function dedupeHeadings(html: string, title: string): string {
 }
 
 /**
+ * Enforce UNIQUE anchor text across the article body (Seobility "some anchor
+ * texts are used more than once" warning). Keeps the FIRST link with a given
+ * visible text; any later link whose visible text matches is unwrapped to plain
+ * text (the words stay, the redundant <a> is removed). Reusing the same anchor
+ * text for multiple links is a weak internal-linking signal anyway — Google
+ * collapses them — so dropping the duplicate link is the safe, warning-clearing
+ * choice. Links with no visible text (e.g. image-only) are left untouched.
+ *
+ * Note: this only governs anchors WE generate in the body; repeated anchors in
+ * the theme's nav/footer/related-posts are outside our control per post.
+ */
+export function dedupeAnchorText(html: string): string {
+  const seen = new Set<string>();
+  return html.replace(
+    /<a\b[^>]*>([\s\S]*?)<\/a\s*>/gi,
+    (match, inner) => {
+      const key = normalizeHeadingText(inner);
+      if (!key) return match; // no visible text — leave as-is
+      if (seen.has(key)) return inner; // duplicate text → unwrap the link
+      seen.add(key);
+      return match;
+    },
+  );
+}
+
+/**
  * Normalize the SEO meta TITLE (the <title> / title-tag) to the audit spec:
  *   - collapse whitespace
  *   - convert spaced-hyphen / en-dash / em-dash separators to " | "
@@ -2975,6 +3001,9 @@ The "content" field is the full HTML article body — at least ${MIN_WORDS} word
   // Drop duplicate heading text (and any body heading that restates the
   // title) — clears the "duplicate heading texts" audit warning.
   body = dedupeHeadings(body, parsed.title ?? "");
+  // Enforce unique anchor text — unwrap any later link that reuses an earlier
+  // link's visible text ("some anchor texts are used more than once" warning).
+  body = dedupeAnchorText(body);
 
   // Hard-cap article length on BOTH paths. The prompt + max_tokens keep
   // Claude near the target, but it still occasionally overshoots; trimming

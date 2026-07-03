@@ -231,6 +231,8 @@ function analyzeMeta(
   let ogDescription = false;
   let ogImage = false;
   let hasJsonLd = false;
+  let hasFavicon = false;
+  let hasAppleTouchIcon = false;
   let headChecks = false;
 
   if (input.liveHtml && input.liveHtml.trim()) {
@@ -243,6 +245,10 @@ function analyzeMeta(
     ogDescription = !!$('meta[property="og:description"]').attr("content");
     ogImage = !!$('meta[property="og:image"]').attr("content");
     hasJsonLd = $('script[type="application/ld+json"]').length > 0;
+    // rel~="icon" matches rel="icon" and rel="shortcut icon" (word match),
+    // but NOT the single token "apple-touch-icon" — checked separately.
+    hasFavicon = $('link[rel~="icon"]').length > 0;
+    hasAppleTouchIcon = $('link[rel="apple-touch-icon"]').length > 0;
     source = "live";
     headChecks = true;
   } else {
@@ -363,6 +369,28 @@ function analyzeMeta(
         title: "No structured data",
         description:
           "No JSON-LD schema found on the rendered page. Article schema helps rich results.",
+        autoFixable: false,
+      });
+    }
+    if (!hasFavicon) {
+      issues.push({
+        pageUrl: url,
+        category: "technical",
+        severity: "notice",
+        title: "No favicon",
+        description:
+          'No <link rel="icon"> on the page. Set a favicon in the Shopify theme editor (Theme settings → Favicon), then run "Optimize theme SEO".',
+        autoFixable: false,
+      });
+    }
+    if (!hasAppleTouchIcon) {
+      issues.push({
+        pageUrl: url,
+        category: "technical",
+        severity: "notice",
+        title: "No Apple touch icon",
+        description:
+          'No apple-touch-icon link on the page. "Optimize theme SEO" adds one from the theme\'s favicon setting.',
         autoFixable: false,
       });
     }
