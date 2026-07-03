@@ -72,6 +72,15 @@ export interface SeoBlockOptions {
    * excluding them here keeps views from being double-counted.
    */
   trackingPixelUrl?: string;
+  /**
+   * The client's CTA URL and the blog-level tracked redirect
+   * (link-tracker.blogCtaRedirectUrl). When both are set, a small site-wide
+   * script repoints any `<a>` pointing at the CTA URL to the redirect, so CTA
+   * clicks on the homepage / non-post pages are logged. Post CTAs already go
+   * through /r/{postId}, so they don't match the raw CTA URL and are untouched.
+   */
+  ctaUrl?: string;
+  ctaRedirectUrl?: string;
 }
 
 /**
@@ -105,7 +114,19 @@ export function buildSeoMetaBlock(opts: SeoBlockOptions = {}): string {
   )}+"?t="+Date.now();}catch(e){}})();</script>
 {%- endunless -%}`
     : "";
-  return `${MARKER_BEGIN}${faviconLine}${descriptionLine}${trackingLine}
+  // Site-wide CTA click tracking: repoint any link whose href is the client's
+  // CTA URL to the tracked redirect. Runs on all pages; post CTAs already use
+  // /r/{postId} so they don't match and are left alone.
+  const ctaLine =
+    opts.ctaUrl && opts.ctaRedirectUrl
+      ? `
+  <script>(function(){try{var t=${JSON.stringify(
+    opts.ctaUrl,
+  )},r=${JSON.stringify(
+          opts.ctaRedirectUrl,
+        )};if(!t||!r)return;var f=function(){var a=document.querySelectorAll('a[href]');for(var i=0;i<a.length;i++){if(a[i].getAttribute('href')===t||a[i].href===t){a[i].setAttribute('href',r);}}};if(document.readyState!=='loading'){f();}else{document.addEventListener('DOMContentLoaded',f);}}catch(e){}})();</script>`
+      : "";
+  return `${MARKER_BEGIN}${faviconLine}${descriptionLine}${trackingLine}${ctaLine}
 {%- if request.page_type == 'article' and article -%}
   {%- if article.published_at -%}
     <meta property="article:published_time" content="{{ article.published_at | date: '%Y-%m-%dT%H:%M:%SZ' }}">
@@ -251,6 +272,8 @@ export async function injectSeoMetaTags(
   creds: ShopifyCreds,
   apiVersion: string = DEFAULT_API_VERSION,
   trackingPixelUrl?: string,
+  ctaUrl?: string,
+  ctaRedirectUrl?: string,
 ): Promise<ThemeSeoResult> {
   try {
     const client = await createClient(creds, apiVersion, THEME_TIMEOUT_MS);
@@ -260,7 +283,7 @@ export async function injectSeoMetaTags(
       return { success: false, message: "No published (main) theme found for this store." };
     }
 
-    const block = buildSeoMetaBlock({ trackingPixelUrl });
+    const block = buildSeoMetaBlock({ trackingPixelUrl, ctaUrl, ctaRedirectUrl });
 
     // Preferred target: the meta-tags snippet, which already runs in <head>.
     const snippet = await getThemeAsset(creds, theme.id, SNIPPET_KEY, apiVersion, client);
@@ -405,6 +428,8 @@ export async function optimizeThemeSeo(
   creds: ShopifyCreds,
   apiVersion: string = DEFAULT_API_VERSION,
   trackingPixelUrl?: string,
+  ctaUrl?: string,
+  ctaRedirectUrl?: string,
 ): Promise<ThemeOptimizeResult> {
   try {
     const client = await createClient(creds, apiVersion, THEME_TIMEOUT_MS);
@@ -464,6 +489,8 @@ export async function optimizeThemeSeo(
       includeFavicon: !hasFavicon,
       includeDescription: !hasOwnDescription,
       trackingPixelUrl,
+      ctaUrl,
+      ctaRedirectUrl,
     });
     details.push("added OG article tags + JSON-LD schema");
 

@@ -57,6 +57,15 @@ export function blogTrackingPixelImg(blogId: string): string {
   );
 }
 
+/**
+ * Blog-level tracked CTA redirect. Logs a cta_click (no postId) and 302s to the
+ * client's CTA URL — the site-wide analogue of /r/{postId}. Used for CTA links
+ * on non-post pages (e.g. the homepage) that point at the client's CTA.
+ */
+export function blogCtaRedirectUrl(blogId: string): string {
+  return `${getAppBaseUrl()}/r/blog/${blogId}`;
+}
+
 export type LinkEventType = "view" | "cta_click";
 
 /** Best-effort append to the traffic log — never throws to the caller. */
@@ -106,6 +115,31 @@ export async function resolveBlogClient(
   } catch (err) {
     console.warn(
       "[link-tracker] resolve blog failed:",
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
+}
+
+/** Resolve a blog → its client + the client's CTA URL, for a site-wide redirect. */
+export async function resolveBlogRedirect(
+  blogId: string,
+): Promise<{ blogId: string; clientId: string; ctaUrl: string | null } | null> {
+  try {
+    const [row] = await db
+      .select({
+        blogId: blogs.id,
+        clientId: blogs.clientId,
+        ctaUrl: clients.ctaUrl,
+      })
+      .from(blogs)
+      .leftJoin(clients, eq(blogs.clientId, clients.id))
+      .where(eq(blogs.id, blogId))
+      .limit(1);
+    return row ?? null;
+  } catch (err) {
+    console.warn(
+      "[link-tracker] resolve blog redirect failed:",
       err instanceof Error ? err.message : err,
     );
     return null;

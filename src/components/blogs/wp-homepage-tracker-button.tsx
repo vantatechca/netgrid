@@ -27,9 +27,11 @@ export function WpHomepageTrackerButton({
     <div className="space-y-3">
       <p className="text-sm text-muted-foreground">
         Embed a page-view pixel on the site&apos;s homepage so visitors who
-        never open a blog post still count toward Page Views. Works when the
-        homepage is a <strong>static page</strong> (Settings → Reading);
-        idempotent — safe to re-run.
+        never open a blog post still count toward Page Views, and route any
+        homepage CTA link (matching the client&apos;s CTA URL) through the
+        tracked redirect so its clicks count too. Works when the homepage is a{" "}
+        <strong>static page</strong> (Settings → Reading); idempotent — safe to
+        re-run.
       </p>
 
       <Button onClick={run} disabled={pending}>
