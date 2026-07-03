@@ -389,9 +389,16 @@ interface Props {
     totalPages: number;
     error?: string;
   };
+  /** Per-post views/clicks, keyed by generated-post id. */
+  trafficByPost?: Record<string, { views: number; clicks: number }>;
 }
 
-export function BlogPostsPanel({ blogId, generated, live }: Props) {
+export function BlogPostsPanel({
+  blogId,
+  generated,
+  live,
+  trafficByPost = {},
+}: Props) {
   const router = useRouter();
   const [refreshing, startRefresh] = useTransition();
 
@@ -650,6 +657,7 @@ export function BlogPostsPanel({ blogId, generated, live }: Props) {
                     <TableHead>Status</TableHead>
                     <TableHead>Words</TableHead>
                     <TableHead>SEO</TableHead>
+                    <TableHead>Traffic</TableHead>
                     <TableHead>Published</TableHead>
                     <TableHead>Auto?</TableHead>
                     <TableHead className="w-[180px] text-right">
@@ -691,6 +699,18 @@ export function BlogPostsPanel({ blogId, generated, live }: Props) {
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         {row.seoScore ?? "—"}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                        {(() => {
+                          const t = trafficByPost[row.id];
+                          if (!t || (t.views === 0 && t.clicks === 0)) return "—";
+                          return (
+                            <span title="page views · CTA clicks">
+                              {t.views.toLocaleString()} v ·{" "}
+                              {t.clicks.toLocaleString()} c
+                            </span>
+                          );
+                        })()}
                       </TableCell>
                       <TableCell className="text-xs text-muted-foreground">
                         {formatDateTime(row.publishedAt)}

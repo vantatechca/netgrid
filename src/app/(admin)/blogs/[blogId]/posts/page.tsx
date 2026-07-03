@@ -1,7 +1,10 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { getBlog, getBlogPosts } from "@/lib/actions/blog-actions";
-import { getBlogTrafficTotals } from "@/lib/actions/analytics-actions";
+import {
+  getBlogTrafficTotals,
+  getBlogPostTraffic,
+} from "@/lib/actions/analytics-actions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { BlogPostsPanel } from "@/components/blogs/blog-posts-panel";
@@ -38,6 +41,7 @@ export default async function BlogPostsPage({ params }: PostsPageProps) {
     })),
     getBlogTrafficTotals(params.blogId),
   ]);
+  const trafficByPost = await getBlogPostTraffic(params.blogId);
 
   return (
     <div className="space-y-6">
@@ -91,6 +95,7 @@ export default async function BlogPostsPage({ params }: PostsPageProps) {
         blogId={params.blogId}
         generated={postsResult.generated}
         live={postsResult.live}
+        trafficByPost={trafficByPost}
       />
     </div>
   ); 

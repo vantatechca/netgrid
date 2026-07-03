@@ -28,6 +28,7 @@ import { MessageThread } from "@/components/messages/message-thread";
 import { ClientForm } from "@/components/clients/client-form";
 import { KnowledgeBasePanel } from "@/components/clients/knowledge-base-panel";
 import { CustomPromptCard } from "@/components/content/custom-prompt-card";
+import { getClientTrafficTotals } from "@/lib/actions/analytics-actions";
 import { ClientSeoIssues } from "@/components/seo/client-seo-issues";
 import {
   ArrowLeft,
@@ -186,6 +187,8 @@ export default async function ClientDetailPage({
 
   if (!client) notFound();
 
+  const traffic = await getClientTrafficTotals(clientId);
+
   const blogDomainById = new Map(blogsResult.blogs.map((b) => [b.id, b.domain]));
 
   const internalChatNotes = messages
@@ -258,6 +261,22 @@ export default async function ClientDetailPage({
           <CardHeader>
             <CardDescription>Messages</CardDescription>
             <CardTitle className="text-2xl">{stats.messageCount}</CardTitle>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardDescription>Page Views</CardDescription>
+            <CardTitle className="text-2xl">
+              {traffic.views.toLocaleString()}
+            </CardTitle>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardDescription>CTA Clicks</CardDescription>
+            <CardTitle className="text-2xl">
+              {traffic.clicks.toLocaleString()}
+            </CardTitle>
           </CardHeader>
         </Card>
       </div>

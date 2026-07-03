@@ -53,3 +53,31 @@ export async function getClientTrafficTotals(
     return { views: 0, clicks: 0 };
   }
 }
+
+/**
+ * Per-post traffic for one blog, keyed by generated-post id. Fail-safe to an
+ * empty map (e.g. when link_events isn't migrated yet).
+ */
+export async function getBlogPostTraffic(
+  blogId: string,
+): Promise<Record<string, TrafficTotals>> {
+  await requireAdmin();
+  const out: Record<string, TrafficTotals> = {};
+  try {
+    const rows = await db
+      .select({ postId: linkEvents.postId, type: linkEvents.type, c: count() })
+      .from(linkEvents)
+      .where(eq(linkEvents.blogId, blogId))
+      .groupBy(linkEvents.postId, linkEvents.type);
+    for (const r of rows) {
+      if (!r.postId) continue;
+      const t = out[r.postId] ?? { views: 0, clicks: 0 };
+      if (r.type === "view") t.views = Number(r.c);
+      else if (r.type === "cta_click") t.clicks = Number(r.c);
+      out[r.postId] = t;
+    }
+  } catch {
+    /* leave empty */
+  }
+  return out;
+}
