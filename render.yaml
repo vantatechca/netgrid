@@ -4,6 +4,10 @@ services:
     runtime: node
     plan: starter
     buildCommand: npm ci --include=dev && npm run build
+    # Apply any pending DB migrations after build, before the new version
+    # goes live. Idempotent runner (src/lib/db/migrate.mjs) — a failure here
+    # blocks the deploy instead of shipping code against an un-migrated DB.
+    preDeployCommand: npm run db:migrate
     startCommand: npm start
     healthCheckPath: /
     autoDeploy: true
