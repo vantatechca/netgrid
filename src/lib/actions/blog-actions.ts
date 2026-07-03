@@ -22,6 +22,8 @@ import {
   resolvePostLanguage,
   postLanguageForDomain,
   estimateImageCostUsd,
+  normalizeMetaTitle,
+  normalizeMetaDescription,
   type GenerateOptions,
   type Tone,
 } from "@/lib/services/content-generator";
@@ -1125,6 +1127,19 @@ export async function publishGeneratedPost(
     );
   }
 
+  // SEO title + meta description. These were previously selected but dropped
+  // here, so the platform never received global.title_tag / description_tag
+  // (Shopify) or the Yoast/RankMath fields (WP) — leaving the theme to
+  // auto-derive an over-length <title> (article title + store suffix) and a
+  // body-sourced meta description, tripping the 580px / 1000px audit limits.
+  // Normalize at publish so even older rows (stored before the caps existed,
+  // or with an empty meta) are clamped; the helpers are idempotent.
+  const metaTitle = normalizeMetaTitle(post.metaTitle, post.title);
+  const metaDescription = normalizeMetaDescription(
+    post.metaDescription,
+    post.excerpt ?? "",
+  );
+
   const input: PublishPostInput = {
     title: post.title,
     content: post.body,
@@ -1132,6 +1147,8 @@ export async function publishGeneratedPost(
     status: "publish",
     tags,
     featuredImageUrl: post.featuredImageUrl ?? undefined,
+    metaTitle: metaTitle || undefined,
+    metaDescription: metaDescription || undefined,
   };
 
   const result = await publishBlogPost(post.blogId, input);
