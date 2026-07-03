@@ -30,9 +30,15 @@ export const FIX_MODEL_OPTIONS = [
   { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6 (default, balanced)" },
   { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5 (fast, cheap)" },
   { id: "claude-opus-4-8", label: "Claude Opus 4.8 (highest quality)" },
+  { id: "deepseek", label: "DeepSeek v4-pro (avoids Anthropic)" },
 ] as const;
 export const DEFAULT_FIX_MODEL =
   process.env.CLAUDE_MODEL || "claude-sonnet-4-6";
+
+/** True when the fix model setting selects the DeepSeek provider. */
+export function isDeepSeekFixModel(model: string): boolean {
+  return model === "deepseek";
+}
 
 // ─── Cached DB access ────────────────────────────────────────────────────────
 // Render runs a long-lived Node process, so a module-level cache persists across
