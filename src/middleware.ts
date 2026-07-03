@@ -32,14 +32,21 @@ export default withAuth(
       authorized: ({ token, req }) => {
         const { pathname } = req.nextUrl;
 
-        // Allow auth routes and cron routes without session
+        // Public, session-less routes:
+        //  - auth flow + cron (existing)
+        //  - /api/v1 marketing API (its own API-key auth in the handler)
+        //  - /r CTA redirect + /api/track tracking pixel (hit by external
+        //    visitors on published posts — must never require a login)
         if (
           pathname.startsWith("/login") ||
           pathname.startsWith("/magic-link") ||
           pathname.startsWith("/auth/verify") ||
           pathname.startsWith("/verify") ||
           pathname.startsWith("/api/auth") ||
-          pathname.startsWith("/api/cron")
+          pathname.startsWith("/api/cron") ||
+          pathname.startsWith("/api/v1") ||
+          pathname.startsWith("/api/track") ||
+          pathname.startsWith("/r/")
         ) {
           return true;
         }

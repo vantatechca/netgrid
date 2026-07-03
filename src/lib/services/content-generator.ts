@@ -8,6 +8,7 @@ import {
   DEFAULT_CONTENT_MODEL,
   type ContentModel,
 } from "@/lib/settings/app-settings";
+import { ctaRedirectUrl, trackingPixelImg } from "@/lib/services/link-tracker";
 import { SUB_NICHES } from "@/lib/content/libraries/sub-niches";
 import {
   truncateToPx,
@@ -450,6 +451,12 @@ export interface GenerateOptions {
    * Injected deterministically — not LLM-generated.
    */
   cta?: { label: string; url: string; placement?: string };
+  /**
+   * The generated_posts row id for this post. When set, the CTA is routed
+   * through the tracked redirect (/r/{postId}) and a page-view pixel is
+   * appended, so clicks and views are logged. Omit to skip tracking.
+   */
+  postId?: string;
   /**
    * Niche config resolved by the caller — e.g. from the editable `niches` DB
    * table (Content Studio). When provided, the legacy system prompt uses it
@@ -3121,8 +3128,20 @@ The "content" field is the full HTML article body — at least ${MIN_WORDS} word
   }
 
   // Inject the client's call-to-action button at its configured position(s)
-  // — no-op when the client has no CTA configured.
-  body = injectCta(body, opts.cta, opts.blogSeed);
+  // — no-op when the client has no CTA configured. When we know the post id,
+  // point the CTA at the netgrid redirect (/r/{postId}) so clicks are tracked;
+  // the redirect resolves the client's real CTA URL at click time.
+  const ctaForInject =
+    opts.postId && opts.cta
+      ? { ...opts.cta, url: ctaRedirectUrl(opts.postId) }
+      : opts.cta;
+  body = injectCta(body, ctaForInject, opts.blogSeed);
+
+  // Page-view tracking pixel — appended once we know the post id so views on
+  // the published page are logged. No-op without a post id.
+  if (opts.postId) {
+    body = body + trackingPixelImg(opts.postId);
+  }
 
   // 6. Scoring removed (per footprint audit insight 2). The old
   //    analyzeContent call cost ~$0.0015/post AND optimized to exactly the

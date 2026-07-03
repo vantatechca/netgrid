@@ -871,6 +871,7 @@ export async function generateBlogPost(
             placement: blog.ctaPlacement ?? "bottom",
           }
         : undefined,
+    postId: pending.id,
   });
 
   // Generation with topic-level recovery.

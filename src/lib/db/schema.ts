@@ -673,3 +673,25 @@ export const appSettings = pgTable("app_settings", {
   value: text("value").notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
+
+// ─── link_events ─────────────────────────────────────────────────────────────
+// Append-only traffic log for netgrid-tracked links on published posts:
+//   type "view"      → a tracking-pixel hit (page view)
+//   type "cta_click" → the CTA redirect (/r/{postId}) was followed
+// Not FK-constrained so the log survives post/blog deletion. Ids are stored
+// loosely (nullable) for the same reason.
+export const linkEvents = pgTable("link_events", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  postId: uuid("post_id"),
+  blogId: uuid("blog_id"),
+  clientId: uuid("client_id"),
+  type: varchar("type", { length: 16 }).notNull(),
+  referrer: text("referrer"),
+  userAgent: text("user_agent"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("link_events_post_idx").on(table.postId, table.type),
+  index("link_events_blog_idx").on(table.blogId, table.type),
+  index("link_events_client_idx").on(table.clientId, table.type),
+  index("link_events_created_idx").on(table.createdAt),
+]);

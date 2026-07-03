@@ -484,6 +484,7 @@ async function runGenerateAndPublish(
       internalLinkRefs,
       knowledgeSummaries: knowledge.summaries,
       cta,
+      postId: generatedPostId,
     });
 
     // Generation with topic-level recovery. Some subjects fail
@@ -815,6 +816,7 @@ export async function regenerateAndUpdatePost(
     internalLinkRefs,
     knowledgeSummaries: ctx.knowledge.summaries,
     cta: ctx.cta,
+    postId: post.id,
   });
 
   // Push the fresh body + meta to the SAME live post (same URL).
