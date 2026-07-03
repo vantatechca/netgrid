@@ -24,6 +24,29 @@ function iso(d: Date | string | null | undefined): string | null {
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
+/**
+ * Resolve a traffic time-window from query params. Supports either:
+ *   ?days=<1..365>   rolling window ending now
+ *   ?since=<ISO>     explicit lower bound
+ * `days` wins when both are present. Returns undefined for all-time.
+ */
+export function parseSince(params: URLSearchParams): Date | undefined {
+  const daysRaw = params.get("days")?.trim();
+  if (daysRaw) {
+    const days = Number.parseInt(daysRaw, 10);
+    if (Number.isFinite(days)) {
+      const clamped = Math.min(365, Math.max(1, days));
+      return new Date(Date.now() - clamped * 24 * 60 * 60 * 1000);
+    }
+  }
+  const sinceRaw = params.get("since")?.trim();
+  if (sinceRaw) {
+    const d = new Date(sinceRaw);
+    if (!Number.isNaN(d.getTime())) return d;
+  }
+  return undefined;
+}
+
 interface Traffic {
   views: number;
   clicks: number;
@@ -32,7 +55,7 @@ interface Traffic {
 // ─── Aggregations (all fail-safe: an un-migrated link_events table → zeros) ──
 
 /** Views + CTA clicks grouped by clientId, across all clients. */
-async function trafficByClient(): Promise<Map<string, Traffic>> {
+async function trafficByClient(since?: Date): Promise<Map<string, Traffic>> {
   const map = new Map<string, Traffic>();
   try {
     const rows = await db
@@ -42,6 +65,7 @@ async function trafficByClient(): Promise<Map<string, Traffic>> {
         c: count(),
       })
       .from(linkEvents)
+      .where(since ? gte(linkEvents.createdAt, since) : undefined)
       .groupBy(linkEvents.clientId, linkEvents.type);
     for (const r of rows) {
       if (!r.clientId) continue;
@@ -57,7 +81,10 @@ async function trafficByClient(): Promise<Map<string, Traffic>> {
 }
 
 /** Views + CTA clicks grouped by blogId, for one client. */
-async function trafficByBlog(clientId: string): Promise<Map<string, Traffic>> {
+async function trafficByBlog(
+  clientId: string,
+  since?: Date,
+): Promise<Map<string, Traffic>> {
   const map = new Map<string, Traffic>();
   try {
     const rows = await db
@@ -67,7 +94,14 @@ async function trafficByBlog(clientId: string): Promise<Map<string, Traffic>> {
         c: count(),
       })
       .from(linkEvents)
-      .where(eq(linkEvents.clientId, clientId))
+      .where(
+        since
+          ? and(
+              eq(linkEvents.clientId, clientId),
+              gte(linkEvents.createdAt, since),
+            )
+          : eq(linkEvents.clientId, clientId),
+      )
       .groupBy(linkEvents.blogId, linkEvents.type);
     for (const r of rows) {
       if (!r.blogId) continue;
@@ -191,6 +225,8 @@ export interface PublicClientDetail extends PublicClientSummary {
 export async function listPublicClients(opts?: {
   email?: string;
   status?: string;
+  /** Only count views/clicks recorded at or after this instant. */
+  since?: Date;
 }): Promise<PublicClientSummary[]> {
   const conds = [];
   if (opts?.email) conds.push(ilike(clients.contactEmail, opts.email));
@@ -212,7 +248,7 @@ export async function listPublicClients(opts?: {
       .where(conds.length ? and(...conds) : undefined)
       .groupBy(clients.id)
       .orderBy(desc(clients.createdAt)),
-    trafficByClient(),
+    trafficByClient(opts?.since),
     publishedByClient(),
   ]);
 
@@ -240,6 +276,7 @@ export async function listPublicClients(opts?: {
  */
 export async function getPublicClient(
   clientId: string,
+  since?: Date,
 ): Promise<PublicClientDetail | null> {
   const [c] = await db
     .select({
@@ -269,7 +306,7 @@ export async function getPublicClient(
       .from(blogs)
       .where(eq(blogs.clientId, clientId))
       .orderBy(desc(blogs.currentSeoScore)),
-    trafficByBlog(clientId),
+    trafficByBlog(clientId, since),
     publishedByBlog(clientId),
     publishedLast30(clientId),
   ]);

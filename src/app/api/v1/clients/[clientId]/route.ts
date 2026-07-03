@@ -1,12 +1,15 @@
 import { NextResponse } from "next/server";
 import { apiAuthGuard } from "@/lib/api/auth";
-import { getPublicClient, isUuid } from "@/lib/api/public-data";
+import { getPublicClient, isUuid, parseSince } from "@/lib/api/public-data";
 
 export const dynamic = "force-dynamic";
 
 /**
  * GET /api/v1/clients/:clientId
  * A single client with its sites (blogs) and per-site SEO scores.
+ * Query params (optional):
+ *   ?days=<1..365>   traffic window (views/clicks counted over the last N days)
+ *   ?since=<ISO>     traffic window lower bound (ignored if ?days is set)
  */
 export async function GET(
   request: Request,
@@ -21,7 +24,8 @@ export async function GET(
   }
 
   try {
-    const client = await getPublicClient(clientId);
+    const since = parseSince(new URL(request.url).searchParams);
+    const client = await getPublicClient(clientId, since);
     if (!client) {
       return NextResponse.json({ error: "Client not found" }, { status: 404 });
     }
