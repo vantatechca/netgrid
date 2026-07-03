@@ -327,6 +327,50 @@ week-start for `week`).
 
 ---
 
+### `GET /api/v1/clients/{clientId}/seo-history`
+
+Per-site **overall SEO score over time** — one series per site, oldest point
+first — for a trend chart. Scores come from the periodic SEO scans (roughly one
+per site per month). Sites with no scans in range are omitted.
+
+**Query parameters** (all optional):
+
+| Param    | Description |
+|----------|-------------|
+| `blogId` | Restrict to one site (UUID). |
+| `days`   | Window: last N days (`1`–`365`, clamped). Omit for all-time. |
+| `since`  | Window lower bound as ISO 8601. Ignored when `days` is set. |
+
+**Response** `200`:
+
+```json
+{
+  "clientId": "96c4f390-67f5-4687-8376-8c7c400972a2",
+  "sites": [
+    {
+      "blogId": "71fb73bd-ec69-491b-8026-0a0c3ea1d32f",
+      "domain": "crostapizza.store",
+      "points": [
+        { "date": "2026-05-01T04:00:00.000Z", "score": 82 },
+        { "date": "2026-06-01T04:00:00.000Z", "score": 91 },
+        { "date": "2026-07-01T04:00:00.000Z", "score": 98 }
+      ]
+    }
+  ]
+}
+```
+
+| Field                | Type          | Notes |
+|----------------------|---------------|-------|
+| `sites[].blogId`     | string (UUID) | site id |
+| `sites[].domain`     | string        | |
+| `sites[].points[].date`  | string    | ISO 8601, scan timestamp |
+| `sites[].points[].score` | number    | overall SEO score, 0–100 |
+
+**Errors:** `400` when `clientId` or `blogId` isn't a valid UUID.
+
+---
+
 ## Examples
 
 ### cURL
@@ -399,7 +443,8 @@ async function getClientDashboard(email: string) {
 
 ## Roadmap (not yet implemented)
 
-- **Score history** — per-site SEO **sub-score** breakdown (meta / content /
-  technical / links / images) and score-over-time series for trend charts.
+- **SEO sub-scores** — per-site breakdown (meta / content / technical / links /
+  images), complementing the overall score-over-time series already available
+  at `/clients/{id}/seo-history`.
 - **Monthly reports** — the client-visible monthly performance summaries.
 - Per-client API keys / rate limiting if the API is exposed more widely.
