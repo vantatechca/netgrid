@@ -88,9 +88,15 @@ export const clients = pgTable("clients", {
   notesInternal: text("notes_internal"),
   // Optional custom generation prompt (client-level default). When set, it
   // drives article generation for this client's blogs instead of the
-  // niche/persona style — a per-blog customPrompt overrides it. Compliance and
+  // Client-wide custom generation prompt. When set, ALL of this client's blogs
+  // are generated from it instead of the niche/persona style. Compliance and
   // the JSON output contract stay locked regardless.
   customPrompt: text("custom_prompt"),
+  // When the custom prompt is active, also layer each blog's generated
+  // persona/voice on top of it (instead of the custom prompt fully replacing
+  // the persona). Persona is still per-blog, so each site keeps its own voice.
+  // Off by default — a plain custom prompt keeps replacing the persona.
+  stackPersona: boolean("stack_persona").default(false).notNull(),
   // Call-to-action button appended to the bottom of every published post for
   // this client (link to their main site / contact / registration page).
   ctaEnabled: boolean("cta_enabled").default(false).notNull(),
@@ -141,9 +147,9 @@ export const blogs = pgTable("blogs", {
   lastSeoScanAt: timestamp("last_seo_scan_at"),
   status: blogStatusEnum("status").default("setup"),
   notesInternal: text("notes_internal"),
-  // Optional per-blog custom generation prompt. Overrides the client-level
-  // customPrompt and the niche/persona style when set. Compliance + JSON
-  // output contract stay locked regardless.
+  // Deprecated per-blog custom generation prompt column. Custom prompts are now
+  // client-wide only (see clients.customPrompt) — this column is retained for
+  // back-compat but is no longer read or written by the app.
   customPrompt: text("custom_prompt"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),

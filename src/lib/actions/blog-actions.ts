@@ -317,7 +317,6 @@ export async function getBlog(id: string) {
       lastSeoScanAt: blogs.lastSeoScanAt,
       status: blogs.status,
       notesInternal: blogs.notesInternal,
-      customPrompt: blogs.customPrompt,
       createdAt: blogs.createdAt,
       updatedAt: blogs.updatedAt,
     })
@@ -742,8 +741,8 @@ export async function generateBlogPost(
       domain: blogs.domain,
       platform: blogs.platform,
       niche: clients.niche,
-      customPrompt: blogs.customPrompt,
       clientCustomPrompt: clients.customPrompt,
+      clientStackPersona: clients.stackPersona,
       ctaEnabled: clients.ctaEnabled,
       ctaLabel: clients.ctaLabel,
       ctaUrl: clients.ctaUrl,
@@ -852,9 +851,9 @@ export async function generateBlogPost(
   // Niche config from the editable `niches` DB table (falls back to code when
   // there's no row). Resolved once; reused across topic-recovery retries.
   const resolvedNiche = await resolveNicheConfig(blog.niche);
-  // Per-blog custom prompt overrides the client-level default.
-  const customPrompt =
-    blog.customPrompt?.trim() || blog.clientCustomPrompt?.trim() || undefined;
+  // Custom prompts are client-wide; the persona-stack toggle is client-level.
+  const customPrompt = blog.clientCustomPrompt?.trim() || undefined;
+  const applyPersona = Boolean(customPrompt) && Boolean(blog.clientStackPersona);
 
   const buildOpts = (t: string, kw: string[]): GenerateOptions => ({
     topic: t,
@@ -864,6 +863,7 @@ export async function generateBlogPost(
     niche: blog.niche,
     resolvedNiche,
     customPrompt,
+    applyPersona,
     brandVoice: input.brandVoice,
     targetAudience: input.targetAudience,
     seoOptimized: input.seoOptimized ?? true,

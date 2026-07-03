@@ -348,6 +348,7 @@ async function runGenerateAndPublish(
       blog: blogs,
       clientNiche: clients.niche,
       clientCustomPrompt: clients.customPrompt,
+      clientStackPersona: clients.stackPersona,
       ctaEnabled: clients.ctaEnabled,
       ctaLabel: clients.ctaLabel,
       ctaUrl: clients.ctaUrl,
@@ -360,9 +361,11 @@ async function runGenerateAndPublish(
 
   if (!row) throw new Error(`Blog ${input.blogId} not found`);
   const { blog, clientNiche } = row;
-  // Per-blog custom prompt overrides the client-level default. Empty → none.
-  const customPrompt =
-    blog.customPrompt?.trim() || row.clientCustomPrompt?.trim() || undefined;
+  // Custom prompts are client-wide: one prompt drives all of a client's blogs.
+  const customPrompt = row.clientCustomPrompt?.trim() || undefined;
+  // When that prompt is active, optionally keep each blog's per-blog persona
+  // layered on top of it (client-level toggle).
+  const applyPersona = Boolean(customPrompt) && Boolean(row.clientStackPersona);
   const cta = clientCta(row.ctaEnabled, row.ctaLabel, row.ctaUrl, row.ctaPlacement);
 
   if (!blogHasCredentials(blog)) {
@@ -472,6 +475,7 @@ async function runGenerateAndPublish(
       niche: clientNiche,
       resolvedNiche,
       customPrompt,
+      applyPersona,
       seoOptimized: true,
       styleProfile: styleProfile ?? undefined,
       verticalKey: verticalForPost?.key ?? null,
@@ -811,6 +815,7 @@ export async function regenerateAndUpdatePost(
     niche: ctx.clientNiche,
     resolvedNiche: await resolveNicheConfig(ctx.clientNiche),
     customPrompt: ctx.customPrompt,
+    applyPersona: ctx.applyPersona,
     seoOptimized: true,
     styleProfile: ctx.styleProfile ?? undefined,
     verticalKey: ctx.verticalKey,
@@ -889,6 +894,7 @@ async function resolveIdeationContext(blogId: string) {
       blog: blogs,
       clientNiche: clients.niche,
       clientCustomPrompt: clients.customPrompt,
+      clientStackPersona: clients.stackPersona,
       ctaEnabled: clients.ctaEnabled,
       ctaLabel: clients.ctaLabel,
       ctaUrl: clients.ctaUrl,
@@ -901,8 +907,9 @@ async function resolveIdeationContext(blogId: string) {
   if (!row) throw new Error(`Blog ${blogId} not found`);
   const { blog, clientNiche } = row;
   const cta = clientCta(row.ctaEnabled, row.ctaLabel, row.ctaUrl, row.ctaPlacement);
-  const customPrompt =
-    blog.customPrompt?.trim() || row.clientCustomPrompt?.trim() || undefined;
+  // Custom prompts are client-wide; the persona-stack toggle is client-level.
+  const customPrompt = row.clientCustomPrompt?.trim() || undefined;
+  const applyPersona = Boolean(customPrompt) && Boolean(row.clientStackPersona);
 
   let styleProfile = await getStyleProfileForBlog(blog.id);
   if (!styleProfile) {
@@ -924,6 +931,7 @@ async function resolveIdeationContext(blogId: string) {
     blog,
     clientNiche,
     customPrompt,
+    applyPersona,
     styleProfile,
     verticalKey: verticalForPost?.key ?? null,
     language,

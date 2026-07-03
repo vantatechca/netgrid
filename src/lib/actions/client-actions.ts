@@ -113,12 +113,17 @@ export async function getClient(id: string) {
 export async function updateClientCustomPrompt(
   clientId: string,
   value: string,
+  stackPersona?: boolean,
 ): Promise<{ success: boolean; message: string }> {
   await requireAdmin();
   const trimmed = value.trim();
   await db
     .update(clients)
-    .set({ customPrompt: trimmed || null, updatedAt: new Date() })
+    .set({
+      customPrompt: trimmed || null,
+      ...(stackPersona === undefined ? {} : { stackPersona }),
+      updatedAt: new Date(),
+    })
     .where(eq(clients.id, clientId));
   revalidatePath(`/clients/${clientId}`);
   return {
@@ -145,6 +150,7 @@ export async function createClient(data: CreateClientInput) {
       totalBlogsTarget: parsed.totalBlogsTarget ?? 0,
       notesInternal: parsed.notesInternal || null,
       customPrompt: parsed.customPrompt?.trim() || null,
+      stackPersona: parsed.stackPersona ?? false,
       ctaEnabled: parsed.ctaEnabled ?? false,
       ctaLabel: parsed.ctaLabel || null,
       ctaUrl: parsed.ctaUrl || null,
@@ -189,6 +195,7 @@ export async function updateClient(id: string, data: UpdateClientInput) {
   if (parsed.totalBlogsTarget !== undefined) updateData.totalBlogsTarget = parsed.totalBlogsTarget;
   if (parsed.notesInternal !== undefined) updateData.notesInternal = parsed.notesInternal || null;
   if (parsed.customPrompt !== undefined) updateData.customPrompt = parsed.customPrompt?.trim() || null;
+  if (parsed.stackPersona !== undefined) updateData.stackPersona = parsed.stackPersona;
   if (parsed.ctaEnabled !== undefined) updateData.ctaEnabled = parsed.ctaEnabled;
   if (parsed.ctaLabel !== undefined) updateData.ctaLabel = parsed.ctaLabel || null;
   if (parsed.ctaUrl !== undefined) updateData.ctaUrl = parsed.ctaUrl || null;

@@ -36,6 +36,9 @@ const clientFields = z.object({
   // client's blogs are generated from it instead of the niche/persona style
   // (a per-blog customPrompt overrides it). Compliance + JSON output stay locked.
   customPrompt: z.string().optional().or(z.literal("")),
+  // When a custom prompt is active, also layer each blog's generated persona
+  // on top of it (rather than replacing it). Off by default.
+  stackPersona: z.boolean().optional(),
   status: z.enum(["onboarding", "active", "paused", "churned"]).optional(),
   // Call-to-action button appended to the bottom of every published post for
   // this client (e.g. a link to their main website / contact / registration).
