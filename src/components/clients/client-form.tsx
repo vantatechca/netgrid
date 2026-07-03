@@ -17,6 +17,7 @@ import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
+import { NicheCombobox } from "@/components/content/niche-combobox";
 
 interface ClientFormProps {
   mode: "create" | "edit";
@@ -140,14 +141,20 @@ export function ClientForm({ mode, defaultValues }: ClientFormProps) {
 
           <div className="space-y-2">
             <Label htmlFor="niche">Niche</Label>
-            <Input
-              id="niche"
-              placeholder="e.g., peptides, web_dev, gambling"
-              {...register("niche")}
+            <Controller
+              control={control}
+              name="niche"
+              render={({ field }) => (
+                <NicheCombobox
+                  value={field.value ?? ""}
+                  onChange={field.onChange}
+                />
+              )}
             />
             <p className="text-xs text-muted-foreground">
-              Used to drive auto-generated post topics and brand voice. Match
-              one of the predefined niche keys for best results.
+              Drives auto-generated post topics, brand voice, and compliance.
+              Pick an existing niche or type a new name to create one (its config
+              is AI-drafted and editable in Content Studio &rarr; Niches).
             </p>
           </div>
 
@@ -161,7 +168,7 @@ export function ClientForm({ mode, defaultValues }: ClientFormProps) {
             />
             <p className="text-xs text-muted-foreground">
               Maximum number of posts the auto-publish cron will create
-              across ALL of this client's blogs combined. Set to{" "}
+              across ALL of this client&apos;s blogs combined. Set to{" "}
               <span className="font-medium">0</span> for no cap. When the
               cap is reached, every blog for this client stops publishing
               until you edit this number higher.

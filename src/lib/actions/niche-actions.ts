@@ -26,6 +26,100 @@ export async function getNiches(): Promise<NicheRow[]> {
   return db.select().from(niches).orderBy(asc(niches.label));
 }
 
+/** Lightweight { key, label } list for the niche dropdown (active niches). */
+export async function getNicheOptions(): Promise<
+  { key: string; label: string }[]
+> {
+  await requireAdmin();
+  return db
+    .select({ key: niches.key, label: niches.label })
+    .from(niches)
+    .where(eq(niches.active, true))
+    .orderBy(asc(niches.label));
+}
+
+/**
+ * Create a niche from just its name (the "+ Create new niche" flow on the
+ * client form). AI-drafts a full config so the niche is immediately usable in
+ * generation AND editable in Content Studio → Niches. Returns the existing row
+ * if the key already exists. Falls back to a minimal stub if the AI draft fails.
+ */
+export async function createNicheFromName(name: string): Promise<{
+  success: boolean;
+  message: string;
+  key?: string;
+  label?: string;
+  nicheId?: string;
+}> {
+  await requireAdmin();
+
+  const clean = name.trim();
+  if (!clean) return { success: false, message: "Enter a niche name." };
+  const key = normalizeNicheKey(clean) || slugKey(clean);
+  if (!key) return { success: false, message: "Could not derive a niche key." };
+
+  const [existing] = await db
+    .select({ id: niches.id, key: niches.key, label: niches.label })
+    .from(niches)
+    .where(eq(niches.key, key))
+    .limit(1);
+  if (existing) {
+    return {
+      success: true,
+      message: `Niche "${existing.key}" already exists — selected it.`,
+      key: existing.key,
+      label: existing.label,
+      nicheId: existing.id,
+    };
+  }
+
+  // AI-draft the config from the name (reuses the file extractor with a
+  // synthetic prompt). Non-fatal — a failed draft falls back to a stub.
+  let draft: Awaited<ReturnType<typeof extractNicheConfig>> | null = null;
+  try {
+    draft = await extractNicheConfig(
+      `Niche: ${clean}\n\nThis is the industry / niche for a blog network. Produce its content-generation config — audience, brand voice, content style, key topics, writing requirements, and any compliance disclaimers appropriate for "${clean}".`,
+      { fileName: clean },
+    );
+  } catch {
+    draft = null;
+  }
+
+  const label = draft?.label || clean;
+  await db
+    .insert(niches)
+    .values({
+      key,
+      label,
+      industry: draft?.industry || label,
+      defaultAudience: draft?.defaultAudience || null,
+      defaultBrandVoice: draft?.defaultBrandVoice || null,
+      contentStyle: draft?.contentStyle || null,
+      keyTopics: draft?.keyTopics ?? [],
+      requirements: draft?.requirements || null,
+      disclaimers: draft?.disclaimers ?? [],
+      source: draft ? "imported" : "manual",
+    })
+    .onConflictDoNothing({ target: niches.key });
+
+  const [created] = await db
+    .select({ id: niches.id, key: niches.key, label: niches.label })
+    .from(niches)
+    .where(eq(niches.key, key))
+    .limit(1);
+
+  revalidatePath("/content-studio/niches");
+  return {
+    success: true,
+    message: draft
+      ? `Created niche "${created.key}" (AI-drafted). Review it in Content Studio.`
+      : `Created niche "${created.key}".`,
+    key: created.key,
+    label: created.label,
+    nicheId: created.id,
+  };
+}
+
 /** One niche config row by id. */
 export async function getNicheById(id: string): Promise<NicheRow | null> {
   await requireAdmin();
