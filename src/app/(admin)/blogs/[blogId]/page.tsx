@@ -159,7 +159,7 @@ export default async function BlogDetailPage({
       {/* Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex items-center gap-3">
-          <Link href="/blogs">
+          <Link href={`/clients/${blog.clientId}/blogs`}>
             <Button variant="ghost" size="sm">
               <ArrowLeft className="size-4" />
             </Button>
