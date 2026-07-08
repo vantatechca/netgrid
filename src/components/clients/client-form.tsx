@@ -18,6 +18,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import { NicheCombobox } from "@/components/content/niche-combobox";
+import { isPeptidesNiche } from "@/lib/content/cta-target";
 
 interface ClientFormProps {
   mode: "create" | "edit";
@@ -54,6 +55,10 @@ export function ClientForm({ mode, defaultValues }: ClientFormProps) {
   });
 
   const ctaEnabled = !!watch("ctaEnabled");
+  // Peptides blogs forward to the public domain each blog is hosted on, so their
+  // CTA is auto-sourced per blog from the blog's own domain — no URL is typed
+  // here, and the button is always shown.
+  const isPeptides = isPeptidesNiche(watch("niche"));
 
   function onSubmit(data: CreateClientInput) {
     startTransition(async () => {
@@ -260,8 +265,9 @@ export function ClientForm({ mode, defaultValues }: ClientFormProps) {
                 Add an action button to this client&apos;s posts
               </Label>
               <p className="text-xs text-muted-foreground">
-                Appends a button to the bottom of every published post — links
-                to the client&apos;s main site, contact, or registration page.
+                {isPeptides
+                  ? "For peptides, the button is added automatically and links to each blog's own domain — no URL needed. The toggle just lets you customize its text and placement."
+                  : "Appends a button to the bottom of every published post — links to the client's main site, contact, or registration page."}
               </p>
             </div>
             <Controller
@@ -283,7 +289,7 @@ export function ClientForm({ mode, defaultValues }: ClientFormProps) {
                 <Label htmlFor="ctaLabel">Button text</Label>
                 <Input
                   id="ctaLabel"
-                  placeholder="Visit our site"
+                  placeholder={isPeptides ? "Shop now!" : "Visit our site"}
                   {...register("ctaLabel")}
                   aria-invalid={!!errors.ctaLabel}
                 />
@@ -292,21 +298,35 @@ export function ClientForm({ mode, defaultValues }: ClientFormProps) {
                     {errors.ctaLabel.message}
                   </p>
                 )}
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="ctaUrl">Button link (URL)</Label>
-                <Input
-                  id="ctaUrl"
-                  placeholder="https://example.com/register"
-                  {...register("ctaUrl")}
-                  aria-invalid={!!errors.ctaUrl}
-                />
-                {errors.ctaUrl && (
-                  <p className="text-sm text-destructive">
-                    {errors.ctaUrl.message}
+                {isPeptides && (
+                  <p className="text-xs text-muted-foreground">
+                    Optional — defaults to &ldquo;Shop now!&rdquo;.
                   </p>
                 )}
               </div>
+              {isPeptides ? (
+                <div className="space-y-2">
+                  <Label>Button link (URL)</Label>
+                  <div className="flex h-9 items-center rounded-md border border-dashed border-input px-3 text-sm text-muted-foreground">
+                    Auto-filled per blog from each blog&apos;s own domain
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <Label htmlFor="ctaUrl">Button link (URL)</Label>
+                  <Input
+                    id="ctaUrl"
+                    placeholder="https://example.com/register"
+                    {...register("ctaUrl")}
+                    aria-invalid={!!errors.ctaUrl}
+                  />
+                  {errors.ctaUrl && (
+                    <p className="text-sm text-destructive">
+                      {errors.ctaUrl.message}
+                    </p>
+                  )}
+                </div>
+              )}
               <div className="space-y-2 sm:col-span-2">
                 <Label htmlFor="ctaPlacement">Placement</Label>
                 <select

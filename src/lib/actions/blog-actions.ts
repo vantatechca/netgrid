@@ -67,6 +67,7 @@ import * as wp from "@/lib/services/wp-client";
 import { pingIndexNowFireAndForget } from "@/lib/services/index-now-pinger";
 import { scanPostAfterPublishFireAndForget } from "@/lib/services/post-seo-runner";
 import { resolveNicheConfig } from "@/lib/content/niche-config-db";
+import { effectiveBlogCta } from "@/lib/content/cta-target";
 import { revalidatePath } from "next/cache";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -863,14 +864,14 @@ export async function generateBlogPost(
     styleProfile: styleProfile ?? undefined,
     verticalKey: verticalForPost?.key ?? null,
     language: postLanguage,
-    cta:
-      blog.ctaEnabled && blog.ctaLabel?.trim() && blog.ctaUrl?.trim()
-        ? {
-            label: blog.ctaLabel.trim(),
-            url: blog.ctaUrl.trim(),
-            placement: blog.ctaPlacement ?? "bottom",
-          }
-        : undefined,
+    cta: effectiveBlogCta({
+      niche: blog.niche,
+      blogDomain: blog.domain,
+      ctaEnabled: blog.ctaEnabled,
+      ctaLabel: blog.ctaLabel,
+      ctaUrl: blog.ctaUrl,
+      ctaPlacement: blog.ctaPlacement,
+    }),
     postId: pending.id,
   });
 

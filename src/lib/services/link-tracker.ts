@@ -2,6 +2,7 @@ import "server-only";
 import { db } from "@/lib/db";
 import { linkEvents, generatedPosts, clients, blogs } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
+import { effectiveCtaDestination } from "@/lib/content/cta-target";
 
 /**
  * Netgrid-hosted link tracking for published posts. CTA buttons point at
@@ -121,7 +122,11 @@ export async function resolveBlogClient(
   }
 }
 
-/** Resolve a blog → its client + the client's CTA URL, for a site-wide redirect. */
+/**
+ * Resolve a blog → its client + the CTA destination, for a site-wide redirect.
+ * Peptides blogs resolve to their own domain (per blog); all other niches use
+ * the client's manually-entered CTA URL. See effectiveCtaDestination.
+ */
 export async function resolveBlogRedirect(
   blogId: string,
 ): Promise<{ blogId: string; clientId: string; ctaUrl: string | null } | null> {
@@ -130,13 +135,24 @@ export async function resolveBlogRedirect(
       .select({
         blogId: blogs.id,
         clientId: blogs.clientId,
+        domain: blogs.domain,
+        niche: clients.niche,
         ctaUrl: clients.ctaUrl,
       })
       .from(blogs)
       .leftJoin(clients, eq(blogs.clientId, clients.id))
       .where(eq(blogs.id, blogId))
       .limit(1);
-    return row ?? null;
+    if (!row) return null;
+    return {
+      blogId: row.blogId,
+      clientId: row.clientId,
+      ctaUrl: effectiveCtaDestination({
+        niche: row.niche,
+        blogDomain: row.domain,
+        ctaUrl: row.ctaUrl,
+      }),
+    };
   } catch (err) {
     console.warn(
       "[link-tracker] resolve blog redirect failed:",
@@ -146,7 +162,11 @@ export async function resolveBlogRedirect(
   }
 }
 
-/** Resolve a generated post → its blog/client + the client's CTA URL. */
+/**
+ * Resolve a generated post → its blog/client + the CTA destination. Peptides
+ * posts resolve to their blog's own domain (per blog); all other niches use the
+ * client's manually-entered CTA URL. See effectiveCtaDestination.
+ */
 export async function resolvePostRedirect(
   postId: string,
 ): Promise<PostRedirectContext | null> {
@@ -156,13 +176,26 @@ export async function resolvePostRedirect(
         postId: generatedPosts.id,
         blogId: generatedPosts.blogId,
         clientId: generatedPosts.clientId,
+        domain: blogs.domain,
+        niche: clients.niche,
         ctaUrl: clients.ctaUrl,
       })
       .from(generatedPosts)
       .leftJoin(clients, eq(generatedPosts.clientId, clients.id))
+      .leftJoin(blogs, eq(generatedPosts.blogId, blogs.id))
       .where(eq(generatedPosts.id, postId))
       .limit(1);
-    return row ?? null;
+    if (!row) return null;
+    return {
+      postId: row.postId,
+      blogId: row.blogId,
+      clientId: row.clientId,
+      ctaUrl: effectiveCtaDestination({
+        niche: row.niche,
+        blogDomain: row.domain,
+        ctaUrl: row.ctaUrl,
+      }),
+    };
   } catch (err) {
     console.warn(
       "[link-tracker] resolve failed:",

@@ -23,6 +23,7 @@ import { publishPost, backfillPostSeo, resolveShopifyBlogId, type PlatformBlog }
 import { verticalForNiche } from "@/lib/content/verticals";
 import { loadNicheProfiles } from "@/lib/content/niche-registry";
 import { resolveNicheConfig } from "@/lib/content/niche-config-db";
+import { effectiveBlogCta } from "@/lib/content/cta-target";
 import { pingIndexNowFireAndForget } from "@/lib/services/index-now-pinger";
 import { scanPostAfterPublishFireAndForget } from "@/lib/services/post-seo-runner";
 
@@ -365,7 +366,14 @@ async function runGenerateAndPublish(
   // When that prompt is active, optionally keep each blog's per-blog persona
   // layered on top of it (client-level toggle).
   const applyPersona = Boolean(customPrompt) && Boolean(row.clientStackPersona);
-  const cta = clientCta(row.ctaEnabled, row.ctaLabel, row.ctaUrl, row.ctaPlacement);
+  const cta = effectiveBlogCta({
+    niche: clientNiche,
+    blogDomain: blog.domain,
+    ctaEnabled: row.ctaEnabled,
+    ctaLabel: row.ctaLabel,
+    ctaUrl: row.ctaUrl,
+    ctaPlacement: row.ctaPlacement,
+  });
 
   if (!blogHasCredentials(blog)) {
     throw new Error(
@@ -733,16 +741,6 @@ async function runGenerateAndPublish(
 }
 
 /** Resolve a client's CTA columns into a generation-ready CTA (or undefined). */
-function clientCta(
-  enabled: boolean | null,
-  label: string | null,
-  url: string | null,
-  placement: string | null,
-): { label: string; url: string; placement?: string } | undefined {
-  if (!enabled || !label?.trim() || !url?.trim()) return undefined;
-  return { label: label.trim(), url: url.trim(), placement: placement ?? "bottom" };
-}
-
 /** Build the platform credential bundle from a blog row. */
 function toPlatformBlog(blog: typeof blogs.$inferSelect): PlatformBlog {
   return {
@@ -899,7 +897,14 @@ async function resolveIdeationContext(blogId: string) {
     .limit(1);
   if (!row) throw new Error(`Blog ${blogId} not found`);
   const { blog, clientNiche } = row;
-  const cta = clientCta(row.ctaEnabled, row.ctaLabel, row.ctaUrl, row.ctaPlacement);
+  const cta = effectiveBlogCta({
+    niche: clientNiche,
+    blogDomain: blog.domain,
+    ctaEnabled: row.ctaEnabled,
+    ctaLabel: row.ctaLabel,
+    ctaUrl: row.ctaUrl,
+    ctaPlacement: row.ctaPlacement,
+  });
   // Custom prompts are client-wide; the persona-stack toggle is client-level.
   const customPrompt = row.clientCustomPrompt?.trim() || undefined;
   const applyPersona = Boolean(customPrompt) && Boolean(row.clientStackPersona);

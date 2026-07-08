@@ -9,6 +9,7 @@ import {
   blogTrackingPixelUrl,
   blogCtaRedirectUrl,
 } from "@/lib/services/link-tracker";
+import { isPeptidesNiche, blogDomainCtaUrl } from "@/lib/content/cta-target";
 import {
   injectSeoMetaTags,
   inspectThemeSeo as inspectThemeSeoClient,
@@ -35,14 +36,28 @@ async function shopifyCredsForBlog(blogId: string) {
   return { ok: true as const, creds: built.creds, clientId: blog.clientId };
 }
 
-/** The client's active CTA URL for a blog, or undefined when no CTA is set. */
-async function ctaUrlForClient(clientId: string): Promise<string | undefined> {
-  const [c] = await db
-    .select({ ctaEnabled: clients.ctaEnabled, ctaUrl: clients.ctaUrl })
-    .from(clients)
-    .where(eq(clients.id, clientId))
+/**
+ * The active CTA URL for a blog's homepage, or undefined when no CTA is set.
+ * Peptides blogs auto-source it from their own domain (per blog); every other
+ * niche uses the client's manually-entered CTA URL, only when enabled.
+ */
+async function ctaUrlForBlog(blogId: string): Promise<string | undefined> {
+  const [row] = await db
+    .select({
+      domain: blogs.domain,
+      niche: clients.niche,
+      ctaEnabled: clients.ctaEnabled,
+      ctaUrl: clients.ctaUrl,
+    })
+    .from(blogs)
+    .leftJoin(clients, eq(blogs.clientId, clients.id))
+    .where(eq(blogs.id, blogId))
     .limit(1);
-  return c?.ctaEnabled && c.ctaUrl ? c.ctaUrl : undefined;
+  if (!row) return undefined;
+  if (isPeptidesNiche(row.niche)) {
+    return blogDomainCtaUrl(row.domain) ?? undefined;
+  }
+  return row.ctaEnabled && row.ctaUrl ? row.ctaUrl : undefined;
 }
 
 /**
@@ -77,7 +92,7 @@ export async function applyThemeSeoFix(
     return { success: false, message: built.message };
   }
 
-  const ctaUrl = await ctaUrlForClient(blog.clientId);
+  const ctaUrl = await ctaUrlForBlog(blogId);
   return injectSeoMetaTags(
     built.creds,
     undefined,
@@ -99,7 +114,7 @@ export async function optimizeThemeSeo(
   await requireAdmin();
   const r = await shopifyCredsForBlog(blogId);
   if (!r.ok) return { success: false, message: r.message };
-  const ctaUrl = await ctaUrlForClient(r.clientId);
+  const ctaUrl = await ctaUrlForBlog(blogId);
   return optimizeThemeSeoClient(
     r.creds,
     undefined,
