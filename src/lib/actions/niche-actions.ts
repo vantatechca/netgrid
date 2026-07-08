@@ -172,6 +172,30 @@ export async function updateNiche(
   return { success: true, message: "Niche saved" };
 }
 
+/**
+ * Delete a niche config row. Safe: nothing references it by foreign key — a
+ * blog's free-text `clients.niche` resolves by key at generation time, and when
+ * no row exists generation falls back to the hardcoded code config. Re-run
+ * "Sync from code" to reseed a deleted seed niche.
+ */
+export async function deleteNiche(
+  id: string,
+): Promise<{ success: boolean; message: string }> {
+  await requireAdmin();
+
+  const [existing] = await db
+    .select({ id: niches.id, label: niches.label })
+    .from(niches)
+    .where(eq(niches.id, id))
+    .limit(1);
+  if (!existing) return { success: false, message: "Niche not found" };
+
+  await db.delete(niches).where(eq(niches.id, id));
+
+  revalidatePath("/content-studio/niches");
+  return { success: true, message: `Deleted niche "${existing.label}"` };
+}
+
 /** Fallback slug for a niche key when the model gives none. */
 function slugKey(s: string): string {
   return s

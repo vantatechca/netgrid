@@ -10,7 +10,11 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft } from "lucide-react";
-import { NicheEditor, NichePromptPreview } from "@/components/niches/niche-admin";
+import {
+  NicheEditor,
+  NichePromptPreview,
+  DeleteNicheButton,
+} from "@/components/niches/niche-admin";
 
 export const dynamic = "force-dynamic";
 
@@ -47,12 +51,19 @@ export default async function NicheEditPage({
                 to see exactly what changes before you rely on it.
               </CardDescription>
             </div>
-            <Badge
-              variant={niche.source === "manual" ? "default" : "secondary"}
-              className="font-normal"
-            >
-              {niche.source}
-            </Badge>
+            <div className="flex items-center gap-3">
+              <Badge
+                variant={niche.source === "manual" ? "default" : "secondary"}
+                className="font-normal"
+              >
+                {niche.source}
+              </Badge>
+              <DeleteNicheButton
+                nicheId={niche.id}
+                nicheLabel={niche.label}
+                redirectTo="/content-studio/niches"
+              />
+            </div>
           </div>
         </CardHeader>
         <CardContent>

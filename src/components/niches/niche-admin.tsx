@@ -9,6 +9,7 @@ import {
   Loader2,
   RefreshCw,
   Save,
+  Trash2,
   TriangleAlert,
   Upload,
 } from "lucide-react";
@@ -18,6 +19,17 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  deleteNiche,
   importNicheFromFile,
   previewNichePrompt,
   syncNichesFromCode,
@@ -107,6 +119,100 @@ export function ImportNicheButton() {
         Import from file
       </Button>
     </>
+  );
+}
+
+/**
+ * Delete a niche config row after a confirmation prompt. Safe: no foreign keys
+ * point at niches and generation falls back to code when a row is missing, so
+ * deleting only removes the editable override. `compact` renders an icon-only
+ * button for the list row; otherwise a labelled button (detail page). Pass
+ * `redirectTo` to navigate away after a successful delete (used on the detail
+ * page, whose row no longer exists); otherwise the current view is refreshed.
+ */
+export function DeleteNicheButton({
+  nicheId,
+  nicheLabel,
+  compact = false,
+  redirectTo,
+}: {
+  nicheId: string;
+  nicheLabel: string;
+  compact?: boolean;
+  redirectTo?: string;
+}) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [pending, start] = useTransition();
+
+  function confirm() {
+    start(async () => {
+      const res = await deleteNiche(nicheId);
+      if (res.success) {
+        toast.success(res.message);
+        setOpen(false);
+        if (redirectTo) router.push(redirectTo);
+        else router.refresh();
+      } else {
+        toast.error(res.message);
+      }
+    });
+  }
+
+  return (
+    <AlertDialog open={open} onOpenChange={(o) => !pending && setOpen(o)}>
+      {compact ? (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="text-muted-foreground hover:text-destructive"
+          aria-label={`Delete ${nicheLabel}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            setOpen(true);
+          }}
+        >
+          <Trash2 className="size-4" />
+        </Button>
+      ) : (
+        <Button
+          variant="outline"
+          className="text-destructive hover:text-destructive"
+          onClick={() => setOpen(true)}
+        >
+          <Trash2 className="size-4" data-icon="inline-start" />
+          Delete niche
+        </Button>
+      )}
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete niche?</AlertDialogTitle>
+          <AlertDialogDescription>
+            &ldquo;{nicheLabel}&rdquo; and its generation config will be removed.
+            Generation for this niche falls back to the hardcoded code config.
+            You can reseed a code niche later with <strong>Sync from code</strong>.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={pending}>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={(e) => {
+              e.preventDefault();
+              confirm();
+            }}
+            disabled={pending}
+            className="bg-destructive text-white hover:bg-destructive/90"
+          >
+            {pending ? (
+              <Loader2 className="size-4 animate-spin" data-icon="inline-start" />
+            ) : (
+              <Trash2 className="size-4" data-icon="inline-start" />
+            )}
+            Delete
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 

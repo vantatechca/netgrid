@@ -11,7 +11,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { ChevronRight, Info } from "lucide-react";
-import { SyncNichesButton, ImportNicheButton } from "@/components/niches/niche-admin";
+import {
+  SyncNichesButton,
+  ImportNicheButton,
+  DeleteNicheButton,
+} from "@/components/niches/niche-admin";
 
 export const dynamic = "force-dynamic";
 
@@ -69,7 +73,7 @@ export default async function NichesPage() {
                   <TableHead>Industry</TableHead>
                   <TableHead className="text-right">Key topics</TableHead>
                   <TableHead>Source</TableHead>
-                  <TableHead className="w-[40px]" />
+                  <TableHead className="w-[88px]" />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -105,9 +109,19 @@ export default async function NichesPage() {
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        <Link href={`/content-studio/niches/${n.id}`}>
-                          <ChevronRight className="size-4 text-muted-foreground" />
-                        </Link>
+                        <div className="flex items-center justify-end gap-1">
+                          <DeleteNicheButton
+                            nicheId={n.id}
+                            nicheLabel={n.label}
+                            compact
+                          />
+                          <Link
+                            href={`/content-studio/niches/${n.id}`}
+                            aria-label={`Edit ${n.label}`}
+                          >
+                            <ChevronRight className="size-4 text-muted-foreground" />
+                          </Link>
+                        </div>
                       </TableCell>
                     </TableRow>
                   );
