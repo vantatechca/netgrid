@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isPeptidesNiche } from "@/lib/content/cta-target";
 
 const clientFields = z.object({
   name: z
@@ -59,12 +60,16 @@ const clientFields = z.object({
     .optional(),
 });
 
-// When the action button is enabled, both the label and URL are required.
+// When the action button is enabled, both the label and URL are required —
+// except for peptides, whose CTA is always shown and auto-sourced per blog from
+// each blog's own domain, so no URL is typed during onboarding.
 const ctaComplete = (d: {
+  niche?: string;
   ctaEnabled?: boolean;
   ctaLabel?: string;
   ctaUrl?: string;
 }) =>
+  isPeptidesNiche(d.niche) ||
   !d.ctaEnabled ||
   ((d.ctaLabel ?? "").trim() !== "" && (d.ctaUrl ?? "").trim() !== "");
 
