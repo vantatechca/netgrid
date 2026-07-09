@@ -134,6 +134,9 @@ export default async function ClientDetailPage({
                 | "top_bottom"
                 | "top_middle_bottom"
                 | undefined) ?? "bottom",
+            languageMode:
+              (client.languageMode as "en" | "fr" | "en_fr" | undefined) ??
+              undefined,
             status:
               (client.status as
                 | "onboarding"

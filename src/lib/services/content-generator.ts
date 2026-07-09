@@ -11,6 +11,10 @@ import {
 import { ctaRedirectUrl, trackingPixelImg } from "@/lib/services/link-tracker";
 import { SUB_NICHES } from "@/lib/content/libraries/sub-niches";
 import {
+  FRENCH_ONLY_NICHE_KEYS,
+  MIXED_LANGUAGE_NICHE_KEYS,
+} from "@/lib/content/language";
+import {
   truncateToPx,
   TITLE_FONT_PX,
   DESC_FONT_PX,
@@ -1767,22 +1771,9 @@ export function estimateImageCostUsd(): number {
   return IMAGE_COST_USD[model] ?? 0.04;
 }
 
-/**
- * Niche keys whose blogs publish in French regardless of TLD or vertical
- * config. Highest-priority override in postLanguageForDomain. Both gambling
- * sub-niches (sportsbook + online casino) are operator-locked to French for
- * the Quebec market.
- */
-const FRENCH_ONLY_NICHE_KEYS = new Set(["gambling", "online_casino"]);
-
-/**
- * Niche keys that mix English and French — each post is a clean single
- * language, ~50/50 across the network (the "en_fr" behaviour). Checked
- * before the .com → English rule so these niches stay bilingual even on a
- * .com domain. real_estate is listed here because it has no vertical config
- * of its own; without this it would fall through to the English default.
- */
-const MIXED_LANGUAGE_NICHE_KEYS = new Set(["real_estate"]);
+// FRENCH_ONLY_NICHE_KEYS + MIXED_LANGUAGE_NICHE_KEYS are the LEGACY derived
+// language rules (used only when a client has no explicit languageMode). They
+// live in the isomorphic language module so the client form shares them.
 
 /**
  * Language resolution, in priority order — first match wins:
