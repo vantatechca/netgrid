@@ -155,6 +155,7 @@ export async function createClient(data: CreateClientInput) {
       ctaLabel: parsed.ctaLabel || null,
       ctaUrl: parsed.ctaUrl || null,
       ctaPlacement: parsed.ctaPlacement ?? "bottom",
+      languageMode: parsed.languageMode ?? null,
       status: parsed.status ?? "onboarding",
     })
     .returning();
@@ -200,6 +201,7 @@ export async function updateClient(id: string, data: UpdateClientInput) {
   if (parsed.ctaLabel !== undefined) updateData.ctaLabel = parsed.ctaLabel || null;
   if (parsed.ctaUrl !== undefined) updateData.ctaUrl = parsed.ctaUrl || null;
   if (parsed.ctaPlacement !== undefined) updateData.ctaPlacement = parsed.ctaPlacement;
+  if (parsed.languageMode !== undefined) updateData.languageMode = parsed.languageMode;
   if (parsed.status !== undefined) updateData.status = parsed.status;
 
   const [updatedClient] = await db

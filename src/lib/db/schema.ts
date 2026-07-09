@@ -104,6 +104,13 @@ export const clients = pgTable("clients", {
   ctaUrl: varchar("cta_url", { length: 1000 }),
   // Where the button appears: "bottom" | "top_bottom" | "top_middle_bottom".
   ctaPlacement: varchar("cta_placement", { length: 40 }).default("bottom"),
+  // Post language control: "en" | "fr" | "en_fr" | null.
+  //   en    → all posts English
+  //   fr    → all posts French
+  //   en_fr → posts alternate English / French (strict, per blog)
+  //   null  → legacy derived behaviour (niche / TLD / vertical rules)
+  // When set, overrides the hardcoded niche/TLD language locks.
+  languageMode: varchar("language_mode", { length: 8 }),
   status: clientStatusEnum("status").default("onboarding"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -330,6 +337,10 @@ export const generatedPosts = pgTable("generated_posts", {
   tokensUsed: integer("tokens_used"),
   costUsd: decimal("cost_usd", { precision: 10, scale: 6 }),
   status: generatedPostStatusEnum("status").default("pending").notNull(),
+  // Concrete language this post was written in ("en" | "fr"), recorded at
+  // generation time. Drives strict EN/FR alternation for bilingual clients
+  // (flip the blog's most recent post language) and serves as an audit trail.
+  language: varchar("language", { length: 2 }),
   failureReason: text("failure_reason"),
   externalPostId: varchar("external_post_id", { length: 100 }),
   externalPostUrl: varchar("external_post_url", { length: 1000 }),

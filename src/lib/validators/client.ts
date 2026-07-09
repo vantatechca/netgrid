@@ -58,6 +58,9 @@ const clientFields = z.object({
   ctaPlacement: z
     .enum(["bottom", "top_bottom", "top_middle_bottom"])
     .optional(),
+  // Post language control. "en"/"fr" = all posts that language; "en_fr" =
+  // strict alternation. Omitted/undefined leaves the legacy derived behaviour.
+  languageMode: z.enum(["en", "fr", "en_fr"]).optional(),
 });
 
 // When the action button is enabled, both the label and URL are required —

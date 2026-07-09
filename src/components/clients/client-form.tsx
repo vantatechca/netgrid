@@ -14,11 +14,17 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import { NicheCombobox } from "@/components/content/niche-combobox";
 import { isPeptidesNiche } from "@/lib/content/cta-target";
+import {
+  defaultLanguageModeForNiche,
+  languageModeFromToggles,
+  togglesFromLanguageMode,
+} from "@/lib/content/language";
 
 interface ClientFormProps {
   mode: "create" | "edit";
@@ -51,6 +57,11 @@ export function ClientForm({ mode, defaultValues }: ClientFormProps) {
       ctaLabel: defaultValues?.ctaLabel ?? "",
       ctaUrl: defaultValues?.ctaUrl ?? "",
       ctaPlacement: defaultValues?.ctaPlacement ?? "bottom",
+      // Explicit stored mode wins; a client that never set one shows the
+      // checkboxes that match its legacy niche-derived behaviour.
+      languageMode:
+        defaultValues?.languageMode ??
+        defaultLanguageModeForNiche(defaultValues?.niche),
     },
   });
 
@@ -343,6 +354,57 @@ export function ClientForm({ mode, defaultValues }: ClientFormProps) {
                 </p>
               </div>
             </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Post language */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Post language</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Which language(s) this client&apos;s posts are written in. Pick one
+            for a single language, or both to alternate English and French
+            (every other post). This overrides automatic per-niche language
+            rules.
+          </p>
+          <Controller
+            control={control}
+            name="languageMode"
+            render={({ field }) => {
+              const toggles = togglesFromLanguageMode(field.value);
+              const set = (en: boolean, fr: boolean) => {
+                const mode = languageModeFromToggles(en, fr);
+                // Never allow both off — keep at least one language on.
+                if (mode) field.onChange(mode);
+              };
+              return (
+                <div className="flex flex-wrap gap-6">
+                  <label className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={toggles.en}
+                      onCheckedChange={(v) => set(!!v, toggles.fr)}
+                    />
+                    English
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={toggles.fr}
+                      onCheckedChange={(v) => set(toggles.en, !!v)}
+                    />
+                    French
+                  </label>
+                </div>
+              );
+            }}
+          />
+          {watch("languageMode") === "en_fr" && (
+            <p className="text-xs text-muted-foreground">
+              Posts alternate strictly: English, French, English, French… (per
+              blog, starting with English).
+            </p>
           )}
         </CardContent>
       </Card>
