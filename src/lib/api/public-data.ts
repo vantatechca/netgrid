@@ -611,10 +611,17 @@ export async function clientTrafficSeries(
 
 // ─── SEO score history (score-over-time) ─────────────────────────────────────
 
+/**
+ * SEO history bucket size:
+ *   "scan" — one point per individual scan (default; raw trend).
+ *   "week" — one point per ISO week, the average overall score for that week.
+ */
+export type SeoHistoryGranularity = "scan" | "week";
+
 export interface SeoHistoryPoint {
-  /** Scan timestamp, ISO 8601. */
+  /** Scan timestamp ("scan") or week-start ("week"), ISO 8601. */
   date: string;
-  /** Overall SEO score at that scan, 0–100. */
+  /** Overall SEO score, 0–100 — the per-scan value, or the week's average. */
   score: number;
 }
 
@@ -631,18 +638,53 @@ export interface SeoHistory {
 
 /**
  * Per-site overall-SEO-score time series for one client, oldest point first.
+ * With `granularity: "week"` each point is the average overall score for an ISO
+ * week (`date_trunc('week', …)`); otherwise each point is a raw individual scan.
  * Optionally scoped to one site (`blogId`) and/or a time window (`since`).
  * Sites with no scans in range are omitted. Fail-safe to no sites.
  */
 export async function clientSeoHistory(
   clientId: string,
-  opts?: { blogId?: string; since?: Date },
+  opts?: { blogId?: string; since?: Date; granularity?: SeoHistoryGranularity },
 ): Promise<SeoHistory> {
+  const granularity: SeoHistoryGranularity =
+    opts?.granularity === "week" ? "week" : "scan";
   try {
     const conds = [eq(seoScans.clientId, clientId)];
     if (opts?.blogId) conds.push(eq(seoScans.blogId, opts.blogId));
     if (opts?.since) conds.push(gte(seoScans.scannedAt, opts.since));
 
+    if (granularity === "week") {
+      // One point per ISO week per site = the week's average overall score.
+      const bucket = sql<string>`date_trunc('week', ${seoScans.scannedAt})`;
+      const rows = await db
+        .select({
+          blogId: seoScans.blogId,
+          domain: blogs.domain,
+          avgScore: avg(seoScans.overallScore),
+          bucket,
+        })
+        .from(seoScans)
+        .innerJoin(blogs, eq(seoScans.blogId, blogs.id))
+        .where(and(...conds))
+        .groupBy(seoScans.blogId, blogs.domain, bucket)
+        .orderBy(bucket);
+
+      const bySite = new Map<string, SeoHistorySite>();
+      for (const r of rows) {
+        const d = iso(r.bucket);
+        if (!d || r.avgScore == null) continue;
+        let site = bySite.get(r.blogId);
+        if (!site) {
+          site = { blogId: r.blogId, domain: r.domain, points: [] };
+          bySite.set(r.blogId, site);
+        }
+        site.points.push({ date: d, score: Math.round(Number(r.avgScore)) });
+      }
+      return { clientId, sites: Array.from(bySite.values()) };
+    }
+
+    // Default: raw per-scan points.
     const rows = await db
       .select({
         blogId: seoScans.blogId,

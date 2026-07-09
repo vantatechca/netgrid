@@ -335,17 +335,19 @@ per site per month). Sites with no scans in range are omitted.
 
 **Query parameters** (all optional):
 
-| Param    | Description |
-|----------|-------------|
-| `blogId` | Restrict to one site (UUID). |
-| `days`   | Window: last N days (`1`–`365`, clamped). Omit for all-time. |
-| `since`  | Window lower bound as ISO 8601. Ignored when `days` is set. |
+| Param         | Description |
+|---------------|-------------|
+| `granularity` | `scan` (default) = one point per individual scan; `week` = one point per ISO week, the average overall score for that week. |
+| `blogId`      | Restrict to one site (UUID). |
+| `days`        | Window: last N days (`1`–`365`, clamped). Omit for all-time. |
+| `since`       | Window lower bound as ISO 8601. Ignored when `days` is set. |
 
 **Response** `200`:
 
 ```json
 {
   "clientId": "96c4f390-67f5-4687-8376-8c7c400972a2",
+  "granularity": "scan",
   "sites": [
     {
       "blogId": "71fb73bd-ec69-491b-8026-0a0c3ea1d32f",
@@ -360,12 +362,16 @@ per site per month). Sites with no scans in range are omitted.
 }
 ```
 
+With `?granularity=week`, each `date` is the ISO week-start (Monday, UTC) and
+each `score` is that week's average overall score, rounded to a whole number.
+
 | Field                | Type          | Notes |
 |----------------------|---------------|-------|
+| `granularity`        | string        | echoes the requested bucket size (`scan` or `week`) |
 | `sites[].blogId`     | string (UUID) | site id |
 | `sites[].domain`     | string        | |
-| `sites[].points[].date`  | string    | ISO 8601, scan timestamp |
-| `sites[].points[].score` | number    | overall SEO score, 0–100 |
+| `sites[].points[].date`  | string    | ISO 8601 — scan timestamp (`scan`) or week-start (`week`) |
+| `sites[].points[].score` | number    | overall SEO score, 0–100 — per-scan value, or the week's average |
 
 **Errors:** `400` when `clientId` or `blogId` isn't a valid UUID.
 
@@ -395,6 +401,10 @@ curl -H "Authorization: Bearer $MARKETING_API_KEY" \
 # Daily traffic for the last 30 days
 curl -H "Authorization: Bearer $MARKETING_API_KEY" \
   "https://netgrid-16f6.onrender.com/api/v1/clients/96c4f390-67f5-4687-8376-8c7c400972a2/traffic?granularity=day&days=30"
+
+# Weekly-average SEO score history
+curl -H "Authorization: Bearer $MARKETING_API_KEY" \
+  "https://netgrid-16f6.onrender.com/api/v1/clients/96c4f390-67f5-4687-8376-8c7c400972a2/seo-history?granularity=week"
 
 # Network overview totals
 curl -H "Authorization: Bearer $MARKETING_API_KEY" \
