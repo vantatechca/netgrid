@@ -3,7 +3,7 @@
 import crypto from "crypto";
 import { db } from "@/lib/db";
 import { blogs, clients, generatedPosts } from "@/lib/db/schema";
-import { and, asc, desc, eq, gte, isNotNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, isNotNull, ne, or, sql } from "drizzle-orm";
 import { requireAdmin } from "@/lib/auth/helpers";
 import {
   generateContent,
@@ -293,14 +293,53 @@ function isBlogDueForPost(
   };
 }
 
-async function getRecentTitles(blogId: string, limit = 20): Promise<string[]> {
-  const rows = await db
-    .select({ title: generatedPosts.title })
-    .from(generatedPosts)
-    .where(eq(generatedPosts.blogId, blogId))
-    .orderBy(desc(generatedPosts.createdAt))
-    .limit(limit);
-  return rows.map((r) => r.title).filter((t): t is string => Boolean(t));
+/**
+ * Titles ideation should steer clear of: this blog's OWN recent titles (listed
+ * first so they survive ideateTopic's internal cap) PLUS its SIBLING blogs'
+ * recent titles (other blogs of the same client). Feeding the network's titles
+ * in is the cross-blog diversity guard — it stops a client's sites converging on
+ * the same topic when they publish around the same time, since the scraped
+ * keyword pool is shared client-wide. Deduped case-insensitively, own-first.
+ */
+export async function getRecentTitles(
+  blogId: string,
+  clientId: string,
+  opts: { own?: number; siblings?: number } = {},
+): Promise<string[]> {
+  const ownLimit = opts.own ?? 12;
+  const siblingLimit = opts.siblings ?? 12;
+
+  const [ownRows, siblingRows] = await Promise.all([
+    db
+      .select({ title: generatedPosts.title })
+      .from(generatedPosts)
+      .where(eq(generatedPosts.blogId, blogId))
+      .orderBy(desc(generatedPosts.createdAt))
+      .limit(ownLimit),
+    db
+      .select({ title: generatedPosts.title })
+      .from(generatedPosts)
+      .where(
+        and(
+          eq(generatedPosts.clientId, clientId),
+          ne(generatedPosts.blogId, blogId),
+        ),
+      )
+      .orderBy(desc(generatedPosts.createdAt))
+      .limit(siblingLimit),
+  ]);
+
+  const seen = new Set<string>();
+  const titles: string[] = [];
+  for (const r of [...ownRows, ...siblingRows]) {
+    const title = r.title?.trim();
+    if (!title) continue;
+    const key = title.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    titles.push(title);
+  }
+  return titles;
 }
 
 /**
@@ -434,7 +473,7 @@ async function runGenerateAndPublish(
   let keywords = input.keywords ?? [];
 
   if (!topic) {
-    const recentTitles = await getRecentTitles(blog.id);
+    const recentTitles = await getRecentTitles(blog.id, blog.clientId);
     const ideated = await ideateTopic(clientNiche, recentTitles, {
       verticalKey: verticalForPost?.key ?? null,
       styleProfile: styleProfile ?? undefined,
@@ -549,7 +588,7 @@ async function runGenerateAndPublish(
 
         // Re-ideate, excluding the failed topic. If ideation itself
         // throws, fall through to the outer catch.
-        const recent = await getRecentTitles(blog.id);
+        const recent = await getRecentTitles(blog.id, blog.clientId);
         const newIdea = await ideateTopic(
           clientNiche,
           [currentTopic, ...recent],
@@ -957,7 +996,7 @@ export async function suggestTopicForBlog(
 ): Promise<{ topic: string; keywords: string[] }> {
   await requireAdmin();
   const ctx = await resolveIdeationContext(blogId);
-  const recentTitles = await getRecentTitles(blogId);
+  const recentTitles = await getRecentTitles(blogId, ctx.blog.clientId);
   return ideateTopic(ctx.clientNiche, recentTitles, {
     verticalKey: ctx.verticalKey,
     styleProfile: ctx.styleProfile ?? undefined,

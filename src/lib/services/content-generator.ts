@@ -2571,7 +2571,7 @@ Return JSON only:
     ? `\n\nCONTENT BRIEF (operator instructions — every topic MUST fit this exactly; it overrides the niche's generic topics):\n${brief}`
     : "";
 
-  const user = `Recent titles on this site (avoid duplicating these):
+  const user = `Recent titles already used across this client's sites — avoid duplicating or closely echoing any of these (this includes sister sites in the same network, so the client's blogs don't converge on the same topic):
 ${recentList}${briefSection}${profileAnchorSection}${knowledgeSection}${newsSection}
 
 Suggest the next post's topic.`;
