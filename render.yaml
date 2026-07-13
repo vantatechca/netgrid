@@ -238,3 +238,20 @@ services:
         value: https://netgrid-16f6.onrender.com
       - key: CRON_SECRET
         sync: false
+
+  # Drip peptide location pages: generate up to each client's daily cap of
+  # pending (compound × location) pages per blog as full articles. Daily,
+  # 04:00 UTC — after the keyword refresh, before the day's traffic.
+  - type: cron
+    name: netgrid-cron-location-pages
+    runtime: docker
+    schedule: "0 4 * * *"
+    dockerfilePath: ./cron/Dockerfile
+    dockerContext: ./cron
+    envVars:
+      - key: CRON_PATH
+        value: /api/cron/location-pages
+      - key: APP_URL
+        value: https://netgrid-16f6.onrender.com
+      - key: CRON_SECRET
+        sync: false

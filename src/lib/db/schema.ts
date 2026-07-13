@@ -107,6 +107,11 @@ export const clients = pgTable("clients", {
   // Manual seed terms (newline/comma separated) fed to the keyword scraper
   // alongside the client's niche key-topics. See client_keywords.
   keywordSeeds: text("keyword_seeds"),
+  // Peptides-only programmatic location pages: target locations (newline/comma
+  // separated) + drip campaign controls. See peptide_location_targets.
+  peptideLocations: text("peptide_locations"),
+  locationCampaignEnabled: boolean("location_campaign_enabled").default(false).notNull(),
+  locationPagesPerDay: integer("location_pages_per_day").default(2).notNull(),
   // Post language control: "en" | "fr" | "en_fr" | null.
   //   en    → all posts English
   //   fr    → all posts French
@@ -628,6 +633,46 @@ export const clientKeywords = pgTable("client_keywords", {
 }, (table) => [
   uniqueIndex("client_keywords_client_keyword_idx").on(table.clientId, table.keyword),
   index("client_keywords_client_active_idx").on(table.clientId, table.isActive),
+]);
+
+// ─── peptide_location_targets ─────────────────────────────────────────────────
+//
+// Peptides-only programmatic long-tail location pages. One row = one
+// (blog compound × client location) page. A campaign builds the matrix as
+// "pending" rows; a daily drip cron generates up to the client's
+// locationPagesPerDay per blog as full unique articles through the normal
+// generator, so aggressive coverage rolls out slowly rather than as a burst of
+// thin doorway pages.
+
+export const peptideLocationTargets = pgTable("peptide_location_targets", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  blogId: uuid("blog_id")
+    .notNull()
+    .references(() => blogs.id, { onDelete: "cascade" }),
+  clientId: uuid("client_id")
+    .notNull()
+    .references(() => clients.id, { onDelete: "cascade" }),
+  compound: varchar("compound", { length: 120 }).notNull(),
+  location: varchar("location", { length: 160 }).notNull(),
+  // Templated title used as the generation topic (query-targeted).
+  title: varchar("title", { length: 500 }).notNull(),
+  // "pending" | "generated" | "failed"
+  status: varchar("status", { length: 16 }).notNull().default("pending"),
+  generatedPostId: uuid("generated_post_id").references(() => generatedPosts.id, {
+    onDelete: "set null",
+  }),
+  failureReason: text("failure_reason"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  generatedAt: timestamp("generated_at"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("peptide_location_targets_unique_idx").on(
+    table.blogId,
+    table.compound,
+    table.location,
+  ),
+  index("peptide_location_targets_blog_status_idx").on(table.blogId, table.status),
+  index("peptide_location_targets_client_idx").on(table.clientId),
 ]);
 
 // ─── Relations ──────────────────────────────────────────────────────────────
