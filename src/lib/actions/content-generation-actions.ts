@@ -378,7 +378,7 @@ async function getInternalLinkRefs(
 
 // ─── Core: generate + publish for one blog ──────────────────────────────────
 
-async function runGenerateAndPublish(
+export async function runGenerateAndPublish(
   input: GenerateAndPublishInput,
 ): Promise<GenerateAndPublishResult> {
   // 1. Load blog + client (for niche)
