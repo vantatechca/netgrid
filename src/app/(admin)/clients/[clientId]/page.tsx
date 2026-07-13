@@ -5,6 +5,7 @@ import { getBlogs } from "@/lib/actions/blog-actions";
 import { getSeoScans, getSeoIssues } from "@/lib/actions/seo-actions";
 import { getMessages } from "@/lib/actions/message-actions";
 import { listKnowledgeDocuments } from "@/lib/actions/knowledge-actions";
+import { listClientKeywords } from "@/lib/actions/keyword-actions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,6 +28,7 @@ import { BlogTable } from "@/components/blogs/blog-table";
 import { MessageThread } from "@/components/messages/message-thread";
 import { ClientForm } from "@/components/clients/client-form";
 import { KnowledgeBasePanel } from "@/components/clients/knowledge-base-panel";
+import { KeywordsPanel } from "@/components/clients/keywords-panel";
 import { CustomPromptCard } from "@/components/content/custom-prompt-card";
 import { getClientTrafficTotals } from "@/lib/actions/analytics-actions";
 import { ClientSeoIssues } from "@/components/seo/client-seo-issues";
@@ -36,6 +38,7 @@ import {
   BookOpen,
   FileText,
   Globe,
+  KeyRound,
   Lock,
   MessageSquare,
   Pencil,
@@ -46,7 +49,7 @@ interface ClientDetailPageProps {
   searchParams: { edit?: string; tab?: string };
 }
 
-const CLIENT_TABS = ["overview", "blogs", "seo", "knowledge", "messages"] as const;
+const CLIENT_TABS = ["overview", "blogs", "seo", "knowledge", "keywords", "messages"] as const;
 
 const statusVariant: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   active: "default",
@@ -151,7 +154,16 @@ export default async function ClientDetailPage({
   }
 
   // ─── DETAIL VIEW ──────────────────────────────────────────────────────────
-  const [client, stats, blogsResult, scansResult, issuesResult, messages, knowledgeDocs] =
+  const [
+    client,
+    stats,
+    blogsResult,
+    scansResult,
+    issuesResult,
+    messages,
+    knowledgeDocs,
+    keywords,
+  ] =
     (await Promise.all([
       getClient(clientId),
       getClientStats(clientId),
@@ -176,6 +188,7 @@ export default async function ClientDetailPage({
       })),
       getMessages({ clientId, pageSize: 200 }).catch(() => []),
       listKnowledgeDocuments(clientId).catch(() => []),
+      listClientKeywords(clientId).catch(() => []),
     ]).catch(() => {
       notFound();
     })) as [
@@ -186,6 +199,7 @@ export default async function ClientDetailPage({
       Awaited<ReturnType<typeof getSeoIssues>>,
       Awaited<ReturnType<typeof getMessages>>,
       Awaited<ReturnType<typeof listKnowledgeDocuments>>,
+      Awaited<ReturnType<typeof listClientKeywords>>,
     ];
 
   if (!client) notFound();
@@ -308,6 +322,10 @@ export default async function ClientDetailPage({
           <TabsTrigger value="knowledge">
             <BookOpen className="size-4" />
             Knowledge ({knowledgeDocs.length})
+          </TabsTrigger>
+          <TabsTrigger value="keywords">
+            <KeyRound className="size-4" />
+            Keywords ({keywords.length})
           </TabsTrigger>
           <TabsTrigger value="messages">
             <MessageSquare className="size-4" />
@@ -579,6 +597,15 @@ export default async function ClientDetailPage({
             clientId={client.id}
             documents={knowledgeDocs}
             blogs={blogsResult.blogs.map((b) => ({ id: b.id, domain: b.domain }))}
+          />
+        </TabsContent>
+
+        {/* Keywords Tab */}
+        <TabsContent value="keywords" className="pt-4">
+          <KeywordsPanel
+            clientId={client.id}
+            keywords={keywords}
+            initialSeeds={client.keywordSeeds ?? ""}
           />
         </TabsContent>
 

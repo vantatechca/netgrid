@@ -7,6 +7,7 @@ import { activityLog, blogs, clients, knowledgeDocuments } from "@/lib/db/schema
 import { requireAdmin } from "@/lib/auth/helpers";
 import { convertToMarkdown } from "@/lib/services/knowledge-converter";
 import { extractKnowledge } from "@/lib/services/knowledge-extractor";
+import { topActiveClientKeywords } from "@/lib/content/client-keywords";
 
 // Hard ceiling on upload size — large enough for briefs/sheets/PDFs, small
 // enough to keep conversion and storage sane.
@@ -331,22 +332,28 @@ export async function getActiveKnowledgeForBlog(
 
   if (!blog) return { keywords: [], topics: [], summaries: [] };
 
-  const rows = await db
-    .select({
-      extractedKeywords: knowledgeDocuments.extractedKeywords,
-      extractedTopics: knowledgeDocuments.extractedTopics,
-      summary: knowledgeDocuments.summary,
-    })
-    .from(knowledgeDocuments)
-    .where(
-      and(
-        eq(knowledgeDocuments.clientId, blog.clientId),
-        eq(knowledgeDocuments.isActive, true),
-        or(isNull(knowledgeDocuments.blogId), eq(knowledgeDocuments.blogId, blogId)),
+  const [rows, scrapedKeywords] = await Promise.all([
+    db
+      .select({
+        extractedKeywords: knowledgeDocuments.extractedKeywords,
+        extractedTopics: knowledgeDocuments.extractedTopics,
+        summary: knowledgeDocuments.summary,
+      })
+      .from(knowledgeDocuments)
+      .where(
+        and(
+          eq(knowledgeDocuments.clientId, blog.clientId),
+          eq(knowledgeDocuments.isActive, true),
+          or(isNull(knowledgeDocuments.blogId), eq(knowledgeDocuments.blogId, blogId)),
+        ),
       ),
-    );
+    // Auto-scraped client keywords (top-ranked, active). Prepended below so they
+    // take the first slots within ideation's keyword cap.
+    topActiveClientKeywords(blog.clientId, 40),
+  ]);
 
-  const keywords = new Set<string>();
+  // Scraped keywords first (intentional targeting), then document-derived ones.
+  const keywords = new Set<string>(scrapedKeywords);
   const topics = new Set<string>();
   const summaries: string[] = [];
 
