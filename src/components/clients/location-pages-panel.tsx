@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/table";
 import {
   updateClientLocations,
+  updateClientDosages,
   setLocationCampaign,
   buildLocationMatrix,
   retryFailedLocationTargets,
@@ -48,10 +49,11 @@ export function LocationPagesPanel({
 }) {
   const router = useRouter();
   const [locations, setLocations] = useState(view.locations);
+  const [dosages, setDosages] = useState(view.dosages);
   const [enabled, setEnabled] = useState(view.enabled);
   const [perDay, setPerDay] = useState(String(view.perDay));
   const [pending, start] = useTransition();
-  const [busy, setBusy] = useState<null | "save" | "build" | "retry" | "now">(null);
+  const [busy, setBusy] = useState<null | "save" | "dosages" | "build" | "retry" | "now">(null);
 
   if (!view.isPeptides) {
     return (
@@ -66,6 +68,15 @@ export function LocationPagesPanel({
   async function saveLocations() {
     setBusy("save");
     const res = await updateClientLocations(clientId, locations);
+    setBusy(null);
+    if (res.success) toast.success(res.message);
+    else toast.error(res.message);
+    router.refresh();
+  }
+
+  async function saveDosages() {
+    setBusy("dosages");
+    const res = await updateClientDosages(clientId, dosages);
     setBusy(null);
     if (res.success) toast.success(res.message);
     else toast.error(res.message);
@@ -129,6 +140,8 @@ export function LocationPagesPanel({
             crosses each blog&apos;s locked peptide compounds with these
             locations — each pair becomes one long-tail page, generated as a full
             unique article and dripped out at your daily cap (not dumped at once).
+            Each page hyperlinks its buy-phrases to the site&apos;s own money
+            domain (the funnel).
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -160,6 +173,35 @@ export function LocationPagesPanel({
               Save locations first, then build. Building is safe to re-run — it
               only adds new combinations.
             </span>
+          </div>
+
+          <div className="space-y-2 border-t pt-4">
+            <p className="text-sm font-medium">
+              Dosages{" "}
+              <span className="font-normal text-muted-foreground">
+                (optional, one per line)
+              </span>
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Leave empty for plain compound × location pages. Add dosages (e.g.
+              5mg, 10mg) to ALSO build a page per dosage — the matrix keeps the
+              no-dosage page and adds one for each dosage.
+            </p>
+            <Textarea
+              rows={3}
+              value={dosages}
+              onChange={(e) => setDosages(e.target.value)}
+              placeholder={"5mg\n10mg"}
+              className="font-mono text-xs"
+            />
+            <Button variant="outline" size="sm" onClick={saveDosages} disabled={busy === "dosages"}>
+              {busy === "dosages" ? (
+                <Loader2 className="size-4 animate-spin" data-icon="inline-start" />
+              ) : (
+                <Save className="size-4" data-icon="inline-start" />
+              )}
+              Save dosages
+            </Button>
           </div>
 
           <div className="flex flex-wrap items-center gap-6 border-t pt-4">
@@ -248,6 +290,7 @@ export function LocationPagesPanel({
                 <TableRow>
                   <TableHead>Title</TableHead>
                   <TableHead>Compound</TableHead>
+                  <TableHead>Dosage</TableHead>
                   <TableHead>Location</TableHead>
                   <TableHead className="w-[110px]">Status</TableHead>
                 </TableRow>
@@ -259,6 +302,7 @@ export function LocationPagesPanel({
                       {t.title}
                     </TableCell>
                     <TableCell className="text-muted-foreground">{t.compound}</TableCell>
+                    <TableCell className="text-muted-foreground">{t.dosage || "—"}</TableCell>
                     <TableCell className="text-muted-foreground">{t.location}</TableCell>
                     <TableCell>
                       <Badge
