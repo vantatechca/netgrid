@@ -10,7 +10,10 @@ import {
   resolveShopifyBlogId,
   type PlatformBlog,
 } from "@/lib/services/platform-client";
-import { regenerateAndUpdatePost } from "@/lib/actions/content-generation-actions";
+import {
+  regenerateAndUpdatePost,
+  getRecentTitles,
+} from "@/lib/actions/content-generation-actions";
 import { getActiveKnowledgeForBlog } from "@/lib/actions/knowledge-actions";
 import {
   testConnection as shopifyTestConnection,
@@ -788,17 +791,13 @@ export async function generateBlogPost(
   const knowledge = await getActiveKnowledgeForBlog(input.blogId);
 
   if (!topic) {
-    const recent = await db
-      .select({ title: generatedPosts.title })
-      .from(generatedPosts)
-      .where(eq(generatedPosts.blogId, input.blogId))
-      .orderBy(desc(generatedPosts.createdAt))
-      .limit(20);
+    // Own + sibling-blog recent titles, so ideation avoids network-wide repeats.
+    const recent = await getRecentTitles(input.blogId, blog.clientId);
 
     try {
       const idea = await ideateTopic(
         blog.niche,
-        recent.map((r) => r.title).filter((t): t is string => !!t),
+        recent,
         {
           verticalKey: verticalForPost?.key ?? null,
           styleProfile: styleProfile ?? undefined,
