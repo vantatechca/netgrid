@@ -110,6 +110,8 @@ export const clients = pgTable("clients", {
   // Peptides-only programmatic location pages: target locations (newline/comma
   // separated) + drip campaign controls. See peptide_location_targets.
   peptideLocations: text("peptide_locations"),
+  // Optional global dosage list (newline/comma separated) for location pages.
+  peptideDosages: text("peptide_dosages"),
   locationCampaignEnabled: boolean("location_campaign_enabled").default(false).notNull(),
   locationPagesPerDay: integer("location_pages_per_day").default(2).notNull(),
   // Post language control: "en" | "fr" | "en_fr" | null.
@@ -654,6 +656,8 @@ export const peptideLocationTargets = pgTable("peptide_location_targets", {
     .references(() => clients.id, { onDelete: "cascade" }),
   compound: varchar("compound", { length: 120 }).notNull(),
   location: varchar("location", { length: 160 }).notNull(),
+  // Optional dosage ('' = none). Part of the uniqueness key.
+  dosage: varchar("dosage", { length: 40 }).notNull().default(""),
   // Templated title used as the generation topic (query-targeted).
   title: varchar("title", { length: 500 }).notNull(),
   // "pending" | "generated" | "failed"
@@ -669,6 +673,7 @@ export const peptideLocationTargets = pgTable("peptide_location_targets", {
   uniqueIndex("peptide_location_targets_unique_idx").on(
     table.blogId,
     table.compound,
+    table.dosage,
     table.location,
   ),
   index("peptide_location_targets_blog_status_idx").on(table.blogId, table.status),

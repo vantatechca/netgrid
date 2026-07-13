@@ -456,6 +456,14 @@ export interface GenerateOptions {
    */
   cta?: { label: string; url: string; placement?: string };
   /**
+   * In-body contextual "money link": hyperlink the first occurrence of one of
+   * `terms` (e.g. "buy bpc-157", the compound) in the opening paragraph to
+   * `url`. Used by peptide location pages to link buy-phrases to the site's own
+   * domain (the funnel). Injected deterministically — separate from the CTA
+   * button. No-op when unset or no term is found.
+   */
+  buyLink?: { url: string; terms: string[] };
+  /**
    * The generated_posts row id for this post. When set, the CTA is routed
    * through the tracked redirect (/r/{postId}) and a page-view pixel is
    * appended, so clicks and views are logged. Omit to skip tracking.
@@ -2381,6 +2389,48 @@ function injectCta(
   return out;
 }
 
+/** Escape a string for use inside a RegExp. */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Hyperlink the first occurrence of one of `terms` (priority order) in the
+ * article's OPENING paragraph to `url`. Scoped to the first <p> — and skipped
+ * if that paragraph already contains a link — so we add exactly one clean
+ * contextual link near the top without ever nesting anchors or touching
+ * headings/markup. Returns the body unchanged when no term is found.
+ */
+function injectMoneyLink(
+  body: string,
+  url: string,
+  terms: string[],
+  seed?: string,
+): string {
+  if (!url || !/^https?:\/\//i.test(url)) return body;
+  const pMatch = body.match(/<p[^>]*>([\s\S]*?)<\/p>/i);
+  if (!pMatch) return body;
+  const pInner = pMatch[1];
+  if (/<a\b/i.test(pInner)) return body; // opening paragraph already links out
+
+  const rel = relForBlog(seed);
+  const safeUrl = url.replace(/"/g, "%22");
+  for (const term of terms) {
+    const t = term.trim();
+    if (!t) continue;
+    // Match the term with word-ish boundaries so we don't split a larger word.
+    const re = new RegExp(`(^|[\\s(>"'])(${escapeRegExp(t)})(?=[\\s.,;:)!?<"']|$)`, "i");
+    const m = re.exec(pInner);
+    if (!m) continue;
+    const start = m.index + m[1].length;
+    const matched = pInner.slice(start, start + m[2].length);
+    const anchor = `<a href="${safeUrl}" target="_blank" rel="${rel}">${matched}</a>`;
+    const newInner = pInner.slice(0, start) + anchor + pInner.slice(start + m[2].length);
+    return body.replace(pInner, newInner);
+  }
+  return body;
+}
+
 /**
  * Render the client's Knowledge Base summaries into a system-prompt block.
  * Returns "" when there's nothing to inject.
@@ -3127,6 +3177,14 @@ The "content" field is the full HTML article body — at least ${MIN_WORDS} word
       ? { ...opts.cta, url: ctaRedirectUrl(opts.postId) }
       : opts.cta;
   body = injectCta(body, ctaForInject, opts.blogSeed);
+
+  // In-body buy-phrase money link (funnel) — link the first buy-phrase/compound
+  // mention to the site's own domain. Routed through the tracked redirect when
+  // the post id is known, so these clicks are logged like CTA clicks.
+  if (opts.buyLink && opts.buyLink.terms.length > 0) {
+    const buyUrl = opts.postId ? ctaRedirectUrl(opts.postId) : opts.buyLink.url;
+    body = injectMoneyLink(body, buyUrl, opts.buyLink.terms, opts.blogSeed);
+  }
 
   // Page-view tracking pixel — appended once we know the post id so views on
   // the published page are logged. No-op without a post id.

@@ -34,17 +34,28 @@ function titleCase(s: string): string {
     .join(" ");
 }
 
-/** The query-targeted title for one (compound, location) page. */
-export function buildLocationTitle(compound: string, location: string): string {
-  const c = titleCase(compound);
+/** The query-targeted title for one page. `dosage` optional ('' = none). */
+export function buildLocationTitle(
+  compound: string,
+  location: string,
+  dosage?: string,
+): string {
+  const d = (dosage ?? "").trim();
+  const c = d ? `${titleCase(compound)} ${d}` : titleCase(compound);
   const l = titleCase(location);
-  const template = TITLE_TEMPLATES[hash(`${compound}|${location}`) % TITLE_TEMPLATES.length];
+  const template =
+    TITLE_TEMPLATES[hash(`${compound}|${d}|${location}`) % TITLE_TEMPLATES.length];
   return template.replace(/\{c\}/g, c).replace(/\{l\}/g, l);
 }
 
-/** Target keyword variants (the qualifier dimension folded into keywords). */
-export function buildLocationKeywords(compound: string, location: string): string[] {
-  const c = compound.trim().toLowerCase();
+/** Target keyword variants (qualifier folded into keywords). `dosage` optional. */
+export function buildLocationKeywords(
+  compound: string,
+  location: string,
+  dosage?: string,
+): string[] {
+  const d = (dosage ?? "").trim().toLowerCase();
+  const c = d ? `${compound.trim().toLowerCase()} ${d}` : compound.trim().toLowerCase();
   const l = location.trim().toLowerCase();
   return [
     `${c} ${l}`,
@@ -53,6 +64,22 @@ export function buildLocationKeywords(compound: string, location: string): strin
     `${c} for sale ${l}`,
     `where to buy ${c} ${l}`,
   ];
+}
+
+/** Split a global dosage field (newlines and/or commas) into clean tokens. */
+export function parseDosages(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const tok of raw.split(/[\n,]+/)) {
+    const d = tok.trim();
+    if (!d) continue;
+    const key = d.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(d);
+  }
+  return out;
 }
 
 /**
