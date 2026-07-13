@@ -104,6 +104,9 @@ export const clients = pgTable("clients", {
   ctaUrl: varchar("cta_url", { length: 1000 }),
   // Where the button appears: "bottom" | "top_bottom" | "top_middle_bottom".
   ctaPlacement: varchar("cta_placement", { length: 40 }).default("bottom"),
+  // Manual seed terms (newline/comma separated) fed to the keyword scraper
+  // alongside the client's niche key-topics. See client_keywords.
+  keywordSeeds: text("keyword_seeds"),
   // Post language control: "en" | "fr" | "en_fr" | null.
   //   en    → all posts English
   //   fr    → all posts French
@@ -592,6 +595,39 @@ export const niches = pgTable("niches", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [
   index("niches_key_idx").on(table.key),
+]);
+
+// ─── client_keywords ──────────────────────────────────────────────────────────
+//
+// Auto-scraped keyword sets bound to a client's content generation. Discovered
+// per client from the client's niche key-topics + manual seeds (see
+// keyword-scraper.ts). When active, the top-ranked keywords are merged into the
+// ideation keyword pool so every generated post targets them.
+//
+// searchVolume / cpc are nullable — Google Autocomplete supplies neither, but
+// the columns keep the store ready for volume-bearing providers so ranking can
+// use real volume without a schema change. For volume-less sources, hitCount
+// (how many seed queries surfaced the term) + bestPosition act as the ranking
+// proxy.
+
+export const clientKeywords = pgTable("client_keywords", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  clientId: uuid("client_id")
+    .notNull()
+    .references(() => clients.id, { onDelete: "cascade" }),
+  keyword: varchar("keyword", { length: 200 }).notNull(),
+  searchVolume: integer("search_volume"),
+  cpc: decimal("cpc", { precision: 10, scale: 2 }),
+  source: varchar("source", { length: 32 }).notNull().default("google_autocomplete"),
+  hitCount: integer("hit_count").notNull().default(1),
+  bestPosition: integer("best_position"),
+  isActive: boolean("is_active").notNull().default(true),
+  fetchedAt: timestamp("fetched_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("client_keywords_client_keyword_idx").on(table.clientId, table.keyword),
+  index("client_keywords_client_active_idx").on(table.clientId, table.isActive),
 ]);
 
 // ─── Relations ──────────────────────────────────────────────────────────────

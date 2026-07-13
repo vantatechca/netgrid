@@ -221,3 +221,20 @@ services:
         value: https://netgrid-16f6.onrender.com
       - key: CRON_SECRET
         sync: false
+
+  # Re-scrape per-client keyword sets (Google Autocomplete) so the keywords
+  # bound to content generation stay fresh. Weekly, 03:00 UTC Monday — off-peak
+  # and staggered from the news refresh.
+  - type: cron
+    name: netgrid-cron-refresh-keywords
+    runtime: docker
+    schedule: "0 3 * * 1"
+    dockerfilePath: ./cron/Dockerfile
+    dockerContext: ./cron
+    envVars:
+      - key: CRON_PATH
+        value: /api/cron/refresh-keywords
+      - key: APP_URL
+        value: https://netgrid-16f6.onrender.com
+      - key: CRON_SECRET
+        sync: false
