@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Loader2, MapPin, RefreshCw, Save, Hammer } from "lucide-react";
+import { Loader2, MapPin, Play, RefreshCw, Save, Hammer } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -29,6 +29,7 @@ import {
   setLocationCampaign,
   buildLocationMatrix,
   retryFailedLocationTargets,
+  generateLocationPagesNow,
   type LocationCampaignView,
 } from "@/lib/actions/location-actions";
 
@@ -50,7 +51,7 @@ export function LocationPagesPanel({
   const [enabled, setEnabled] = useState(view.enabled);
   const [perDay, setPerDay] = useState(String(view.perDay));
   const [pending, start] = useTransition();
-  const [busy, setBusy] = useState<null | "save" | "build" | "retry">(null);
+  const [busy, setBusy] = useState<null | "save" | "build" | "retry" | "now">(null);
 
   if (!view.isPeptides) {
     return (
@@ -94,6 +95,23 @@ export function LocationPagesPanel({
     setBusy(null);
     toast.success(`Requeued ${res.requeued} failed page${res.requeued === 1 ? "" : "s"}.`);
     router.refresh();
+  }
+
+  async function generateNow() {
+    setBusy("now");
+    const toastId = toast.loading("Generating a few location pages…", {
+      description: "Full articles — this can take a minute.",
+    });
+    try {
+      const res = await generateLocationPagesNow(clientId);
+      if (res.success) toast.success(res.message, { id: toastId });
+      else toast.error(res.message, { id: toastId });
+      router.refresh();
+    } catch {
+      toast.error("Generation failed", { id: toastId });
+    } finally {
+      setBusy(null);
+    }
   }
 
   const { counts } = view;
@@ -185,16 +203,28 @@ export function LocationPagesPanel({
                 {counts.total} page{counts.total === 1 ? "" : "s"} in the matrix.
               </CardDescription>
             </div>
-            {counts.failed > 0 && (
-              <Button variant="outline" size="sm" onClick={retry} disabled={busy === "retry"}>
-                {busy === "retry" ? (
-                  <Loader2 className="size-4 animate-spin" data-icon="inline-start" />
-                ) : (
-                  <RefreshCw className="size-4" data-icon="inline-start" />
-                )}
-                Retry {counts.failed} failed
-              </Button>
-            )}
+            <div className="flex items-center gap-2">
+              {counts.pending > 0 && (
+                <Button size="sm" onClick={generateNow} disabled={busy === "now"}>
+                  {busy === "now" ? (
+                    <Loader2 className="size-4 animate-spin" data-icon="inline-start" />
+                  ) : (
+                    <Play className="size-4" data-icon="inline-start" />
+                  )}
+                  Generate now
+                </Button>
+              )}
+              {counts.failed > 0 && (
+                <Button variant="outline" size="sm" onClick={retry} disabled={busy === "retry"}>
+                  {busy === "retry" ? (
+                    <Loader2 className="size-4 animate-spin" data-icon="inline-start" />
+                  ) : (
+                    <RefreshCw className="size-4" data-icon="inline-start" />
+                  )}
+                  Retry {counts.failed} failed
+                </Button>
+              )}
+            </div>
           </div>
         </CardHeader>
         <CardContent>
