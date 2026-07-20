@@ -94,6 +94,24 @@ export function sanitizeForEmbedding(
   return [title?.trim(), text].filter(Boolean).join(". ");
 }
 
+/**
+ * Stringify an error including any axios HTTP response body — the raw
+ * "Request failed with status code 400" message hides Shopify's actual reason
+ * (invalid_client, bad API key, "exceeded ... rate limit", etc.), which is what
+ * we need to tell a config problem from throttling.
+ */
+function errDetail(err: unknown): string {
+  const base = err instanceof Error ? err.message : String(err);
+  const resp = (err as { response?: { status?: number; data?: unknown } })
+    ?.response;
+  if (resp?.data != null) {
+    const body =
+      typeof resp.data === "string" ? resp.data : JSON.stringify(resp.data);
+    return `${base} — ${body.slice(0, 300)}`;
+  }
+  return base;
+}
+
 // ─── HTML helpers ────────────────────────────────────────────────────────────
 
 function escapeHtml(s: string): string {
@@ -349,10 +367,7 @@ export async function applyRelatedLinks(postId: string): Promise<ApplyResult> {
         ok: false,
         count: 0,
         changed: false,
-        reason:
-          err instanceof Error
-            ? `Blog id resolve failed: ${err.message}`
-            : "Could not resolve Shopify blog id",
+        reason: `Blog id resolve failed: ${errDetail(err)}`,
       };
     }
   }
@@ -603,7 +618,7 @@ export async function runSemanticLinkingBackfill(options: {
       // A platform API throwing (e.g. axios 4xx) must not abort the whole
       // run — record it and move on to the next post.
       linkFailed++;
-      record("link", row.id, err instanceof Error ? err.message : "link threw");
+      record("link", row.id, errDetail(err));
     }
     // Gentle throttle so a batch doesn't burst the platform's rate limit.
     await sleep(LINK_THROTTLE_MS);
