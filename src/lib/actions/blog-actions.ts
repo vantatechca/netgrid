@@ -68,6 +68,7 @@ import { publishPost as platformPublishPost } from "@/lib/services/platform-clie
 import * as wp from "@/lib/services/wp-client";
 import { pingIndexNowFireAndForget } from "@/lib/services/index-now-pinger";
 import { scanPostAfterPublishFireAndForget } from "@/lib/services/post-seo-runner";
+import { relinkAfterPublishFireAndForget } from "@/lib/services/semantic-linking";
 import { resolveNicheConfig } from "@/lib/content/niche-config-db";
 import { effectiveBlogCta } from "@/lib/content/cta-target";
 import { resolveNextPostLanguage } from "@/lib/content/post-language";
@@ -1197,6 +1198,11 @@ export async function publishGeneratedPost(
     // Per-post SEO scan — once a post is live, audit that specific page.
     // Fire-and-forget so a slow/blocked scan never delays the publish.
     scanPostAfterPublishFireAndForget(generatedPostId);
+
+    // Semantic linking — embed this post and inject a "Related posts" block
+    // (and, on Shopify, the related-posts metafield), plus refresh its
+    // neighbours' links. Fire-and-forget; no-op when OPENAI_API_KEY is unset.
+    relinkAfterPublishFireAndForget(generatedPostId);
   } else {
     await db
       .update(generatedPosts)
@@ -1308,7 +1314,11 @@ export async function regenerateBlogPost(
   try {
     const r = await regenerateAndUpdatePost(generatedPostId);
     // The live page changed in place — re-audit it. Fire-and-forget.
-    if (r.success) scanPostAfterPublishFireAndForget(generatedPostId);
+    if (r.success) {
+      scanPostAfterPublishFireAndForget(generatedPostId);
+      // Body changed → re-embed and refresh related links.
+      relinkAfterPublishFireAndForget(generatedPostId);
+    }
     return { success: r.success, message: r.message };
   } catch (e) {
     return {

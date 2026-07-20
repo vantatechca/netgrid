@@ -18,6 +18,7 @@ export interface ModelSettings {
   fixModel: string;
   deepseekConfigured: boolean;
   anthropicConfigured: boolean;
+  openaiConfigured: boolean;
 }
 
 export async function getModelSettings(): Promise<ModelSettings> {
@@ -31,6 +32,8 @@ export async function getModelSettings(): Promise<ModelSettings> {
     fixModel,
     deepseekConfigured: Boolean(process.env.DEEPSEEK_API_KEY),
     anthropicConfigured: Boolean(process.env.ANTHROPIC_API_KEY),
+    // OpenAI powers semantic-linking embeddings (text-embedding-3-small).
+    openaiConfigured: Boolean(process.env.OPENAI_API_KEY),
   };
 }
 
