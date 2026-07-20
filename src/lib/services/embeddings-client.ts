@@ -166,3 +166,40 @@ export async function generateEmbedding(input: string): Promise<number[]> {
   const [vec] = await generateEmbeddings([input]);
   return vec;
 }
+
+// ─── Provider seam ───────────────────────────────────────────────────────────
+// A tiny abstraction so a second embedding backend (e.g. a local
+// @xenova/transformers bge-small model, 384-dim) can be dropped in later
+// without touching the linking service. Selected via EMBEDDING_MODE. Today
+// only "openai" is implemented; "local" fails loudly rather than silently
+// mis-embedding, so a misconfiguration is obvious.
+
+export interface EmbeddingProvider {
+  /** Stored in generated_posts.embedding_model for audit / re-embed decisions. */
+  readonly model: string;
+  readonly dimensions: number;
+  configured(): boolean;
+  embed(inputs: string[]): Promise<number[][]>;
+}
+
+export type EmbeddingMode = "openai" | "local";
+
+export function activeEmbeddingMode(): EmbeddingMode {
+  return (process.env.EMBEDDING_MODE ?? "openai").toLowerCase() === "local"
+    ? "local"
+    : "openai";
+}
+
+export function getEmbeddingProvider(): EmbeddingProvider {
+  if (activeEmbeddingMode() === "local") {
+    throw new EmbeddingError(
+      "EMBEDDING_MODE=local is not implemented yet — unset EMBEDDING_MODE to use OpenAI embeddings.",
+    );
+  }
+  return {
+    model: embeddingModel(),
+    dimensions: EMBEDDING_DIMENSIONS,
+    configured: embeddingsConfigured,
+    embed: generateEmbeddings,
+  };
+}

@@ -26,11 +26,17 @@ export async function GET(request: Request) {
   const limitParam = url.searchParams.get("limit");
   const blogId = url.searchParams.get("blogId") ?? undefined;
   const limit = limitParam !== null ? Number(limitParam) : undefined;
+  // ?refresh=1 re-links already-linked posts (for a one-off rescore after
+  // tuning). The scheduled cron omits it and only does new work.
+  const refresh = ["1", "true", "yes"].includes(
+    (url.searchParams.get("refresh") ?? "").toLowerCase(),
+  );
 
   try {
     const result = await runSemanticLinkingBackfill({
       limit: Number.isFinite(limit) ? limit : undefined,
       blogId,
+      refresh,
     });
     return NextResponse.json(result);
   } catch (error) {
