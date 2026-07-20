@@ -500,13 +500,17 @@ export async function runSemanticLinkingBackfill(options: {
 
   let tsvBackfilled = 0;
   for (const row of toTsv) {
-    const text = sanitizeForEmbedding(row.title, row.body);
-    if (!text) continue;
-    await db
-      .update(generatedPosts)
-      .set({ searchTsv: sql`to_tsvector('english', ${text})` })
-      .where(eq(generatedPosts.id, row.id));
-    tsvBackfilled++;
+    try {
+      const text = sanitizeForEmbedding(row.title, row.body);
+      if (!text) continue;
+      await db
+        .update(generatedPosts)
+        .set({ searchTsv: sql`to_tsvector('english', ${text})` })
+        .where(eq(generatedPosts.id, row.id));
+      tsvBackfilled++;
+    } catch (err) {
+      record("embed", row.id, err instanceof Error ? err.message : "tsv backfill failed");
+    }
   }
 
   // 1. Embed published posts missing an embedding.
@@ -554,11 +558,18 @@ export async function runSemanticLinkingBackfill(options: {
   let linked = 0;
   let linkFailed = 0;
   for (const row of toLink) {
-    const res = await applyRelatedLinks(row.id);
-    if (res.ok) linked++;
-    else {
+    try {
+      const res = await applyRelatedLinks(row.id);
+      if (res.ok) linked++;
+      else {
+        linkFailed++;
+        record("link", row.id, res.reason ?? "unknown error");
+      }
+    } catch (err) {
+      // A platform API throwing (e.g. axios 4xx) must not abort the whole
+      // run — record it and move on to the next post.
       linkFailed++;
-      record("link", row.id, res.reason ?? "unknown error");
+      record("link", row.id, err instanceof Error ? err.message : "link threw");
     }
   }
 
