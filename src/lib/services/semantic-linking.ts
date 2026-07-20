@@ -20,16 +20,26 @@ import * as platform from "@/lib/services/platform-client";
 import type { PlatformBlog } from "@/lib/services/platform-client";
 import {
   embeddingsConfigured,
-  embeddingModel,
-  generateEmbedding,
+  getEmbeddingProvider,
 } from "@/lib/services/embeddings-client";
 
 // ─── Config (env-overridable) ────────────────────────────────────────────────
 
-/** Cosine similarity a candidate must exceed to count as "related". */
+// Hybrid score = alpha * sparse(full-text) + (1 - alpha) * dense(cosine).
+// A candidate must exceed `threshold` on that blended 0-1 score to be linked.
+// Note the threshold lives on the *hybrid* scale (default 0.55), which is a
+// different distribution from a pure-cosine cutoff.
+
+/** Minimum blended hybrid score a candidate must exceed to be linked. */
 function threshold(): number {
   const v = Number(process.env.SEMANTIC_LINK_THRESHOLD);
-  return Number.isFinite(v) && v > 0 && v < 1 ? v : 0.75;
+  return Number.isFinite(v) && v > 0 && v < 1 ? v : 0.55;
+}
+
+/** Weight on the sparse (full-text) signal; dense gets (1 - alpha). */
+function alpha(): number {
+  const v = Number(process.env.SEMANTIC_LINK_ALPHA);
+  return Number.isFinite(v) && v >= 0 && v <= 1 ? v : 0.3;
 }
 
 /** Max related posts to link per article. */
@@ -157,13 +167,17 @@ export async function embedPost(
   if (!text) return { ok: false, reason: "Nothing to embed after sanitize" };
 
   try {
-    const vector = await generateEmbedding(text);
+    const provider = getEmbeddingProvider();
+    const [vector] = await provider.embed([text]);
     await db
       .update(generatedPosts)
       .set({
         embedding: vector,
-        embeddingModel: embeddingModel(),
+        embeddingModel: provider.model,
         embeddedAt: new Date(),
+        // Sparse half of the hybrid score: full-text vector over the same
+        // sanitized text. Set here so dense + sparse always stay in sync.
+        searchTsv: sql`to_tsvector('english', ${text})`,
         updatedAt: new Date(),
       })
       .where(eq(generatedPosts.id, postId));
@@ -176,31 +190,59 @@ export async function embedPost(
   }
 }
 
-// ─── Similarity search ───────────────────────────────────────────────────────
+// ─── Hybrid similarity search (dense cosine + sparse full-text) ───────────────
 
 /**
- * Find posts on the SAME blog most similar to the given post. Scoped to
- * published posts that have a live URL and an embedding, excluding the post
- * itself, above the configured cosine threshold. The target embedding is read
- * in-SQL via a subquery so we never ship a 1536-float vector through JS.
+ * Build the full-text query string for the sparse signal from the target
+ * post's title + keywords (kept tight so ranking keys on real topic terms, not
+ * every word in a long body).
+ */
+function buildQueryText(title: string | null, keywords: unknown): string {
+  const kw = Array.isArray(keywords)
+    ? keywords.filter((k): k is string => typeof k === "string" && k.trim() !== "")
+    : [];
+  return [title ?? "", ...kw].join(" ").trim();
+}
+
+/**
+ * Find posts on the SAME blog most related to the given post using a HYBRID
+ * score: dense cosine similarity (pgvector) blended with the normalized sparse
+ * full-text rank (Postgres FTS, our TF-IDF equivalent).
+ *
+ *   score = alpha * sparseNorm + (1 - alpha) * dense
+ *
+ * Scoped to published posts with a live URL and an embedding, excluding the
+ * post itself. Candidates' raw dense + sparse scores are computed in SQL (no
+ * vectors shipped to JS); sparse is min-maxed and blended in JS, then filtered
+ * by the hybrid threshold and truncated to maxLinks.
  */
 export async function findRelated(postId: string): Promise<RelatedPost[]> {
   const [post] = await db
-    .select({ blogId: generatedPosts.blogId })
+    .select({
+      blogId: generatedPosts.blogId,
+      title: generatedPosts.title,
+      keywords: generatedPosts.keywords,
+    })
     .from(generatedPosts)
     .where(eq(generatedPosts.id, postId))
     .limit(1);
   if (!post) return [];
 
   const targetEmbedding = sql`(select ${generatedPosts.embedding} from ${generatedPosts} where ${generatedPosts.id} = ${postId})`;
-  const similarity = sql<number>`1 - (${generatedPosts.embedding} <=> ${targetEmbedding})`;
+  const queryText = buildQueryText(post.title, post.keywords);
+  const tsQuery = sql`websearch_to_tsquery('english', ${queryText})`;
+
+  // Dense (0-1 cosine similarity) and raw sparse (ts_rank) per candidate.
+  const dense = sql<number>`1 - (${generatedPosts.embedding} <=> ${targetEmbedding})`;
+  const sparse = sql<number>`coalesce(ts_rank(${generatedPosts.searchTsv}, ${tsQuery}), 0)`;
 
   const rows = await db
     .select({
       id: generatedPosts.id,
       title: generatedPosts.title,
       url: generatedPosts.externalPostUrl,
-      similarity,
+      dense,
+      sparse,
     })
     .from(generatedPosts)
     .where(
@@ -210,19 +252,34 @@ export async function findRelated(postId: string): Promise<RelatedPost[]> {
         eq(generatedPosts.status, "published"),
         isNotNull(generatedPosts.embedding),
         isNotNull(generatedPosts.externalPostUrl),
-        sql`1 - (${generatedPosts.embedding} <=> ${targetEmbedding}) > ${threshold()}`,
       ),
-    )
-    .orderBy(sql`${generatedPosts.embedding} <=> ${targetEmbedding} asc`)
-    .limit(maxLinks());
+    );
+
+  // Normalize sparse to 0-1 across the candidate set (dense is already 0-1),
+  // then blend. Done in JS so the normalization base is the actual candidates.
+  const maxSparse = rows.reduce((m, r) => Math.max(m, Number(r.sparse) || 0), 0);
+  const a = alpha();
+  const th = threshold();
 
   return rows
-    .filter((r) => r.title && r.url)
+    .map((r) => {
+      const d = Number(r.dense) || 0;
+      const s = maxSparse > 0 ? (Number(r.sparse) || 0) / maxSparse : 0;
+      return {
+        id: r.id,
+        title: r.title,
+        url: r.url,
+        score: a * s + (1 - a) * d,
+      };
+    })
+    .filter((r) => r.title && r.url && r.score > th)
+    .sort((x, y) => y.score - x.score)
+    .slice(0, maxLinks())
     .map((r) => ({
       id: r.id,
       title: r.title as string,
       url: r.url as string,
-      similarity: Number(r.similarity),
+      similarity: r.score,
     }));
 }
 
@@ -372,6 +429,8 @@ export interface BackfillError {
 export interface BackfillResult {
   embedded: number;
   embedFailed: number;
+  /** Already-embedded posts whose sparse full-text vector was backfilled. */
+  tsvBackfilled: number;
   linked: number;
   linkFailed: number;
   /** First few failure reasons (capped), so the cron response is diagnosable. */
@@ -392,9 +451,23 @@ const MAX_REPORTED_ERRORS = 10;
 export async function runSemanticLinkingBackfill(options: {
   limit?: number;
   blogId?: string;
+  /**
+   * Re-link posts that were already linked (oldest first), instead of only
+   * never-linked ones. Use for a one-off refresh after tuning alpha/threshold
+   * or after upgrading the scorer. Off by default so the scheduled cron only
+   * does new work.
+   */
+  refresh?: boolean;
 } = {}): Promise<BackfillResult> {
   if (!embeddingsConfigured()) {
-    return { embedded: 0, embedFailed: 0, linked: 0, linkFailed: 0, skipped: "OPENAI_API_KEY not configured" };
+    return {
+      embedded: 0,
+      embedFailed: 0,
+      tsvBackfilled: 0,
+      linked: 0,
+      linkFailed: 0,
+      skipped: "OPENAI_API_KEY not configured",
+    };
   }
   const limit = Math.min(Math.max(options.limit ?? 40, 1), 200);
   const errors: BackfillError[] = [];
@@ -402,6 +475,39 @@ export async function runSemanticLinkingBackfill(options: {
     console.warn(`[semantic-linking] ${stage} failed for ${id}: ${reason}`);
     if (errors.length < MAX_REPORTED_ERRORS) errors.push({ stage, id, reason });
   };
+
+  // 0. Backfill the sparse full-text vector for posts embedded before the
+  //    hybrid layer existed. DB-only (no embedding API call) — sanitize the
+  //    stored title+body and set search_tsv so they contribute to the sparse
+  //    signal too.
+  const toTsv = await db
+    .select({
+      id: generatedPosts.id,
+      title: generatedPosts.title,
+      body: generatedPosts.body,
+    })
+    .from(generatedPosts)
+    .where(
+      and(
+        eq(generatedPosts.status, "published"),
+        isNotNull(generatedPosts.embedding),
+        isNull(generatedPosts.searchTsv),
+        isNotNull(generatedPosts.body),
+        options.blogId ? eq(generatedPosts.blogId, options.blogId) : undefined,
+      ),
+    )
+    .limit(limit);
+
+  let tsvBackfilled = 0;
+  for (const row of toTsv) {
+    const text = sanitizeForEmbedding(row.title, row.body);
+    if (!text) continue;
+    await db
+      .update(generatedPosts)
+      .set({ searchTsv: sql`to_tsvector('english', ${text})` })
+      .where(eq(generatedPosts.id, row.id));
+    tsvBackfilled++;
+  }
 
   // 1. Embed published posts missing an embedding.
   const toEmbed = await db
@@ -428,7 +534,8 @@ export async function runSemanticLinkingBackfill(options: {
     }
   }
 
-  // 2. Link published, embedded posts that haven't been linked yet.
+  // 2. Link posts. Default: only never-linked ones. Refresh: re-link
+  //    already-linked posts too, oldest-linked first so runs make progress.
   const toLink = await db
     .select({ id: generatedPosts.id })
     .from(generatedPosts)
@@ -437,10 +544,11 @@ export async function runSemanticLinkingBackfill(options: {
         eq(generatedPosts.status, "published"),
         isNotNull(generatedPosts.embedding),
         isNotNull(generatedPosts.externalPostId),
-        isNull(generatedPosts.relatedLinkedAt),
+        options.refresh ? undefined : isNull(generatedPosts.relatedLinkedAt),
         options.blogId ? eq(generatedPosts.blogId, options.blogId) : undefined,
       ),
     )
+    .orderBy(sql`${generatedPosts.relatedLinkedAt} asc nulls first`)
     .limit(limit);
 
   let linked = 0;
@@ -457,6 +565,7 @@ export async function runSemanticLinkingBackfill(options: {
   return {
     embedded,
     embedFailed,
+    tsvBackfilled,
     linked,
     linkFailed,
     ...(errors.length > 0 ? { errors } : {}),

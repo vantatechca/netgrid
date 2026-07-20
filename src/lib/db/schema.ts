@@ -13,8 +13,18 @@ import {
   uniqueIndex,
   index,
   vector,
+  customType,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
+
+// Postgres full-text search vector. We never read the raw value back through
+// Drizzle (queries use ts_rank / @@ on it and set it via to_tsvector(...)),
+// so a minimal custom type is enough to reference the column type-safely.
+const tsvector = customType<{ data: string }>({
+  dataType() {
+    return "tsvector";
+  },
+});
 
 // ─── Enums ───────────────────────────────────────────────────────────────────
 
@@ -370,6 +380,9 @@ export const generatedPosts = pgTable("generated_posts", {
   // ever change models/dimensions.
   embeddingModel: varchar("embedding_model", { length: 64 }),
   embeddedAt: timestamp("embedded_at"),
+  // Sparse (full-text) half of the hybrid linking score. Maintained in app
+  // code from the same sanitized title+body we embed. See semantic-linking.
+  searchTsv: tsvector("search_tsv"),
   // The related posts most recently linked into this post, as
   // [{ id, title, url }]. Mirrors what was written into the live body block
   // and the Shopify custom.netgrid_related_posts metafield.

@@ -50,6 +50,12 @@ services:
         sync: false
       - key: SEMANTIC_LINK_MAX
         sync: false
+      # Hybrid dense+sparse blend weight (sparse share). Default 0.3.
+      - key: SEMANTIC_LINK_ALPHA
+        sync: false
+      # Embedding backend: "openai" (default) or "local" (not yet implemented).
+      - key: EMBEDDING_MODE
+        sync: false
       - key: RESEND_API_KEY
         sync: false
       - key: RESEND_FROM_EMAIL
