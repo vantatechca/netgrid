@@ -1,7 +1,8 @@
 import { db } from "@/lib/db";
 import { blogs, clients, generatedPosts } from "@/lib/db/schema";
 import { requireAdmin } from "@/lib/auth/helpers";
-import { desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { AllPostsClientFilter } from "@/components/posts/all-posts-client-filter";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -78,7 +79,7 @@ function formatDateTime(value: Date | string | null): string {
 }
 
 interface AllPostsPageProps {
-  searchParams: { status?: string };
+  searchParams: { status?: string; client?: string };
 }
 
 export default async function AllPostsPage({ searchParams }: AllPostsPageProps) {
@@ -88,15 +89,34 @@ export default async function AllPostsPage({ searchParams }: AllPostsPageProps) 
     ? searchParams.status
     : "all";
 
-  // Status counts across every generated post — drives the stat cards and the
-  // filter tab badges. One grouped query rather than counting a fetched list,
-  // so the numbers stay correct regardless of the row limit below.
+  // Clients that actually have generated posts — populates the client filter
+  // dropdown. Distinct so each client appears once.
+  const clientOptions = await db
+    .selectDistinct({ id: clients.id, name: clients.name })
+    .from(generatedPosts)
+    .innerJoin(clients, eq(generatedPosts.clientId, clients.id))
+    .orderBy(clients.name);
+
+  // Only honour a client id we actually know about; anything else falls back
+  // to "all clients" so a stale/bogus param can't silently empty the page.
+  const selectedClient =
+    searchParams.client && clientOptions.some((c) => c.id === searchParams.client)
+      ? searchParams.client
+      : "";
+  const clientWhere = selectedClient
+    ? eq(generatedPosts.clientId, selectedClient)
+    : undefined;
+
+  // Status counts (optionally scoped to the selected client) — drives the stat
+  // cards and the filter tab badges. One grouped query rather than counting a
+  // fetched list, so the numbers stay correct regardless of the row limit below.
   const statusRows = await db
     .select({
       status: generatedPosts.status,
       count: sql<number>`count(*)::int`,
     })
     .from(generatedPosts)
+    .where(clientWhere)
     .groupBy(generatedPosts.status);
 
   const countByStatus: Record<string, number> = {};
@@ -134,7 +154,12 @@ export default async function AllPostsPage({ searchParams }: AllPostsPageProps) 
     .from(generatedPosts)
     .leftJoin(blogs, eq(generatedPosts.blogId, blogs.id))
     .leftJoin(clients, eq(generatedPosts.clientId, clients.id))
-    .where(filterStatuses ? inArray(generatedPosts.status, filterStatuses) : undefined)
+    .where(
+      and(
+        clientWhere,
+        filterStatuses ? inArray(generatedPosts.status, filterStatuses) : undefined,
+      ),
+    )
     .orderBy(desc(generatedPosts.updatedAt))
     .limit(300);
 
@@ -187,16 +212,21 @@ export default async function AllPostsPage({ searchParams }: AllPostsPageProps) 
         </Card>
       </div>
 
-      {/* Filter tabs */}
-      <div className="flex flex-wrap gap-2">
+      {/* Filters */}
+      <div className="flex flex-wrap items-center gap-2">
         {(Object.keys(FILTERS) as FilterKey[]).map((key) => {
           const f = FILTERS[key];
           const count = countFor(f.statuses);
           const isActive = key === activeFilter;
+          // Preserve the selected client when switching status lens.
+          const params = new URLSearchParams();
+          if (key !== "all") params.set("status", key);
+          if (selectedClient) params.set("client", selectedClient);
+          const qs = params.toString();
           return (
             <Link
               key={key}
-              href={key === "all" ? "/all-posts" : `/all-posts?status=${key}`}
+              href={qs ? `/all-posts?${qs}` : "/all-posts"}
               className={cn(
                 "inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm font-medium transition-colors",
                 isActive
@@ -209,6 +239,14 @@ export default async function AllPostsPage({ searchParams }: AllPostsPageProps) 
             </Link>
           );
         })}
+
+        <div className="ml-auto">
+          <AllPostsClientFilter
+            clients={clientOptions}
+            status={activeFilter}
+            selected={selectedClient}
+          />
+        </div>
       </div>
 
       {/* Posts table */}
