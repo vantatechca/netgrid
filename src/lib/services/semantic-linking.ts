@@ -48,6 +48,16 @@ function maxLinks(): number {
   return Number.isFinite(v) && v >= 1 ? Math.min(Math.floor(v), 10) : 5;
 }
 
+/** Delay between posts in the backfill link loop, to be gentle on platform APIs. */
+const LINK_THROTTLE_MS = (() => {
+  const v = Number(process.env.SEMANTIC_LINK_THROTTLE_MS);
+  return Number.isFinite(v) && v >= 0 ? v : 150;
+})();
+
+function sleep(ms: number): Promise<void> {
+  return ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve();
+}
+
 const BLOCK_START = "<!-- netgrid-related-start -->";
 const BLOCK_END = "<!-- netgrid-related-end -->";
 
@@ -324,9 +334,33 @@ export async function applyRelatedLinks(postId: string): Promise<ApplyResult> {
     .limit(1);
   if (!blog) return { ok: false, count: 0, changed: false, reason: "Blog not found" };
 
+  // Resolve the Shopify blog id ONCE (cached in the client) and reuse it for
+  // both the fetch and the update, instead of letting each call re-run a
+  // GET /blogs.json — that per-post duplication was tripping Shopify's rate
+  // limit during large backfills. No-op for WordPress.
+  let shopifyBlogId: string | undefined;
+  if ((blog as PlatformBlog).platform === "shopify") {
+    try {
+      shopifyBlogId = (
+        await platform.resolveShopifyBlogId(blog as PlatformBlog)
+      )?.blogId;
+    } catch (err) {
+      return {
+        ok: false,
+        count: 0,
+        changed: false,
+        reason:
+          err instanceof Error
+            ? `Blog id resolve failed: ${err.message}`
+            : "Could not resolve Shopify blog id",
+      };
+    }
+  }
+
   const liveBody = await platform.fetchLivePostBody(
     blog as PlatformBlog,
     post.externalPostId,
+    shopifyBlogId,
   );
   if (liveBody === null) {
     return { ok: false, count: 0, changed: false, reason: "Could not fetch live body" };
@@ -356,7 +390,7 @@ export async function applyRelatedLinks(postId: string): Promise<ApplyResult> {
     blog as PlatformBlog,
     post.externalPostId,
     newBody,
-    { relatedPostsJson: relatedJson },
+    { relatedPostsJson: relatedJson, shopifyBlogId },
   );
 
   if (!res.ok) {
@@ -571,6 +605,8 @@ export async function runSemanticLinkingBackfill(options: {
       linkFailed++;
       record("link", row.id, err instanceof Error ? err.message : "link threw");
     }
+    // Gentle throttle so a batch doesn't burst the platform's rate limit.
+    await sleep(LINK_THROTTLE_MS);
   }
 
   return {
