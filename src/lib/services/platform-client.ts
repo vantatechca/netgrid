@@ -244,6 +244,69 @@ export async function fetchLivePostBody(
 }
 
 /**
+ * Push a new body to an already-published post (used by semantic linking to
+ * inject/refresh the "Related posts" block). On Shopify it also writes the
+ * related posts as a `custom.netgrid_related_posts` JSON metafield so themes
+ * and other tooling can read the structured list. Best-effort: returns a
+ * result object rather than throwing.
+ */
+export async function updateLivePostBody(
+  blog: PlatformBlog,
+  externalPostId: string,
+  bodyHtml: string,
+  options: { relatedPostsJson?: string; shopifyBlogId?: string } = {},
+): Promise<{ ok: boolean; message?: string }> {
+  const platform = resolvePlatform(blog);
+
+  if (platform === "shopify") {
+    const built = buildShopifyCreds(blog);
+    if (!built.ok) return { ok: false, message: built.message };
+    const blogId =
+      options.shopifyBlogId ??
+      (await shopify.resolveBlogId(built.creds, blog.shopifyBlogHandle))?.blogId;
+    if (!blogId) {
+      return { ok: false, message: "Could not resolve Shopify blog id" };
+    }
+    const extraMetafields = options.relatedPostsJson
+      ? [
+          {
+            namespace: "custom",
+            key: "netgrid_related_posts",
+            value: options.relatedPostsJson,
+            type: "json",
+          },
+        ]
+      : undefined;
+    const res = await shopify.updateArticle(built.creds, blogId, externalPostId, {
+      bodyHtml,
+      blogHandle: blog.shopifyBlogHandle ?? undefined,
+      extraMetafields,
+    });
+    return { ok: res.success, message: res.message };
+  }
+
+  if (!blog.wpUrl || !blog.wpUsername || !blog.wpAppPassword) {
+    return { ok: false, message: "WordPress credentials not configured" };
+  }
+  try {
+    await wp.updatePost(
+      blog.wpUrl,
+      blog.wpUsername,
+      blog.wpAppPassword,
+      Number(externalPostId),
+      { content: bodyHtml },
+    );
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      message:
+        error instanceof Error ? error.message : "WordPress update failed",
+    };
+  }
+}
+
+/**
  * Permanently delete a published post from the live platform. WordPress posts
  * are force-deleted (skip trash); Shopify articles are removed outright. Pass a
  * pre-resolved shopifyBlogId to avoid re-resolving per call in a loop.

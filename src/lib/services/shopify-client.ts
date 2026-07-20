@@ -1070,6 +1070,18 @@ export async function updateArticle(
     /** Sets the article excerpt (summary_html) — Shopify's teaser/fallback meta. */
     excerptHtml?: string;
     blogHandle?: string;
+    /**
+     * Additional metafields to set on the article, beyond the SEO
+     * title/description ones derived from metaTitle/metaDescription. Used by
+     * semantic linking to write custom.netgrid_related_posts (a JSON list of
+     * related articles) so themes/tooling can read it.
+     */
+    extraMetafields?: Array<{
+      namespace: string;
+      key: string;
+      value: string;
+      type: string;
+    }>;
   },
   apiVersion: string = DEFAULT_API_VERSION,
 ): Promise<PublishPostResult> {
@@ -1082,6 +1094,9 @@ export async function updateArticle(
       value: string;
       type: string;
     }> = [];
+    if (input.extraMetafields && input.extraMetafields.length > 0) {
+      metafields.push(...input.extraMetafields);
+    }
     if (input.metaTitle && input.metaTitle.trim()) {
       metafields.push({
         namespace: "global",

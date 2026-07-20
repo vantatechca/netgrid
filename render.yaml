@@ -38,6 +38,18 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
+      # Semantic linking (cosine-similarity related posts). OPENAI_API_KEY
+      # powers the text-embedding-3-small vectors; SHOPIFY_WEBHOOK_SECRET
+      # verifies articles/create|update webhooks. Threshold/max are optional
+      # (defaults 0.75 / 5).
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: SHOPIFY_WEBHOOK_SECRET
+        sync: false
+      - key: SEMANTIC_LINK_THRESHOLD
+        sync: false
+      - key: SEMANTIC_LINK_MAX
+        sync: false
       - key: RESEND_API_KEY
         sync: false
       - key: RESEND_FROM_EMAIL
@@ -251,6 +263,24 @@ services:
     envVars:
       - key: CRON_PATH
         value: /api/cron/location-pages
+      - key: APP_URL
+        value: https://netgrid-16f6.onrender.com
+      - key: CRON_SECRET
+        sync: false
+
+  # Semantic linking backfill: embed published posts missing a vector, then
+  # inject "Related posts" links into posts not yet linked. New posts are
+  # linked immediately on publish; this drains history in capped batches.
+  # Hourly at :20 so it doesn't collide with the on-the-hour publish crons.
+  - type: cron
+    name: netgrid-cron-semantic-linking
+    runtime: docker
+    schedule: "20 * * * *"
+    dockerfilePath: ./cron/Dockerfile
+    dockerContext: ./cron
+    envVars:
+      - key: CRON_PATH
+        value: /api/cron/semantic-linking?limit=40
       - key: APP_URL
         value: https://netgrid-16f6.onrender.com
       - key: CRON_SECRET

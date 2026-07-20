@@ -12,6 +12,7 @@ import {
   pgEnum,
   uniqueIndex,
   index,
+  vector,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
@@ -360,6 +361,20 @@ export const generatedPosts = pgTable("generated_posts", {
   // kinds without locking the report shape in DDL.
   scrubberReport: jsonb("scrubber_report"),
   flaggedForReview: boolean("flagged_for_review").default(false).notNull(),
+  // ── Semantic linking (pgvector) ──
+  // Dense embedding of title + sanitized body, used for cosine-similarity
+  // "related posts" linking. text-embedding-3-small → 1536 dims. Null until
+  // the post has been embedded (see semantic-linking service).
+  embedding: vector("embedding", { dimensions: 1536 }),
+  // Which model produced `embedding` — lets us re-embed only stale rows if we
+  // ever change models/dimensions.
+  embeddingModel: varchar("embedding_model", { length: 64 }),
+  embeddedAt: timestamp("embedded_at"),
+  // The related posts most recently linked into this post, as
+  // [{ id, title, url }]. Mirrors what was written into the live body block
+  // and the Shopify custom.netgrid_related_posts metafield.
+  relatedPosts: jsonb("related_posts"),
+  relatedLinkedAt: timestamp("related_linked_at"),
   generatedAt: timestamp("generated_at"),
   publishedAt: timestamp("published_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
