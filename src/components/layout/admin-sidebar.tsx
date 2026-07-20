@@ -12,6 +12,7 @@ import {
   CalendarClock,
   MessageSquare,
   BarChart3,
+  Newspaper,
   Activity,
   Settings,
   Plug,
@@ -64,6 +65,7 @@ const navGroups: NavGroup[] = [
   {
     label: "Operations",
     items: [
+      { title: "All Posts", href: "/all-posts", icon: Newspaper },
       { title: "Post Schedule", href: "/posts", icon: CalendarClock },
       { title: "Messages", href: "/messages", icon: MessageSquare },
     ],
