@@ -363,13 +363,24 @@ export function relinkAfterPublishFireAndForget(postId: string): void {
 
 // ─── Backfill (cron) ─────────────────────────────────────────────────────────
 
+export interface BackfillError {
+  stage: "embed" | "link";
+  id: string;
+  reason: string;
+}
+
 export interface BackfillResult {
   embedded: number;
   embedFailed: number;
   linked: number;
   linkFailed: number;
+  /** First few failure reasons (capped), so the cron response is diagnosable. */
+  errors?: BackfillError[];
   skipped?: string;
 }
+
+// How many failure reasons to surface in the response before truncating.
+const MAX_REPORTED_ERRORS = 10;
 
 /**
  * Cron entry point. Embeds published posts that don't yet have a vector, then
@@ -386,6 +397,11 @@ export async function runSemanticLinkingBackfill(options: {
     return { embedded: 0, embedFailed: 0, linked: 0, linkFailed: 0, skipped: "OPENAI_API_KEY not configured" };
   }
   const limit = Math.min(Math.max(options.limit ?? 40, 1), 200);
+  const errors: BackfillError[] = [];
+  const record = (stage: "embed" | "link", id: string, reason: string) => {
+    console.warn(`[semantic-linking] ${stage} failed for ${id}: ${reason}`);
+    if (errors.length < MAX_REPORTED_ERRORS) errors.push({ stage, id, reason });
+  };
 
   // 1. Embed published posts missing an embedding.
   const toEmbed = await db
@@ -406,7 +422,10 @@ export async function runSemanticLinkingBackfill(options: {
   for (const row of toEmbed) {
     const res = await embedPost(row.id);
     if (res.ok) embedded++;
-    else embedFailed++;
+    else {
+      embedFailed++;
+      record("embed", row.id, res.reason ?? "unknown error");
+    }
   }
 
   // 2. Link published, embedded posts that haven't been linked yet.
@@ -429,8 +448,17 @@ export async function runSemanticLinkingBackfill(options: {
   for (const row of toLink) {
     const res = await applyRelatedLinks(row.id);
     if (res.ok) linked++;
-    else linkFailed++;
+    else {
+      linkFailed++;
+      record("link", row.id, res.reason ?? "unknown error");
+    }
   }
 
-  return { embedded, embedFailed, linked, linkFailed };
+  return {
+    embedded,
+    embedFailed,
+    linked,
+    linkFailed,
+    ...(errors.length > 0 ? { errors } : {}),
+  };
 }
