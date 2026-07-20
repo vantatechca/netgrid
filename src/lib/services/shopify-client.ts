@@ -1003,16 +1003,33 @@ export async function createArticle(
  * /blogs.json call), falls back to the first blog. Used by the SEO backfill
  * so we resolve once per blog instead of per article.
  */
+// Blog-id resolution requires a GET /blogs.json round-trip. Batch jobs (e.g.
+// semantic linking) resolve the same store's blog id for many posts in quick
+// succession, which used to hammer Shopify's REST limit. Cache the result
+// per store+handle for a few minutes — blogs rarely change and a stale entry
+// just means one extra lookup after it expires.
+const blogIdCache = new Map<
+  string,
+  { value: { blogId: string; blogHandle: string }; expiresAt: number }
+>();
+const BLOG_ID_TTL_MS = 10 * 60 * 1000;
+
 export async function resolveBlogId(
   creds: ShopifyCreds,
   blogHandle?: string | null,
   apiVersion: string = DEFAULT_API_VERSION,
 ): Promise<{ blogId: string; blogHandle: string } | null> {
+  const cacheKey = `${normalizeStoreUrl(creds.storeUrl)}::${blogHandle ?? ""}`;
+  const hit = blogIdCache.get(cacheKey);
+  if (hit && hit.expiresAt > Date.now()) return hit.value;
+
   const blogs = await listBlogs(creds, apiVersion);
   if (blogs.length === 0) return null;
   const target =
     (blogHandle && blogs.find((b) => b.handle === blogHandle)) || blogs[0];
-  return { blogId: String(target.id), blogHandle: target.handle };
+  const value = { blogId: String(target.id), blogHandle: target.handle };
+  blogIdCache.set(cacheKey, { value, expiresAt: Date.now() + BLOG_ID_TTL_MS });
+  return value;
 }
 
 /** Fetch a single article (includes body_html) by blog + article id. */
