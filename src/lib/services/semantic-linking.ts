@@ -372,13 +372,21 @@ export async function applyRelatedLinks(postId: string): Promise<ApplyResult> {
     }
   }
 
-  const liveBody = await platform.fetchLivePostBody(
-    blog as PlatformBlog,
-    post.externalPostId,
-    shopifyBlogId,
-  );
+  const { body: liveBody, error: fetchError } =
+    await platform.fetchLivePostBodyResult(
+      blog as PlatformBlog,
+      post.externalPostId,
+      shopifyBlogId,
+    );
   if (liveBody === null) {
-    return { ok: false, count: 0, changed: false, reason: "Could not fetch live body" };
+    return {
+      ok: false,
+      count: 0,
+      changed: false,
+      reason: fetchError
+        ? `Could not fetch live body: ${fetchError}`
+        : "Could not fetch live body",
+    };
   }
 
   const stripped = stripRelatedBlock(liveBody);

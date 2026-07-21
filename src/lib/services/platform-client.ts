@@ -221,26 +221,54 @@ export async function fetchLivePostBody(
   externalPostId: string,
   shopifyBlogId?: string,
 ): Promise<string | null> {
+  return (await fetchLivePostBodyResult(blog, externalPostId, shopifyBlogId))
+    .body;
+}
+
+/**
+ * Like fetchLivePostBody, but returns WHY the body couldn't be fetched instead
+ * of a bare null — so callers (semantic-linking diagnostics) can tell a deleted
+ * article from a missing-scope permission error. `body` is null on any failure.
+ */
+export async function fetchLivePostBodyResult(
+  blog: PlatformBlog,
+  externalPostId: string,
+  shopifyBlogId?: string,
+): Promise<{ body: string | null; error?: string }> {
   const platform = resolvePlatform(blog);
 
   if (platform === "shopify") {
     const built = buildShopifyCreds(blog);
-    if (!built.ok) return null;
+    if (!built.ok) return { body: null, error: built.message };
     const blogId =
       shopifyBlogId ??
       (await shopify.resolveBlogId(built.creds, blog.shopifyBlogHandle))?.blogId;
-    if (!blogId) return null;
-    const article = await shopify.getArticle(built.creds, blogId, externalPostId);
-    return article?.body_html ?? null;
+    if (!blogId) return { body: null, error: "Could not resolve Shopify blog id" };
+    const { article, error } = await shopify.getArticleResult(
+      built.creds,
+      blogId,
+      externalPostId,
+    );
+    return { body: article?.body_html ?? null, error };
   }
 
-  if (!blog.wpUrl || !blog.wpUsername || !blog.wpAppPassword) return null;
-  return wp.getPostContentById(
-    blog.wpUrl,
-    blog.wpUsername,
-    blog.wpAppPassword,
-    Number(externalPostId),
-  );
+  if (!blog.wpUrl || !blog.wpUsername || !blog.wpAppPassword) {
+    return { body: null, error: "WordPress credentials not configured" };
+  }
+  try {
+    const body = await wp.getPostContentById(
+      blog.wpUrl,
+      blog.wpUsername,
+      blog.wpAppPassword,
+      Number(externalPostId),
+    );
+    return { body };
+  } catch (error) {
+    return {
+      body: null,
+      error: error instanceof Error ? error.message : "WordPress fetch failed",
+    };
+  }
 }
 
 /**
