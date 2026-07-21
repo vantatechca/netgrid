@@ -274,6 +274,23 @@ services:
       - key: CRON_SECRET
         sync: false
 
+  # Link exchange: build ABC loops from opt-in same-niche blogs and drip a
+  # small number of cross-site body links into existing posts. Deliberately
+  # low-volume + spread out — daily at 05:40 UTC.
+  - type: cron
+    name: netgrid-cron-link-exchange
+    runtime: docker
+    schedule: "40 5 * * *"
+    dockerfilePath: ./cron/Dockerfile
+    dockerContext: ./cron
+    envVars:
+      - key: CRON_PATH
+        value: /api/cron/link-exchange?limit=10
+      - key: APP_URL
+        value: https://netgrid-16f6.onrender.com
+      - key: CRON_SECRET
+        sync: false
+
   # Semantic linking backfill: embed published posts missing a vector, then
   # inject "Related posts" links into posts not yet linked. New posts are
   # linked immediately on publish; this drains history in capped batches.

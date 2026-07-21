@@ -133,6 +133,8 @@ export const clients = pgTable("clients", {
   // When set, overrides the hardcoded niche/TLD language locks.
   languageMode: varchar("language_mode", { length: 8 }),
   status: clientStatusEnum("status").default("onboarding"),
+  // Opt-in to the cross-site ABC link-exchange network. Off by default.
+  linkExchangeEnabled: boolean("link_exchange_enabled").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [
@@ -805,6 +807,45 @@ export const appSettings = pgTable("app_settings", {
 //   type "cta_click" → the CTA redirect (/r/{postId}) was followed
 // Not FK-constrained so the log survives post/blog deletion. Ids are stored
 // loosely (nullable) for the same reason.
+// ─── link_exchange_loops / link_exchange_edges ──────────────────────────────
+// Cross-site ABC linking. A loop is a directed cycle of topically related,
+// opt-in blogs (A→B→C→A); each edge is one directed link with its anchor and
+// placement record. See src/lib/services/link-exchange.ts.
+export const linkExchangeLoops = pgTable("link_exchange_loops", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  niche: varchar("niche", { length: 255 }),
+  size: integer("size").default(3).notNull(),
+  status: varchar("status", { length: 16 }).default("active").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("link_exchange_loops_status_idx").on(table.status),
+]);
+
+export const linkExchangeEdges = pgTable("link_exchange_edges", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  loopId: uuid("loop_id").notNull().references(() => linkExchangeLoops.id, { onDelete: "cascade" }),
+  sourceBlogId: uuid("source_blog_id").notNull().references(() => blogs.id, { onDelete: "cascade" }),
+  targetBlogId: uuid("target_blog_id").notNull().references(() => blogs.id, { onDelete: "cascade" }),
+  position: integer("position").default(0).notNull(),
+  anchorText: varchar("anchor_text", { length: 255 }).notNull(),
+  // "branded" | "naked" | "generic" | "partial" | "exact"
+  anchorType: varchar("anchor_type", { length: 16 }).notNull(),
+  targetUrl: varchar("target_url", { length: 1000 }),
+  // "pending" | "placed" | "failed"
+  status: varchar("status", { length: 16 }).default("pending").notNull(),
+  placedInPostId: uuid("placed_in_post_id").references(() => generatedPosts.id, { onDelete: "set null" }),
+  placedAt: timestamp("placed_at"),
+  failureReason: text("failure_reason"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("link_exchange_edges_pair_idx").on(table.sourceBlogId, table.targetBlogId),
+  index("link_exchange_edges_loop_idx").on(table.loopId),
+  index("link_exchange_edges_status_idx").on(table.status),
+  index("link_exchange_edges_source_idx").on(table.sourceBlogId),
+]);
+
 export const linkEvents = pgTable("link_events", {
   id: uuid("id").defaultRandom().primaryKey(),
   postId: uuid("post_id"),
