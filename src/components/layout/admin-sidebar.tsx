@@ -13,6 +13,7 @@ import {
   MessageSquare,
   BarChart3,
   Newspaper,
+  Share2,
   Activity,
   Settings,
   Plug,
@@ -67,6 +68,7 @@ const navGroups: NavGroup[] = [
     items: [
       { title: "All Posts", href: "/all-posts", icon: Newspaper },
       { title: "Post Schedule", href: "/posts", icon: CalendarClock },
+      { title: "Link Exchange", href: "/link-exchange", icon: Share2 },
       { title: "Messages", href: "/messages", icon: MessageSquare },
     ],
   },
