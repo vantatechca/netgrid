@@ -52,6 +52,7 @@ export interface LinkExchangeOverview {
   loops: Array<{
     id: string;
     niche: string | null;
+    clientName: string;
     edges: LinkExchangeEdgeRow[];
   }>;
   stats: {
@@ -83,6 +84,7 @@ export async function getLinkExchangeOverview(): Promise<LinkExchangeOverview> {
       id: linkExchangeEdges.id,
       loopId: linkExchangeEdges.loopId,
       niche: linkExchangeLoops.niche,
+      clientName: clients.name,
       position: linkExchangeEdges.position,
       sourceDomain: sourceBlog.domain,
       targetDomain: targetBlog.domain,
@@ -96,17 +98,18 @@ export async function getLinkExchangeOverview(): Promise<LinkExchangeOverview> {
     .innerJoin(linkExchangeLoops, eq(linkExchangeEdges.loopId, linkExchangeLoops.id))
     .innerJoin(sourceBlog, eq(linkExchangeEdges.sourceBlogId, sourceBlog.id))
     .innerJoin(targetBlog, eq(linkExchangeEdges.targetBlogId, targetBlog.id))
+    .innerJoin(clients, eq(sourceBlog.clientId, clients.id))
     .where(eq(linkExchangeLoops.status, "active"))
     .orderBy(desc(linkExchangeLoops.createdAt), linkExchangeEdges.position);
 
   const loopMap = new Map<
     string,
-    { id: string; niche: string | null; edges: LinkExchangeEdgeRow[] }
+    { id: string; niche: string | null; clientName: string; edges: LinkExchangeEdgeRow[] }
   >();
   for (const r of edgeRows) {
     let loop = loopMap.get(r.loopId);
     if (!loop) {
-      loop = { id: r.loopId, niche: r.niche, edges: [] };
+      loop = { id: r.loopId, niche: r.niche, clientName: r.clientName, edges: [] };
       loopMap.set(r.loopId, loop);
     }
     loop.edges.push({

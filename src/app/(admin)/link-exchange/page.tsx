@@ -36,8 +36,9 @@ export default async function LinkExchangePage() {
       <div>
         <h1 className="text-2xl font-bold">Link Exchange</h1>
         <p className="text-muted-foreground">
-          Cross-site ABC linking across opted-in, same-niche blogs. Each loop links
-          A&nbsp;→&nbsp;B&nbsp;→&nbsp;C&nbsp;→&nbsp;A — no two sites link directly to each other.
+          ABC linking across each client&apos;s own sites. Each loop links a client&apos;s
+          blogs A&nbsp;→&nbsp;B&nbsp;→&nbsp;C&nbsp;→&nbsp;A — no two sites link directly to each other,
+          and never across different clients.
         </p>
       </div>
 
@@ -54,8 +55,8 @@ export default async function LinkExchangePage() {
         <CardHeader>
           <CardTitle>Participation</CardTitle>
           <CardDescription>
-            Opt a client in to add its active blogs to the network. Loops form only
-            among same-niche sites.
+            Opt a client in to link its own active blogs together. A client needs
+            at least 3 active sites to form a loop.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -90,7 +91,7 @@ export default async function LinkExchangePage() {
           <CardTitle>Active Loops</CardTitle>
           <CardDescription>
             {loops.length === 0
-              ? "No loops yet. Opt in ≥3 same-niche clients/blogs; loops build on the daily cron."
+              ? "No loops yet. Opt in a client with ≥3 active sites; loops build on the daily cron."
               : `${loops.length} active loop${loops.length === 1 ? "" : "s"}.`}
           </CardDescription>
         </CardHeader>
@@ -98,8 +99,13 @@ export default async function LinkExchangePage() {
           {loops.map((loop) => (
             <div key={loop.id} className="rounded-md border">
               <div className="flex items-center justify-between border-b bg-muted/30 px-4 py-2">
-                <span className="text-sm font-medium capitalize">
-                  {loop.niche ?? "loop"}
+                <span className="text-sm font-medium">
+                  {loop.clientName}
+                  {loop.niche && (
+                    <span className="ml-2 font-normal capitalize text-muted-foreground">
+                      · {loop.niche}
+                    </span>
+                  )}
                 </span>
                 <span className="text-xs text-muted-foreground">
                   {loop.edges.length}-site loop

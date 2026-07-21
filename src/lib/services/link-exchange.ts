@@ -175,12 +175,14 @@ export async function buildLoops(): Promise<{
       niche: (b.clientNiche || "default").trim().toLowerCase(),
     }));
 
-  // Group by niche.
-  const byNiche = new Map<string, EligibleBlog[]>();
+  // Group by CLIENT — a client links its OWN sites to each other (A→B→C→A),
+  // never across different clients. One client = one niche, so loops stay
+  // topically coherent by construction.
+  const byClient = new Map<string, EligibleBlog[]>();
   for (const b of free) {
-    const list = byNiche.get(b.niche) ?? [];
+    const list = byClient.get(b.clientId) ?? [];
     list.push(b);
-    byNiche.set(b.niche, list);
+    byClient.set(b.clientId, list);
   }
 
   // A representative keyword per client, for keyword-based anchors.
@@ -189,9 +191,10 @@ export async function buildLoops(): Promise<{
   let loopsCreated = 0;
   let edgesCreated = 0;
 
-  for (const [niche, groupRaw] of byNiche) {
+  for (const [, groupRaw] of byClient) {
     const group = shuffle(groupRaw);
-    // Chunk into triads; leftover (<3) waits for the next run / more sites.
+    const niche = group[0]?.niche ?? "default";
+    // Chunk the client's sites into triads; leftover (<3) waits for more sites.
     for (let i = 0; i + 3 <= group.length; i += 3) {
       const triad = [group[i], group[i + 1], group[i + 2]];
       const [loop] = await db
