@@ -36,16 +36,15 @@ export default async function LinkExchangePage() {
       <div>
         <h1 className="text-2xl font-bold">Link Exchange</h1>
         <p className="text-muted-foreground">
-          ABC linking across each client&apos;s own sites. Each loop links a client&apos;s
-          blogs A&nbsp;→&nbsp;B&nbsp;→&nbsp;C&nbsp;→&nbsp;A — no two sites link directly to each other,
-          and never across different clients.
+          Full-mesh interlinking of each client&apos;s own sites — every site links to
+          every other site the client owns. Never links across different clients.
         </p>
       </div>
 
       {/* Stats */}
       <div className="grid gap-4 md:grid-cols-4">
         <Stat label="Clients in network" value={stats.enabledClients} />
-        <Stat label="Active loops" value={stats.activeLoops} />
+        <Stat label="Client meshes" value={stats.activeLoops} />
         <Stat label="Links placed" value={stats.edgesPlaced} className="text-green-600" />
         <Stat label="Links pending" value={stats.edgesPending} />
       </div>
@@ -55,8 +54,8 @@ export default async function LinkExchangePage() {
         <CardHeader>
           <CardTitle>Participation</CardTitle>
           <CardDescription>
-            Opt a client in to link its own active blogs together. A client needs
-            at least 3 active sites to form a loop.
+            Opt a client in to interlink its own active blogs. A client needs at
+            least 2 active sites to form a mesh.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -85,14 +84,14 @@ export default async function LinkExchangePage() {
         </CardContent>
       </Card>
 
-      {/* Loops */}
+      {/* Meshes */}
       <Card>
         <CardHeader>
-          <CardTitle>Active Loops</CardTitle>
+          <CardTitle>Active Meshes</CardTitle>
           <CardDescription>
             {loops.length === 0
-              ? "No loops yet. Opt in a client with ≥3 active sites; loops build on the daily cron."
-              : `${loops.length} active loop${loops.length === 1 ? "" : "s"}.`}
+              ? "No meshes yet. Opt in a client with ≥2 active sites; meshes build on the daily cron."
+              : `${loops.length} client mesh${loops.length === 1 ? "" : "es"}.`}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -108,7 +107,7 @@ export default async function LinkExchangePage() {
                   )}
                 </span>
                 <span className="text-xs text-muted-foreground">
-                  {loop.edges.length}-site loop
+                  {loop.edges.length} link{loop.edges.length === 1 ? "" : "s"}
                 </span>
               </div>
               <Table>

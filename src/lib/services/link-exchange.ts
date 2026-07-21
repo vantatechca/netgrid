@@ -1,17 +1,20 @@
-// Link Exchange / ABC reciprocal linking engine.
+// Link Exchange engine — per-client full mesh.
 //
-// Builds a cross-site link graph across the blogs netgrid manages, shaped as
-// directed ABC loops (A→B→C→A) so no two sites link directly to each other,
-// and drips one body-text link at a time into existing published posts.
+// Interlinks each opted-in client's OWN sites: every site links to every other
+// site the client owns (A→B, A→C, …, B→A, …). Never links across different
+// clients. Links are dripped one body-text link at a time into existing
+// published posts.
 //
 // Guardrails from the brief are baked in:
-//   - opt-in per client; only topically-related (same-niche) sites in a loop
-//   - strict ABC cycle — never both A→B and B→A (enforced by a unique pair
-//     index + the build rule)
+//   - opt-in per client; mesh scoped to a single client's sites
 //   - anchor mix ≈ 85% branded/naked, <10% partial, <5% exact, varied
 //   - drip: ≤1 placement per source blog per run, throttled, one exchange
 //     link per host post
 //   - inline body-text links only (no footer/sidebar/"related" block)
+//
+// Note: a full mesh implies mutual A↔B links (a dense reciprocal cluster) — a
+// stronger footprint than an ABC cycle, chosen deliberately for interlinking a
+// client's own network of sites.
 //
 // Best-effort throughout: a failing placement is recorded and retried later,
 // never fatal.
@@ -118,16 +121,7 @@ function allocateAnchor(
   }
 }
 
-// ─── Loop building ───────────────────────────────────────────────────────────
-
-function shuffle<T>(arr: T[]): T[] {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
+// ─── Mesh building ───────────────────────────────────────────────────────────
 
 interface EligibleBlog {
   id: string;
@@ -137,9 +131,11 @@ interface EligibleBlog {
 }
 
 /**
- * Form new ABC loops from opt-in, same-niche blogs that aren't already in an
- * active loop. Only blogs whose client has opted in and that are active are
- * eligible. Returns how many loops/edges were created.
+ * Ensure each opted-in client has a full mesh: every one of its active sites
+ * links to every other site it owns (A→B, A→C, …, B→A, …). Idempotent — one
+ * loop row per client, and only missing directed edges are added, so a client
+ * that gains a site later gets wired in on the next run. Never links across
+ * clients.
  */
 export async function buildLoops(): Promise<{
   loopsCreated: number;
@@ -156,67 +152,81 @@ export async function buildLoops(): Promise<{
     .innerJoin(clients, eq(blogs.clientId, clients.id))
     .where(and(eq(clients.linkExchangeEnabled, true), eq(blogs.status, "active")));
 
-  if (eligible.length < 3) return { loopsCreated: 0, edgesCreated: 0 };
-
-  // Exclude blogs already participating in an active loop.
-  const activeEdges = await db
-    .select({ source: linkExchangeEdges.sourceBlogId })
-    .from(linkExchangeEdges)
-    .innerJoin(linkExchangeLoops, eq(linkExchangeEdges.loopId, linkExchangeLoops.id))
-    .where(eq(linkExchangeLoops.status, "active"));
-  const used = new Set(activeEdges.map((e) => e.source));
-
-  const free: EligibleBlog[] = eligible
-    .filter((b) => !used.has(b.id))
-    .map((b) => ({
+  // Group active sites by client.
+  const byClient = new Map<string, EligibleBlog[]>();
+  for (const b of eligible) {
+    const site: EligibleBlog = {
       id: b.id,
       clientId: b.clientId,
       domain: b.domain,
       niche: (b.clientNiche || "default").trim().toLowerCase(),
-    }));
-
-  // Group by CLIENT — a client links its OWN sites to each other (A→B→C→A),
-  // never across different clients. One client = one niche, so loops stay
-  // topically coherent by construction.
-  const byClient = new Map<string, EligibleBlog[]>();
-  for (const b of free) {
+    };
     const list = byClient.get(b.clientId) ?? [];
-    list.push(b);
+    list.push(site);
     byClient.set(b.clientId, list);
   }
 
-  // A representative keyword per client, for keyword-based anchors.
-  const keywordByClient = await loadClientKeywords(free.map((b) => b.clientId));
+  const keywordByClient = await loadClientKeywords(eligible.map((b) => b.clientId));
 
   let loopsCreated = 0;
   let edgesCreated = 0;
 
-  for (const [, groupRaw] of byClient) {
-    const group = shuffle(groupRaw);
-    const niche = group[0]?.niche ?? "default";
-    // Chunk the client's sites into triads; leftover (<3) waits for more sites.
-    for (let i = 0; i + 3 <= group.length; i += 3) {
-      const triad = [group[i], group[i + 1], group[i + 2]];
-      const [loop] = await db
+  for (const [clientId, sites] of byClient) {
+    if (sites.length < 2) continue; // need ≥2 sites to interlink
+    const niche = sites[0]?.niche ?? "default";
+    const keyword = keywordByClient.get(clientId) ?? nicheKeyword(niche);
+
+    // One loop per client (its whole mesh). Find or create it.
+    let [loop] = await db
+      .select({ id: linkExchangeLoops.id })
+      .from(linkExchangeLoops)
+      .where(
+        and(
+          eq(linkExchangeLoops.clientId, clientId),
+          eq(linkExchangeLoops.status, "active"),
+        ),
+      )
+      .limit(1);
+    if (!loop) {
+      [loop] = await db
         .insert(linkExchangeLoops)
-        .values({ niche, size: 3 })
+        .values({ clientId, niche, size: sites.length })
         .returning({ id: linkExchangeLoops.id });
       loopsCreated++;
+    } else {
+      await db
+        .update(linkExchangeLoops)
+        .set({ size: sites.length, niche, updatedAt: new Date() })
+        .where(eq(linkExchangeLoops.id, loop.id));
+    }
 
-      // Directed cycle: A→B, B→C, C→A.
-      for (let p = 0; p < 3; p++) {
-        const source = triad[p];
-        const target = triad[(p + 1) % 3];
-        const keyword = keywordByClient.get(target.clientId) ?? nicheKeyword(niche);
+    // Which directed edges already exist for this client's mesh.
+    const existing = await db
+      .select({
+        source: linkExchangeEdges.sourceBlogId,
+        target: linkExchangeEdges.targetBlogId,
+      })
+      .from(linkExchangeEdges)
+      .where(eq(linkExchangeEdges.loopId, loop.id));
+    const have = new Set(existing.map((e) => `${e.source}|${e.target}`));
+
+    // Add every missing ordered pair (X → Y, X ≠ Y).
+    for (const source of sites) {
+      for (const target of sites) {
+        if (source.id === target.id) continue;
+        if (have.has(`${source.id}|${target.id}`)) continue;
         const anchor = allocateAnchor(target.domain, keyword);
-        await db.insert(linkExchangeEdges).values({
-          loopId: loop.id,
-          sourceBlogId: source.id,
-          targetBlogId: target.id,
-          position: p,
-          anchorText: anchor.text.slice(0, 255),
-          anchorType: anchor.type,
-        });
+        await db
+          .insert(linkExchangeEdges)
+          .values({
+            loopId: loop.id,
+            sourceBlogId: source.id,
+            targetBlogId: target.id,
+            position: 0,
+            anchorText: anchor.text.slice(0, 255),
+            anchorType: anchor.type,
+          })
+          .onConflictDoNothing();
         edgesCreated++;
       }
     }
