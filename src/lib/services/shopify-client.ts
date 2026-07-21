@@ -1039,14 +1039,29 @@ export async function getArticle(
   articleId: string | number,
   apiVersion: string = DEFAULT_API_VERSION,
 ): Promise<ShopifyArticle | null> {
+  return (await getArticleResult(creds, blogId, articleId, apiVersion)).article;
+}
+
+/**
+ * Like getArticle, but surfaces WHY a fetch failed instead of collapsing
+ * everything to null. Lets callers distinguish a deleted article (404 Not
+ * Found) from a permissions problem (403 → "enable read_content/write_content")
+ * — e.g. the semantic-linking diagnostics.
+ */
+export async function getArticleResult(
+  creds: ShopifyCreds,
+  blogId: string,
+  articleId: string | number,
+  apiVersion: string = DEFAULT_API_VERSION,
+): Promise<{ article: ShopifyArticle | null; error?: string }> {
   try {
     const client = await createClient(creds, apiVersion);
     const res = await client.get<{ article: ShopifyArticle }>(
       `/blogs/${blogId}/articles/${articleId}.json`,
     );
-    return res.data.article;
-  } catch {
-    return null;
+    return { article: res.data.article };
+  } catch (error) {
+    return { article: null, error: formatError(error) };
   }
 }
 
