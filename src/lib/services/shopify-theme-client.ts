@@ -786,9 +786,15 @@ const ARTICLE_TEMPLATE_KEYS = [
   "templates/article.liquid",
 ];
 
-// Stores where the block is confirmed installed this process — avoids
-// re-hitting the Asset API on every post.
-const relatedInstallCache = new Set<string>();
+// Per-store cache of the last install attempt (success OR failure), so we hit
+// the Asset API at most once per store per TTL and can report a store's status
+// without re-attempting on every post. A failure is retried after the TTL (or
+// a deploy), so fixing a scope reflects without waiting forever.
+const relatedInstallCache = new Map<
+  string,
+  { result: RelatedBlockResult; expiresAt: number }
+>();
+const RELATED_CACHE_TTL_MS = 30 * 60 * 1000;
 
 function buildRelatedSnippet(): string {
   return [
@@ -823,38 +829,56 @@ export async function ensureRelatedPostsBlock(
   apiVersion: string = DEFAULT_API_VERSION,
 ): Promise<RelatedBlockResult> {
   const cacheKey = creds.storeUrl;
-  if (relatedInstallCache.has(cacheKey)) {
-    return { ok: true, message: "already installed", action: "unchanged" };
-  }
+  const hit = relatedInstallCache.get(cacheKey);
+  if (hit && hit.expiresAt > Date.now()) return hit.result;
 
-  const client = await createClient(creds, apiVersion, THEME_TIMEOUT_MS);
-  const theme = await getMainTheme(creds, apiVersion, client);
-  if (!theme) return { ok: false, message: "No published theme found" };
+  const result = await runEnsureRelatedPostsBlock(creds, apiVersion);
+  relatedInstallCache.set(cacheKey, {
+    result,
+    expiresAt: Date.now() + RELATED_CACHE_TTL_MS,
+  });
+  return result;
+}
 
-  // 1. Upsert the snippet (safe to overwrite — it's ours).
-  await putThemeAsset(creds, theme.id, RELATED_SNIPPET_KEY, buildRelatedSnippet(), apiVersion, client);
+async function runEnsureRelatedPostsBlock(
+  creds: ShopifyCreds,
+  apiVersion: string,
+): Promise<RelatedBlockResult> {
+  try {
+    const client = await createClient(creds, apiVersion, THEME_TIMEOUT_MS);
+    const theme = await getMainTheme(creds, apiVersion, client);
+    if (!theme) return { ok: false, message: "No published theme found" };
 
-  // 2. Ensure a render call sits right after the article body.
-  for (const key of ARTICLE_TEMPLATE_KEYS) {
-    const source = await getThemeAsset(creds, theme.id, key, apiVersion, client);
-    if (source === null) continue;
-    if (source.includes(`${RELATED_MARK}:start`)) {
-      relatedInstallCache.add(cacheKey);
-      return { ok: true, message: `render call present in ${key}`, action: "unchanged" };
+    // 1. Upsert the snippet (safe to overwrite — it's ours).
+    await putThemeAsset(creds, theme.id, RELATED_SNIPPET_KEY, buildRelatedSnippet(), apiVersion, client);
+
+    // 2. Ensure a render call sits right after the article body.
+    for (const key of ARTICLE_TEMPLATE_KEYS) {
+      const source = await getThemeAsset(creds, theme.id, key, apiVersion, client);
+      if (source === null) continue;
+      if (source.includes(`${RELATED_MARK}:start`)) {
+        return { ok: true, message: `render call present in ${key}`, action: "unchanged" };
+      }
+      const m = source.match(/\{\{-?\s*article\.content\s*-?\}\}/);
+      if (!m) continue;
+      const at = (m.index ?? 0) + m[0].length;
+      const next = `${source.slice(0, at)}\n${RELATED_RENDER_BLOCK}${source.slice(at)}`;
+      await putThemeAsset(creds, theme.id, key, next, apiVersion, client);
+      return { ok: true, message: `installed in ${key}`, action: "installed" };
     }
-    const m = source.match(/\{\{-?\s*article\.content\s*-?\}\}/);
-    if (!m) continue;
-    const at = (m.index ?? 0) + m[0].length;
-    const next = `${source.slice(0, at)}\n${RELATED_RENDER_BLOCK}${source.slice(at)}`;
-    await putThemeAsset(creds, theme.id, key, next, apiVersion, client);
-    relatedInstallCache.add(cacheKey);
-    return { ok: true, message: `installed in ${key}`, action: "installed" };
-  }
 
-  return {
-    ok: false,
-    message:
-      "Snippet installed but the article template's {{ article.content }} wasn't found — add {% render 'netgrid-related-posts' %} to the article template manually.",
-    action: "snippet-only",
-  };
+    return {
+      ok: false,
+      message:
+        "Snippet installed but the article template's {{ article.content }} wasn't found — add {% render 'netgrid-related-posts' %} to the article template manually.",
+      action: "snippet-only",
+    };
+  } catch (err) {
+    const status = (err as { response?: { status?: number } })?.response?.status;
+    const message =
+      status === 403
+        ? "Token lacks the write_themes scope — enable read_themes + write_themes and reinstall the app."
+        : formatError(err);
+    return { ok: false, message };
+  }
 }

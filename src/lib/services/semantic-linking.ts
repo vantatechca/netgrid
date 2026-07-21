@@ -319,6 +319,12 @@ export interface ApplyResult {
   changed: boolean;
   reason?: string;
   related?: RelatedPost[];
+  /**
+   * Set when the Shopify theme block couldn't be installed (e.g. missing
+   * write_themes scope). Linking still "succeeds" — the metafield is written —
+   * but nothing renders until the theme is fixed, so this is surfaced upward.
+   */
+  themeWarning?: string;
 }
 
 /**
@@ -382,10 +388,21 @@ export async function applyRelatedLinks(postId: string): Promise<ApplyResult> {
     if (!res.ok) {
       return { ok: false, count: related.length, changed: false, reason: res.message };
     }
-    // Best-effort, cached per store — installs the article-template snippet.
-    void platform.ensureShopifyRelatedBlock(blog as PlatformBlog).catch(() => undefined);
+    // Ensure the article-template snippet is installed (cached per store).
+    // Failure here doesn't fail the link — the metafield is written — but we
+    // surface it so a store missing write_themes is visible.
+    let themeWarning: string | undefined;
+    const theme = await platform
+      .ensureShopifyRelatedBlock(blog as PlatformBlog)
+      .catch((err) => ({
+        ok: false,
+        message: err instanceof Error ? err.message : "theme install failed",
+      }));
+    if (!theme.ok) {
+      themeWarning = `${(blog as { domain?: string }).domain ?? "shopify"}: ${theme.message ?? "theme install failed"}`;
+    }
     await stampLinked();
-    return { ok: true, count: related.length, changed: true, related };
+    return { ok: true, count: related.length, changed: true, related, themeWarning };
   }
 
   // ── WordPress: idempotent in-body block ──
@@ -484,6 +501,13 @@ export interface BackfillResult {
   linkFailed: number;
   /** First few failure reasons (capped), so the cron response is diagnosable. */
   errors?: BackfillError[];
+  /**
+   * Shopify stores whose theme block couldn't be installed (one per store),
+   * e.g. "store.example.com: Token lacks the write_themes scope…". Linking to
+   * these stores still writes the metafield; the block just won't render until
+   * the theme is fixed.
+   */
+  themeErrors?: string[];
   skipped?: string;
 }
 
@@ -606,6 +630,7 @@ export async function runSemanticLinkingBackfill(options: {
 
   let linked = 0;
   let linkFailed = 0;
+  const themeErrors = new Set<string>();
   for (const row of toLink) {
     try {
       const res = await applyRelatedLinks(row.id);
@@ -614,6 +639,7 @@ export async function runSemanticLinkingBackfill(options: {
         linkFailed++;
         record("link", row.id, res.reason ?? "unknown error");
       }
+      if (res.themeWarning) themeErrors.add(res.themeWarning);
     } catch (err) {
       // A platform API throwing (e.g. axios 4xx) must not abort the whole
       // run — record it and move on to the next post.
@@ -624,10 +650,15 @@ export async function runSemanticLinkingBackfill(options: {
     await sleep(LINK_THROTTLE_MS);
   }
 
+  if (themeErrors.size > 0) {
+    for (const w of themeErrors) console.warn(`[semantic-linking] theme: ${w}`);
+  }
+
   return {
     embedded,
     embedFailed,
     tsvBackfilled,
+    ...(themeErrors.size > 0 ? { themeErrors: Array.from(themeErrors) } : {}),
     linked,
     linkFailed,
     ...(errors.length > 0 ? { errors } : {}),
