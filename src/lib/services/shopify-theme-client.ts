@@ -767,3 +767,94 @@ export async function fixThemeMetaDescription(
     return { success: false, message: formatError(error) };
   }
 }
+
+// ─── Related-posts block (internal semantic linking) ────────────────────────
+// Renders a client-facing "Related posts" list on article pages from the
+// custom.netgrid_related_posts metafield the linking service writes. Installing
+// the snippet + a render call into the article template means we never re-push
+// post bodies to keep internal links fresh — just the metafield.
+
+const RELATED_SNIPPET_KEY = "snippets/netgrid-related-posts.liquid";
+const RELATED_MARK = "netgrid-related-render";
+const RELATED_RENDER_BLOCK =
+  `{%- comment -%} ${RELATED_MARK}:start {%- endcomment -%}\n` +
+  `{% render 'netgrid-related-posts' %}\n` +
+  `{%- comment -%} ${RELATED_MARK}:end {%- endcomment -%}`;
+// Article template candidates: Online Store 2.0 section first, then vintage.
+const ARTICLE_TEMPLATE_KEYS = [
+  "sections/main-article.liquid",
+  "templates/article.liquid",
+];
+
+// Stores where the block is confirmed installed this process — avoids
+// re-hitting the Asset API on every post.
+const relatedInstallCache = new Set<string>();
+
+function buildRelatedSnippet(): string {
+  return [
+    "{%- assign nx_related = article.metafields.custom.netgrid_related_posts.value -%}",
+    "{%- if nx_related and nx_related.size > 0 -%}",
+    '  <div class="netgrid-related-posts" data-netgrid="related-posts">',
+    "    <h3>Related posts</h3>",
+    "    <ul>",
+    "      {%- for nx_item in nx_related -%}",
+    '        <li><a href="{{ nx_item.url }}">{{ nx_item.title }}</a></li>',
+    "      {%- endfor -%}",
+    "    </ul>",
+    "  </div>",
+    "{%- endif -%}",
+  ].join("\n");
+}
+
+export interface RelatedBlockResult {
+  ok: boolean;
+  message: string;
+  action?: "installed" | "unchanged" | "snippet-only";
+}
+
+/**
+ * Idempotently install the "Related posts" snippet + a render call in the
+ * published theme's article template. Cached per store for the process. If the
+ * article template can't be auto-located, the snippet is still written and the
+ * caller is told to add the render call manually.
+ */
+export async function ensureRelatedPostsBlock(
+  creds: ShopifyCreds,
+  apiVersion: string = DEFAULT_API_VERSION,
+): Promise<RelatedBlockResult> {
+  const cacheKey = creds.storeUrl;
+  if (relatedInstallCache.has(cacheKey)) {
+    return { ok: true, message: "already installed", action: "unchanged" };
+  }
+
+  const client = await createClient(creds, apiVersion, THEME_TIMEOUT_MS);
+  const theme = await getMainTheme(creds, apiVersion, client);
+  if (!theme) return { ok: false, message: "No published theme found" };
+
+  // 1. Upsert the snippet (safe to overwrite — it's ours).
+  await putThemeAsset(creds, theme.id, RELATED_SNIPPET_KEY, buildRelatedSnippet(), apiVersion, client);
+
+  // 2. Ensure a render call sits right after the article body.
+  for (const key of ARTICLE_TEMPLATE_KEYS) {
+    const source = await getThemeAsset(creds, theme.id, key, apiVersion, client);
+    if (source === null) continue;
+    if (source.includes(`${RELATED_MARK}:start`)) {
+      relatedInstallCache.add(cacheKey);
+      return { ok: true, message: `render call present in ${key}`, action: "unchanged" };
+    }
+    const m = source.match(/\{\{-?\s*article\.content\s*-?\}\}/);
+    if (!m) continue;
+    const at = (m.index ?? 0) + m[0].length;
+    const next = `${source.slice(0, at)}\n${RELATED_RENDER_BLOCK}${source.slice(at)}`;
+    await putThemeAsset(creds, theme.id, key, next, apiVersion, client);
+    relatedInstallCache.add(cacheKey);
+    return { ok: true, message: `installed in ${key}`, action: "installed" };
+  }
+
+  return {
+    ok: false,
+    message:
+      "Snippet installed but the article template's {{ article.content }} wasn't found — add {% render 'netgrid-related-posts' %} to the article template manually.",
+    action: "snippet-only",
+  };
+}
