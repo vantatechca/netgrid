@@ -813,6 +813,8 @@ export const appSettings = pgTable("app_settings", {
 // placement record. See src/lib/services/link-exchange.ts.
 export const linkExchangeLoops = pgTable("link_exchange_loops", {
   id: uuid("id").defaultRandom().primaryKey(),
+  // One loop per client — the client's full mesh of interlinked sites.
+  clientId: uuid("client_id").references(() => clients.id, { onDelete: "cascade" }),
   niche: varchar("niche", { length: 255 }),
   size: integer("size").default(3).notNull(),
   status: varchar("status", { length: 16 }).default("active").notNull(),
@@ -820,6 +822,7 @@ export const linkExchangeLoops = pgTable("link_exchange_loops", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [
   index("link_exchange_loops_status_idx").on(table.status),
+  index("link_exchange_loops_client_idx").on(table.clientId),
 ]);
 
 export const linkExchangeEdges = pgTable("link_exchange_edges", {

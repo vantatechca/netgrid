@@ -322,9 +322,15 @@ export interface ApplyResult {
 }
 
 /**
- * Compute related posts for a published article and push the "Related posts"
- * block into its live body (+ Shopify metafield). Idempotent: a stale block is
- * stripped and replaced, and if nothing would change we skip the API write.
+ * Compute related posts for a published article and surface them as an internal
+ * "Related posts" block.
+ *
+ *   - Shopify: write the related list to the custom.netgrid_related_posts
+ *     metafield and ensure the theme renders it (a snippet in the article
+ *     template). No post-body edit — cheaper and far more reliable than
+ *     re-pushing bodies.
+ *   - WordPress: inject an idempotent "Related posts" block into the post body
+ *     (theme-file editing isn't available over the WP API).
  */
 export async function applyRelatedLinks(postId: string): Promise<ApplyResult> {
   const [post] = await db
@@ -352,32 +358,39 @@ export async function applyRelatedLinks(postId: string): Promise<ApplyResult> {
     .limit(1);
   if (!blog) return { ok: false, count: 0, changed: false, reason: "Blog not found" };
 
-  // Resolve the Shopify blog id ONCE (cached in the client) and reuse it for
-  // both the fetch and the update, instead of letting each call re-run a
-  // GET /blogs.json — that per-post duplication was tripping Shopify's rate
-  // limit during large backfills. No-op for WordPress.
-  let shopifyBlogId: string | undefined;
-  if ((blog as PlatformBlog).platform === "shopify") {
-    try {
-      shopifyBlogId = (
-        await platform.resolveShopifyBlogId(blog as PlatformBlog)
-      )?.blogId;
-    } catch (err) {
-      return {
-        ok: false,
-        count: 0,
-        changed: false,
-        reason: `Blog id resolve failed: ${errDetail(err)}`,
-      };
-    }
-  }
+  const relatedJson = JSON.stringify(
+    related.map(({ id, title, url }) => ({ id, title, url })),
+  );
 
-  const { body: liveBody, error: fetchError } =
-    await platform.fetchLivePostBodyResult(
+  const stampLinked = () =>
+    db
+      .update(generatedPosts)
+      .set({
+        relatedPosts: related.map(({ id, title, url }) => ({ id, title, url })),
+        relatedLinkedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(generatedPosts.id, postId));
+
+  // ── Shopify: metafield + theme block (no body edit) ──
+  if ((blog as PlatformBlog).platform === "shopify") {
+    const res = await platform.writeShopifyRelatedMetafield(
       blog as PlatformBlog,
       post.externalPostId,
-      shopifyBlogId,
+      relatedJson,
     );
+    if (!res.ok) {
+      return { ok: false, count: related.length, changed: false, reason: res.message };
+    }
+    // Best-effort, cached per store — installs the article-template snippet.
+    void platform.ensureShopifyRelatedBlock(blog as PlatformBlog).catch(() => undefined);
+    await stampLinked();
+    return { ok: true, count: related.length, changed: true, related };
+  }
+
+  // ── WordPress: idempotent in-body block ──
+  const { body: liveBody, error: fetchError } =
+    await platform.fetchLivePostBodyResult(blog as PlatformBlog, post.externalPostId);
   if (liveBody === null) {
     return {
       ok: false,
@@ -393,42 +406,21 @@ export async function applyRelatedLinks(postId: string): Promise<ApplyResult> {
   const newBody =
     related.length > 0 ? `${stripped}\n${buildRelatedBlock(related)}` : stripped;
 
-  // Nothing to do: no related posts and no stale block to remove.
   if (newBody === liveBody) {
-    await db
-      .update(generatedPosts)
-      .set({
-        relatedPosts: related.map(({ id, title, url }) => ({ id, title, url })),
-        relatedLinkedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(eq(generatedPosts.id, postId));
+    await stampLinked();
     return { ok: true, count: related.length, changed: false, related };
   }
 
-  const relatedJson = JSON.stringify(
-    related.map(({ id, title, url }) => ({ id, title, url })),
-  );
   const res = await platform.updateLivePostBody(
     blog as PlatformBlog,
     post.externalPostId,
     newBody,
-    { relatedPostsJson: relatedJson, shopifyBlogId },
   );
-
   if (!res.ok) {
     return { ok: false, count: related.length, changed: false, reason: res.message, related };
   }
 
-  await db
-    .update(generatedPosts)
-    .set({
-      relatedPosts: related.map(({ id, title, url }) => ({ id, title, url })),
-      relatedLinkedAt: new Date(),
-      updatedAt: new Date(),
-    })
-    .where(eq(generatedPosts.id, postId));
-
+  await stampLinked();
   return { ok: true, count: related.length, changed: true, related };
 }
 

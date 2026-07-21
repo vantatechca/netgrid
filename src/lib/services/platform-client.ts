@@ -7,6 +7,7 @@ import type {
 } from "@/lib/types";
 import * as wp from "./wp-client";
 import * as shopify from "./shopify-client";
+import * as shopifyTheme from "./shopify-theme-client";
 import type { ShopifyCreds } from "./shopify-client";
 
 /**
@@ -332,6 +333,53 @@ export async function updateLivePostBody(
         error instanceof Error ? error.message : "WordPress update failed",
     };
   }
+}
+
+/**
+ * Write the related-posts list to a Shopify article's
+ * custom.netgrid_related_posts JSON metafield (no body edit). Used by internal
+ * semantic linking, which renders from a theme block rather than the body.
+ * No-op for non-Shopify blogs.
+ */
+export async function writeShopifyRelatedMetafield(
+  blog: PlatformBlog,
+  externalPostId: string,
+  relatedJson: string,
+  shopifyBlogId?: string,
+): Promise<{ ok: boolean; message?: string }> {
+  if (resolvePlatform(blog) !== "shopify") return { ok: true };
+  const built = buildShopifyCreds(blog);
+  if (!built.ok) return { ok: false, message: built.message };
+  const blogId =
+    shopifyBlogId ??
+    (await shopify.resolveBlogId(built.creds, blog.shopifyBlogHandle))?.blogId;
+  if (!blogId) return { ok: false, message: "Could not resolve Shopify blog id" };
+  const res = await shopify.updateArticle(built.creds, blogId, externalPostId, {
+    extraMetafields: [
+      {
+        namespace: "custom",
+        key: "netgrid_related_posts",
+        value: relatedJson,
+        type: "json",
+      },
+    ],
+  });
+  return { ok: res.success, message: res.message };
+}
+
+/**
+ * Ensure the Shopify theme renders the "Related posts" block (installs a snippet
+ * + render call in the article template). Idempotent, cached per store.
+ * No-op for non-Shopify blogs.
+ */
+export async function ensureShopifyRelatedBlock(
+  blog: PlatformBlog,
+): Promise<{ ok: boolean; message?: string }> {
+  if (resolvePlatform(blog) !== "shopify") return { ok: true };
+  const built = buildShopifyCreds(blog);
+  if (!built.ok) return { ok: false, message: built.message };
+  const r = await shopifyTheme.ensureRelatedPostsBlock(built.creds);
+  return { ok: r.ok, message: r.message };
 }
 
 /**
