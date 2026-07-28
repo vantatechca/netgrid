@@ -58,6 +58,9 @@ const clientFields = z.object({
   ctaPlacement: z
     .enum(["bottom", "top_bottom", "top_middle_bottom"])
     .optional(),
+  // Preset CTA button color key (see cta-colors.ts). "" / omitted = per-blog
+  // derived color.
+  ctaColor: z.string().max(20).optional().or(z.literal("")),
   // Post language control. "en"/"fr" = all posts that language; "en_fr" =
   // strict alternation. Omitted/undefined leaves the legacy derived behaviour.
   languageMode: z.enum(["en", "fr", "en_fr"]).optional(),

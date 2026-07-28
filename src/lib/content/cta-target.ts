@@ -9,6 +9,7 @@
 // Kept dependency-free (no "server-only", no content-generator import) so it is
 // usable on both the server (generation + click-time redirects) and the client
 // (the onboarding form, to hide the now-unused URL field for peptides).
+import { ctaColorHex } from "@/lib/content/cta-colors";
 
 /** The niche key whose CTA links are auto-sourced from each blog's own domain. */
 export const PEPTIDES_NICHE_KEY = "peptides";
@@ -46,6 +47,8 @@ export interface BlogCtaInputs {
   ctaLabel: string | null | undefined;
   ctaUrl: string | null | undefined;
   ctaPlacement: string | null | undefined;
+  /** Preset CTA color key (see cta-colors.ts). Null = per-blog derived. */
+  ctaColor?: string | null | undefined;
 }
 
 /**
@@ -57,20 +60,21 @@ export interface BlogCtaInputs {
  */
 export function effectiveBlogCta(
   i: BlogCtaInputs,
-): { label: string; url: string; placement: string } | undefined {
+): { label: string; url: string; placement: string; color?: string } | undefined {
   const placement = i.ctaPlacement ?? "bottom";
+  const color = ctaColorHex(i.ctaColor) ?? undefined;
 
   if (isPeptidesNiche(i.niche)) {
     const url = blogDomainCtaUrl(i.blogDomain);
     if (!url) return undefined;
     const label = i.ctaLabel?.trim() || PEPTIDES_DEFAULT_CTA_LABEL;
-    return { label, url, placement };
+    return { label, url, placement, color };
   }
 
   const label = i.ctaLabel?.trim();
   const url = i.ctaUrl?.trim();
   if (!i.ctaEnabled || !label || !url) return undefined;
-  return { label, url, placement };
+  return { label, url, placement, color };
 }
 
 /**

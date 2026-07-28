@@ -71,6 +71,7 @@ import { scanPostAfterPublishFireAndForget } from "@/lib/services/post-seo-runne
 import { relinkAfterPublishFireAndForget } from "@/lib/services/semantic-linking";
 import { resolveNicheConfig } from "@/lib/content/niche-config-db";
 import { effectiveBlogCta } from "@/lib/content/cta-target";
+import { ctaColorHex } from "@/lib/content/cta-colors";
 import { resolveNextPostLanguage } from "@/lib/content/post-language";
 import { getAppBaseUrl } from "@/lib/services/link-tracker";
 import { revalidatePath } from "next/cache";
@@ -734,6 +735,7 @@ export async function generateBlogPost(
       ctaLabel: clients.ctaLabel,
       ctaUrl: clients.ctaUrl,
       ctaPlacement: clients.ctaPlacement,
+      ctaColor: clients.ctaColor,
       registrationEnabled: clients.registrationFormEnabled,
       registrationPlacement: clients.registrationFormPlacement,
     })
@@ -875,11 +877,13 @@ export async function generateBlogPost(
       ctaLabel: blog.ctaLabel,
       ctaUrl: blog.ctaUrl,
       ctaPlacement: blog.ctaPlacement,
+      ctaColor: blog.ctaColor,
     }),
     registrationForm: blog.registrationEnabled
       ? {
           actionUrl: `${getAppBaseUrl()}/api/register/${input.blogId}`,
           placement: blog.registrationPlacement ?? "bottom",
+          color: ctaColorHex(blog.ctaColor) ?? undefined,
         }
       : undefined,
     postId: pending.id,
