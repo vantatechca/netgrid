@@ -7,6 +7,7 @@ import { getMessages } from "@/lib/actions/message-actions";
 import { listKnowledgeDocuments } from "@/lib/actions/knowledge-actions";
 import { listClientKeywords } from "@/lib/actions/keyword-actions";
 import { getLocationCampaign } from "@/lib/actions/location-actions";
+import { getRegistrationView } from "@/lib/actions/registration-actions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,6 +32,7 @@ import { ClientForm } from "@/components/clients/client-form";
 import { KnowledgeBasePanel } from "@/components/clients/knowledge-base-panel";
 import { KeywordsPanel } from "@/components/clients/keywords-panel";
 import { LocationPagesPanel } from "@/components/clients/location-pages-panel";
+import { RegistrationPanel } from "@/components/clients/registration-panel";
 import { CustomPromptCard } from "@/components/content/custom-prompt-card";
 import { getClientTrafficTotals } from "@/lib/actions/analytics-actions";
 import { ClientSeoIssues } from "@/components/seo/client-seo-issues";
@@ -45,6 +47,7 @@ import {
   MapPin,
   MessageSquare,
   Pencil,
+  UserPlus,
 } from "lucide-react";
 
 interface ClientDetailPageProps {
@@ -52,7 +55,7 @@ interface ClientDetailPageProps {
   searchParams: { edit?: string; tab?: string };
 }
 
-const CLIENT_TABS = ["overview", "blogs", "seo", "knowledge", "keywords", "locations", "messages"] as const;
+const CLIENT_TABS = ["overview", "blogs", "seo", "knowledge", "keywords", "locations", "registrations", "messages"] as const;
 
 const statusVariant: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   active: "default",
@@ -167,6 +170,7 @@ export default async function ClientDetailPage({
     knowledgeDocs,
     keywords,
     locationCampaign,
+    registrationView,
   ] =
     (await Promise.all([
       getClient(clientId),
@@ -194,6 +198,7 @@ export default async function ClientDetailPage({
       listKnowledgeDocuments(clientId).catch(() => []),
       listClientKeywords(clientId).catch(() => []),
       getLocationCampaign(clientId).catch(() => null),
+      getRegistrationView(clientId).catch(() => null),
     ]).catch(() => {
       notFound();
     })) as [
@@ -206,6 +211,7 @@ export default async function ClientDetailPage({
       Awaited<ReturnType<typeof listKnowledgeDocuments>>,
       Awaited<ReturnType<typeof listClientKeywords>>,
       Awaited<ReturnType<typeof getLocationCampaign>> | null,
+      Awaited<ReturnType<typeof getRegistrationView>> | null,
     ];
 
   if (!client) notFound();
@@ -339,6 +345,10 @@ export default async function ClientDetailPage({
               Location pages ({locationCampaign.counts.total})
             </TabsTrigger>
           )}
+          <TabsTrigger value="registrations">
+            <UserPlus className="size-4" />
+            Registrations{registrationView ? ` (${registrationView.leadCount})` : ""}
+          </TabsTrigger>
           <TabsTrigger value="messages">
             <MessageSquare className="size-4" />
             Messages ({messages.length})
@@ -625,6 +635,13 @@ export default async function ClientDetailPage({
         {locationCampaign?.isPeptides && (
           <TabsContent value="locations" className="pt-4">
             <LocationPagesPanel clientId={client.id} view={locationCampaign} />
+          </TabsContent>
+        )}
+
+        {/* Registrations Tab */}
+        {registrationView && (
+          <TabsContent value="registrations" className="pt-4">
+            <RegistrationPanel clientId={client.id} view={registrationView} />
           </TabsContent>
         )}
 

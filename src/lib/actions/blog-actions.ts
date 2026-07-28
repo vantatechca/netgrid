@@ -72,6 +72,7 @@ import { relinkAfterPublishFireAndForget } from "@/lib/services/semantic-linking
 import { resolveNicheConfig } from "@/lib/content/niche-config-db";
 import { effectiveBlogCta } from "@/lib/content/cta-target";
 import { resolveNextPostLanguage } from "@/lib/content/post-language";
+import { getAppBaseUrl } from "@/lib/services/link-tracker";
 import { revalidatePath } from "next/cache";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -733,6 +734,8 @@ export async function generateBlogPost(
       ctaLabel: clients.ctaLabel,
       ctaUrl: clients.ctaUrl,
       ctaPlacement: clients.ctaPlacement,
+      registrationEnabled: clients.registrationFormEnabled,
+      registrationPlacement: clients.registrationFormPlacement,
     })
     .from(blogs)
     .leftJoin(clients, eq(blogs.clientId, clients.id))
@@ -873,6 +876,12 @@ export async function generateBlogPost(
       ctaUrl: blog.ctaUrl,
       ctaPlacement: blog.ctaPlacement,
     }),
+    registrationForm: blog.registrationEnabled
+      ? {
+          actionUrl: `${getAppBaseUrl()}/api/register/${input.blogId}`,
+          placement: blog.registrationPlacement ?? "bottom",
+        }
+      : undefined,
     postId: pending.id,
   });
 

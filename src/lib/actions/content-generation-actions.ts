@@ -24,7 +24,7 @@ import { loadNicheProfiles } from "@/lib/content/niche-registry";
 import { resolveNicheConfig } from "@/lib/content/niche-config-db";
 import { effectiveBlogCta } from "@/lib/content/cta-target";
 import { resolveNextPostLanguage } from "@/lib/content/post-language";
-import { ctaRedirectUrl } from "@/lib/services/link-tracker";
+import { ctaRedirectUrl, getAppBaseUrl } from "@/lib/services/link-tracker";
 import { pingIndexNowFireAndForget } from "@/lib/services/index-now-pinger";
 import { scanPostAfterPublishFireAndForget } from "@/lib/services/post-seo-runner";
 
@@ -400,6 +400,8 @@ export async function runGenerateAndPublish(
       ctaLabel: clients.ctaLabel,
       ctaUrl: clients.ctaUrl,
       ctaPlacement: clients.ctaPlacement,
+      registrationEnabled: clients.registrationFormEnabled,
+      registrationPlacement: clients.registrationFormPlacement,
     })
     .from(blogs)
     .innerJoin(clients, eq(blogs.clientId, clients.id))
@@ -544,6 +546,12 @@ export async function runGenerateAndPublish(
       cta,
       buyLink: input.buyLinkTerms?.length
         ? { url: ctaRedirectUrl(generatedPostId), terms: input.buyLinkTerms }
+        : undefined,
+      registrationForm: row.registrationEnabled
+        ? {
+            actionUrl: `${getAppBaseUrl()}/api/register/${blog.id}`,
+            placement: row.registrationPlacement ?? "bottom",
+          }
         : undefined,
       postId: generatedPostId,
     });

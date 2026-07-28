@@ -464,6 +464,14 @@ export interface GenerateOptions {
    */
   buyLink?: { url: string; terms: string[] };
   /**
+   * Per-client mini registration form (Name / Location / Email). When set, the
+   * form is injected at the given position(s); it POSTs to `actionUrl`
+   * (/api/register/{blogId}) which records the lead and redirects to the
+   * client's own registration page. Injected deterministically — not
+   * LLM-generated. Placement: "top" | "bottom" | "top_bottom".
+   */
+  registrationForm?: { actionUrl: string; placement?: string };
+  /**
    * The generated_posts row id for this post. When set, the CTA is routed
    * through the tracked redirect (/r/{postId}) and a page-view pixel is
    * appended, so clicks and views are logged. Omit to skip tracking.
@@ -2432,6 +2440,65 @@ function injectMoneyLink(
 }
 
 /**
+ * Build the inline mini registration form (Name / Location / Email + Register).
+ * Inline-styled so it renders on any theme. Submits to `actionUrl`
+ * (/api/register/{blogId}); a hidden postId ties the lead to this post, and a
+ * hidden honeypot field ("website") catches bots. Per-blog accent colour from
+ * the seed so the markup isn't byte-identical across the network.
+ */
+function buildRegistrationFormHtml(
+  actionUrl: string,
+  postId: string | undefined,
+  seed?: string,
+): string {
+  if (!/^https?:\/\//i.test(actionUrl)) return "";
+  const s = ctaStyleForBlog(seed);
+  const safeAction = actionUrl.replace(/"/g, "%22");
+  const postField = postId
+    ? `<input type="hidden" name="postId" value="${postId.replace(/"/g, "")}" />`
+    : "";
+  const inputStyle =
+    "display:block;width:100%;box-sizing:border-box;margin:0 0 10px;padding:10px 12px;" +
+    "border:1px solid #d1d5db;border-radius:8px;font-size:15px;";
+  return (
+    `\n<div style="margin:24px 0;padding:20px;border:1px solid #e5e7eb;border-radius:12px;background:#f9fafb;max-width:460px;">` +
+    `<div style="font-weight:700;font-size:18px;margin:0 0 4px;">Register for access</div>` +
+    `<div style="font-size:13px;color:#6b7280;margin:0 0 14px;">Enter your details to continue.</div>` +
+    `<form action="${safeAction}" method="post">` +
+    `<input style="${inputStyle}" type="text" name="name" placeholder="Name" required />` +
+    `<input style="${inputStyle}" type="text" name="location" placeholder="Location" />` +
+    `<input style="${inputStyle}" type="email" name="email" placeholder="Email" required />` +
+    `<input type="text" name="website" tabindex="-1" autocomplete="off" ` +
+    `style="position:absolute;left:-9999px;width:1px;height:1px;" aria-hidden="true" />` +
+    postField +
+    `<button type="submit" style="display:inline-block;width:100%;padding:${s.padding};` +
+    `background:${s.bg};color:#ffffff;font-weight:${s.weight};font-size:${s.fontSize};` +
+    `border:0;border-radius:${s.radius};cursor:pointer;">Register</button>` +
+    `</form></div>`
+  );
+}
+
+/** Inject the registration form at the configured position(s). */
+function injectRegistrationForm(
+  body: string,
+  form: NonNullable<GenerateOptions["registrationForm"]>,
+  postId: string | undefined,
+  seed?: string,
+): string {
+  const html = buildRegistrationFormHtml(form.actionUrl, postId, seed);
+  if (!html) return body;
+  const placement = form.placement ?? "bottom";
+  let out = body;
+  if (placement === "top" || placement === "top_bottom") {
+    out = insertHtmlAfterFirstParagraph(out, html);
+  }
+  if (placement === "bottom" || placement === "top_bottom") {
+    out = out + html;
+  }
+  return out;
+}
+
+/**
  * Render the client's Knowledge Base summaries into a system-prompt block.
  * Returns "" when there's nothing to inject.
  */
@@ -3184,6 +3251,17 @@ The "content" field is the full HTML article body — at least ${MIN_WORDS} word
   if (opts.buyLink && opts.buyLink.terms.length > 0) {
     const buyUrl = opts.postId ? ctaRedirectUrl(opts.postId) : opts.buyLink.url;
     body = injectMoneyLink(body, buyUrl, opts.buyLink.terms, opts.blogSeed);
+  }
+
+  // Mini registration form (Name / Location / Email) at the configured
+  // position(s) — no-op when the client hasn't enabled it.
+  if (opts.registrationForm) {
+    body = injectRegistrationForm(
+      body,
+      opts.registrationForm,
+      opts.postId,
+      opts.blogSeed,
+    );
   }
 
   // Page-view tracking pixel — appended once we know the post id so views on
