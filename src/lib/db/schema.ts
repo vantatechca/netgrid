@@ -125,6 +125,12 @@ export const clients = pgTable("clients", {
   peptideDosages: text("peptide_dosages"),
   locationCampaignEnabled: boolean("location_campaign_enabled").default(false).notNull(),
   locationPagesPerDay: integer("location_pages_per_day").default(2).notNull(),
+  // Mini registration form injected into posts. On submit it records the lead
+  // and redirects the visitor to registrationRedirectUrl (the client's own
+  // sign-up page). Placement: "top" | "bottom" | "top_bottom".
+  registrationFormEnabled: boolean("registration_form_enabled").default(false).notNull(),
+  registrationRedirectUrl: varchar("registration_redirect_url", { length: 1000 }),
+  registrationFormPlacement: varchar("registration_form_placement", { length: 40 }).default("bottom"),
   // Post language control: "en" | "fr" | "en_fr" | null.
   //   en    → all posts English
   //   fr    → all posts French
@@ -708,6 +714,30 @@ export const peptideLocationTargets = pgTable("peptide_location_targets", {
   ),
   index("peptide_location_targets_blog_status_idx").on(table.blogId, table.status),
   index("peptide_location_targets_client_idx").on(table.clientId),
+]);
+
+// ─── registration_leads ───────────────────────────────────────────────────────
+//
+// Leads captured by the per-client mini registration form injected into posts.
+// The form POSTs to /api/register/{blogId}, which stores a row here and then
+// redirects the visitor to the client's own registration page.
+
+export const registrationLeads = pgTable("registration_leads", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  clientId: uuid("client_id")
+    .notNull()
+    .references(() => clients.id, { onDelete: "cascade" }),
+  blogId: uuid("blog_id").references(() => blogs.id, { onDelete: "set null" }),
+  postId: uuid("post_id").references(() => generatedPosts.id, { onDelete: "set null" }),
+  name: varchar("name", { length: 255 }),
+  location: varchar("location", { length: 255 }),
+  email: varchar("email", { length: 320 }),
+  referrer: varchar("referrer", { length: 2000 }),
+  userAgent: varchar("user_agent", { length: 1000 }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("registration_leads_client_created_idx").on(table.clientId, table.createdAt),
+  index("registration_leads_blog_idx").on(table.blogId),
 ]);
 
 // ─── Relations ──────────────────────────────────────────────────────────────
