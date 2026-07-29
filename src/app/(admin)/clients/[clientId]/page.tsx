@@ -34,6 +34,7 @@ import { KeywordsPanel } from "@/components/clients/keywords-panel";
 import { LocationPagesPanel } from "@/components/clients/location-pages-panel";
 import { RegistrationPanel } from "@/components/clients/registration-panel";
 import { CustomPromptCard } from "@/components/content/custom-prompt-card";
+import { TriggerClientPostsButton } from "@/components/clients/trigger-client-posts-button";
 import { getClientTrafficTotals } from "@/lib/actions/analytics-actions";
 import { ClientSeoIssues } from "@/components/seo/client-seo-issues";
 import {
@@ -257,12 +258,22 @@ export default async function ClientDetailPage({
             </p>
           </div>
         </div>
-        <Link href={`/clients/${client.id}?edit=true`}>
-          <Button variant="outline">
-            <Pencil className="size-4" />
-            Edit Client
-          </Button>
-        </Link>
+        <div className="flex items-center gap-2">
+          <TriggerClientPostsButton
+            clientId={client.id}
+            blogs={blogsResult.blogs.map((b) => ({
+              id: b.id,
+              domain: b.domain,
+              status: b.status,
+            }))}
+          />
+          <Link href={`/clients/${client.id}?edit=true`}>
+            <Button variant="outline">
+              <Pencil className="size-4" />
+              Edit Client
+            </Button>
+          </Link>
+        </div>
       </div>
 
       {/* Stats Cards */}

@@ -1090,6 +1090,146 @@ export async function generateBlogPost(
   return { success: true, generatedPostId: pending.id };
 }
 
+// ─── Trigger posts for a whole client (multi-blog) ──────────────────────────
+
+export interface TriggerClientPostsInput {
+  clientId: string;
+  /** The blogs the operator picked in the site selector. */
+  blogIds: string[];
+  /** Push each post live right after generation (defaults to true). */
+  autoPublish?: boolean;
+}
+
+export interface TriggerClientPostResult {
+  blogId: string;
+  domain: string;
+  /** Generation succeeded. */
+  generated: boolean;
+  /** Publish succeeded — only meaningful when autoPublish was requested. */
+  published: boolean;
+  message: string;
+}
+
+export interface TriggerClientPostsResult {
+  success: boolean;
+  results: TriggerClientPostResult[];
+  generatedCount: number;
+  publishedCount: number;
+  failedCount: number;
+  message: string;
+}
+
+/**
+ * Fan a single "trigger posts" action across the sites the operator selected
+ * for a client. Each site gets ONE freshly generated post (topic auto-picked
+ * from the niche/custom-prompt + recent posts), optionally published live.
+ *
+ * Blogs are processed sequentially so a burst of image + publish calls doesn't
+ * hammer the model and destination hosts all at once. One blog failing never
+ * aborts the rest — every selected site is attempted and reported on.
+ */
+export async function triggerClientPosts(
+  input: TriggerClientPostsInput,
+): Promise<TriggerClientPostsResult> {
+  await requireAdmin();
+
+  const autoPublish = input.autoPublish ?? true;
+
+  // Resolve the picked blogs, scoped to this client so a stray/foreign blogId
+  // can't be smuggled in. Keeps us from generating against another client's site.
+  const picked = input.blogIds.filter(Boolean);
+  if (picked.length === 0) {
+    return {
+      success: false,
+      results: [],
+      generatedCount: 0,
+      publishedCount: 0,
+      failedCount: 0,
+      message: "No sites selected.",
+    };
+  }
+
+  const rows = await db
+    .select({ id: blogs.id, domain: blogs.domain })
+    .from(blogs)
+    .where(
+      and(eq(blogs.clientId, input.clientId), inArray(blogs.id, picked)),
+    );
+
+  const domainById = new Map(rows.map((r) => [r.id, r.domain]));
+  const validIds = rows.map((r) => r.id);
+
+  if (validIds.length === 0) {
+    return {
+      success: false,
+      results: [],
+      generatedCount: 0,
+      publishedCount: 0,
+      failedCount: 0,
+      message: "None of the selected sites belong to this client.",
+    };
+  }
+
+  const results: TriggerClientPostResult[] = [];
+
+  for (const blogId of validIds) {
+    const domain = domainById.get(blogId) ?? blogId.slice(0, 8);
+    try {
+      const res = await generateBlogPost({ blogId, autoPublish });
+      if (!res.success) {
+        results.push({
+          blogId,
+          domain,
+          generated: false,
+          published: false,
+          message: res.message,
+        });
+        continue;
+      }
+
+      const published = autoPublish
+        ? res.publishResult?.success ?? false
+        : false;
+      const message = autoPublish
+        ? res.publishResult
+          ? res.publishResult.message
+          : "Generated (no publish result returned)."
+        : "Generated as draft.";
+
+      results.push({ blogId, domain, generated: true, published, message });
+    } catch (e) {
+      results.push({
+        blogId,
+        domain,
+        generated: false,
+        published: false,
+        message: e instanceof Error ? e.message : "Unexpected error",
+      });
+    }
+  }
+
+  const generatedCount = results.filter((r) => r.generated).length;
+  const publishedCount = results.filter((r) => r.published).length;
+  const failedCount = results.filter((r) => !r.generated).length;
+
+  revalidatePath(`/clients/${input.clientId}`);
+
+  const summary = autoPublish
+    ? `${publishedCount}/${validIds.length} published` +
+      (failedCount > 0 ? `, ${failedCount} failed` : "")
+    : `${generatedCount}/${validIds.length} generated` +
+      (failedCount > 0 ? `, ${failedCount} failed` : "");
+
+  return {
+    success: failedCount === 0,
+    results,
+    generatedCount,
+    publishedCount,
+    failedCount,
+    message: summary,
+  };
+}
+
 // ─── Publish a Generated Post (from generated_posts table) ──────────────────
 
 export async function publishGeneratedPost(
