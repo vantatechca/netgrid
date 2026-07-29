@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import {
   DropdownMenu,
@@ -40,7 +41,9 @@ import {
   Plus,
   Loader2,
 } from "lucide-react";
-import { deleteBlog, testBlogConnection } from "@/lib/actions/blog-actions";
+import { BulkDeleteBar } from "@/components/ui/bulk-delete-bar";
+import { useRowSelection } from "@/lib/hooks/use-row-selection";
+import { deleteBlog, deleteBlogs, testBlogConnection } from "@/lib/actions/blog-actions";
 import { toast } from "sonner";
 
 
@@ -116,6 +119,15 @@ export function BlogTable({
   const [isPending, startTransition] = useTransition();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const sel = useRowSelection(blogs.map((b) => b.id));
+
+  const batchDelete = async () => {
+    const res = await deleteBlogs(sel.ids);
+    if (res.success) toast.success(res.message);
+    else toast.error(res.message);
+    sel.clear();
+    router.refresh();
+  };
 
   const buildUrl = useCallback(
     (params: Record<string, string | number>) => {
@@ -257,11 +269,35 @@ export function BlogTable({
         </Button>
       </div>
 
+      {/* Bulk actions */}
+      {sel.count > 0 && (
+        <BulkDeleteBar
+          count={sel.count}
+          noun="blog"
+          description={`This permanently deletes ${sel.count} blog${sel.count === 1 ? "" : "s"} from netgrid AND every post published to their live sites (WordPress/Shopify). This can't be undone.`}
+          onClear={sel.clear}
+          onConfirm={batchDelete}
+        />
+      )}
+
       {/* Table */}
       <div className="rounded-lg border">
         <Table>
           <TableHeader>
             <TableRow>
+              <TableHead className="w-[40px]">
+                <Checkbox
+                  aria-label="Select all blogs"
+                  checked={
+                    sel.allSelected
+                      ? true
+                      : sel.someSelected
+                        ? "indeterminate"
+                        : false
+                  }
+                  onCheckedChange={(v) => sel.toggleAll(v === true)}
+                />
+              </TableHead>
               <TableHead>
                 <span className="inline-flex items-center gap-1">
                   Domain
@@ -280,7 +316,7 @@ export function BlogTable({
             {blogs.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={showClientColumn ? 7 : 6}
+                  colSpan={showClientColumn ? 8 : 7}
                   className="h-24 text-center text-muted-foreground"
                 >
                   No blogs found.
@@ -291,8 +327,16 @@ export function BlogTable({
                 <TableRow
                   key={blog.id}
                   className="cursor-pointer"
+                  data-state={sel.isSelected(blog.id) ? "selected" : undefined}
                   onClick={() => router.push( rowTarget === "posts" ? `/blogs/${blog.id}/posts` : `/blogs/${blog.id}`)}
                 >
+                  <TableCell onClick={(e) => e.stopPropagation()}>
+                    <Checkbox
+                      aria-label={`Select ${blog.domain}`}
+                      checked={sel.isSelected(blog.id)}
+                      onCheckedChange={(v) => sel.toggle(blog.id, v === true)}
+                    />
+                  </TableCell>
                   <TableCell className="font-medium">{blog.domain}</TableCell>
                   {showClientColumn && (
                     <TableCell className="text-muted-foreground">

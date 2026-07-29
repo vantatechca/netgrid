@@ -24,6 +24,7 @@ import {
   avg,
   sql,
   or,
+  inArray,
 } from "drizzle-orm";
 import type { CreateClientInput, UpdateClientInput } from "@/lib/validators/client";
 
@@ -260,6 +261,40 @@ export async function deleteClient(id: string) {
   });
 
   return updatedClient;
+}
+
+// ─── deleteClients (batch soft delete) ──────────────────────────────────────
+
+export async function deleteClients(
+  ids: string[],
+): Promise<{ success: boolean; deleted: number; message: string }> {
+  const session = await requireAdmin();
+  if (ids.length === 0) return { success: true, deleted: 0, message: "Nothing selected." };
+
+  const updated = await db
+    .update(clients)
+    .set({ status: "churned", updatedAt: new Date() })
+    .where(inArray(clients.id, ids))
+    .returning({ id: clients.id, name: clients.name });
+
+  if (updated.length > 0) {
+    await db.insert(activityLog).values(
+      updated.map((c) => ({
+        userId: session.user.id,
+        clientId: c.id,
+        action: "client.deleted",
+        entityType: "client",
+        entityId: c.id,
+        details: { name: c.name, softDelete: true, batch: true },
+      })),
+    );
+  }
+
+  return {
+    success: true,
+    deleted: updated.length,
+    message: `Archived ${updated.length} client${updated.length === 1 ? "" : "s"}.`,
+  };
 }
 
 // ─── getClientStats ─────────────────────────────────────────────────────────

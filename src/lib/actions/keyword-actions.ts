@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { asc, desc, eq, sql } from "drizzle-orm";
+import { asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { activityLog, clientKeywords, clients } from "@/lib/db/schema";
 import { requireAdmin } from "@/lib/auth/helpers";
@@ -184,6 +184,25 @@ export async function deleteClientKeyword(id: string): Promise<void> {
     .where(eq(clientKeywords.id, id))
     .returning({ clientId: clientKeywords.clientId });
   if (deleted) revalidatePath(`/clients/${deleted.clientId}`);
+}
+
+/** Remove several keywords at once (multi-select batch delete). */
+export async function deleteClientKeywords(
+  ids: string[],
+): Promise<{ success: boolean; deleted: number; message: string }> {
+  await requireAdmin();
+  if (ids.length === 0) return { success: true, deleted: 0, message: "Nothing selected." };
+  const deleted = await db
+    .delete(clientKeywords)
+    .where(inArray(clientKeywords.id, ids))
+    .returning({ clientId: clientKeywords.clientId });
+  const clientId = deleted[0]?.clientId;
+  if (clientId) revalidatePath(`/clients/${clientId}`);
+  return {
+    success: true,
+    deleted: deleted.length,
+    message: `Deleted ${deleted.length} keyword${deleted.length === 1 ? "" : "s"}.`,
+  };
 }
 
 /** Save a client's manual seed terms (used by the next scrape). */

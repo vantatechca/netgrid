@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Card,
   CardContent,
@@ -62,7 +63,9 @@ import {
 } from "@/components/ui/alert-dialog";
 import {
   deleteBlogLivePost,
+  deleteBlogLivePosts,
   deleteGeneratedPost,
+  deleteGeneratedPosts,
   editBlogLivePost,
   getGeneratedPostContent,
   publishGeneratedPost,
@@ -74,6 +77,8 @@ import {
   type GeneratedPostContent,
 } from "@/lib/actions/blog-actions";
 import { scanGeneratedPost } from "@/lib/actions/post-seo-actions";
+import { BulkDeleteBar } from "@/components/ui/bulk-delete-bar";
+import { useRowSelection } from "@/lib/hooks/use-row-selection";
 import { GeneratePostButton } from "./generate-post-button";
 import { ArticlePreviewHtml } from "./article-preview-html";
 
@@ -401,6 +406,24 @@ export function BlogPostsPanel({
 }: Props) {
   const router = useRouter();
   const [refreshing, startRefresh] = useTransition();
+  const genSel = useRowSelection(generated.map((r) => r.id));
+  const liveSel = useRowSelection(live.posts.map((p) => p.id));
+
+  async function batchDeleteGen() {
+    const res = await deleteGeneratedPosts(genSel.ids, true);
+    if (res.success) toast.success(res.message);
+    else toast.error(res.message);
+    genSel.clear();
+    router.refresh();
+  }
+
+  async function batchDeleteLive() {
+    const res = await deleteBlogLivePosts(blogId, liveSel.ids, false);
+    if (res.success) toast.success(res.message);
+    else toast.error(res.message);
+    liveSel.clear();
+    router.refresh();
+  }
 
   // Edit dialog state
   const [editing, setEditing] = useState<BlogLivePostRow | null>(null);
@@ -650,9 +673,34 @@ export function BlogPostsPanel({
                 above to create one.
               </p>
             ) : (
-              <Table>
+              <>
+                {genSel.count > 0 && (
+                  <div className="mb-3">
+                    <BulkDeleteBar
+                      count={genSel.count}
+                      noun="post"
+                      description={`This deletes ${genSel.count} generated post${genSel.count === 1 ? "" : "s"} from the app, and removes the live copy for any that are published. This can't be undone.`}
+                      onClear={genSel.clear}
+                      onConfirm={batchDeleteGen}
+                    />
+                  </div>
+                )}
+                <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-[40px]">
+                      <Checkbox
+                        aria-label="Select all generated posts"
+                        checked={
+                          genSel.allSelected
+                            ? true
+                            : genSel.someSelected
+                              ? "indeterminate"
+                              : false
+                        }
+                        onCheckedChange={(v) => genSel.toggleAll(v === true)}
+                      />
+                    </TableHead>
                     <TableHead>Topic / Title</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Words</TableHead>
@@ -668,6 +716,13 @@ export function BlogPostsPanel({
                 <TableBody>
                   {generated.map((row) => (
                     <TableRow key={row.id}>
+                      <TableCell>
+                        <Checkbox
+                          aria-label={`Select ${row.title || row.topic}`}
+                          checked={genSel.isSelected(row.id)}
+                          onCheckedChange={(v) => genSel.toggle(row.id, v === true)}
+                        />
+                      </TableCell>
                       <TableCell className="max-w-md">
                         <div className="space-y-1">
                           <p className="line-clamp-1 text-sm font-medium">
@@ -740,6 +795,7 @@ export function BlogPostsPanel({
                   ))}
                 </TableBody>
               </Table>
+              </>
             )}
           </TabsContent>
 
@@ -757,9 +813,33 @@ export function BlogPostsPanel({
               </p>
             ) : (
               <>
+                {liveSel.count > 0 && (
+                  <div className="mb-3">
+                    <BulkDeleteBar
+                      count={liveSel.count}
+                      noun="post"
+                      description={`This deletes ${liveSel.count} post${liveSel.count === 1 ? "" : "s"} from the live ${live.platform === "wordpress" ? "WordPress" : live.platform} site. WordPress posts go to trash; Shopify articles are removed permanently.`}
+                      onClear={liveSel.clear}
+                      onConfirm={batchDeleteLive}
+                    />
+                  </div>
+                )}
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead className="w-[40px]">
+                        <Checkbox
+                          aria-label="Select all live posts"
+                          checked={
+                            liveSel.allSelected
+                              ? true
+                              : liveSel.someSelected
+                                ? "indeterminate"
+                                : false
+                          }
+                          onCheckedChange={(v) => liveSel.toggleAll(v === true)}
+                        />
+                      </TableHead>
                       <TableHead>Title</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Published</TableHead>
@@ -770,6 +850,13 @@ export function BlogPostsPanel({
                   <TableBody>
                     {live.posts.map((post) => (
                       <TableRow key={post.id}>
+                        <TableCell>
+                          <Checkbox
+                            aria-label={`Select ${post.title}`}
+                            checked={liveSel.isSelected(post.id)}
+                            onCheckedChange={(v) => liveSel.toggle(post.id, v === true)}
+                          />
+                        </TableCell>
                         <TableCell className="max-w-md">
                           <div className="space-y-1">
                             <p className="line-clamp-1 text-sm font-medium">

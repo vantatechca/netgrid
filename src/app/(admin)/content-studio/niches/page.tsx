@@ -1,21 +1,11 @@
-import Link from "next/link";
 import { getNiches } from "@/lib/actions/niche-actions";
 import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { ChevronRight, Info } from "lucide-react";
+import { Info } from "lucide-react";
 import {
   SyncNichesButton,
   ImportNicheButton,
-  DeleteNicheButton,
 } from "@/components/niches/niche-admin";
+import { NichesTable } from "@/components/niches/niches-table";
 
 export const dynamic = "force-dynamic";
 
@@ -64,72 +54,7 @@ export default async function NichesPage() {
           </CardContent>
         </Card>
       ) : (
-        <Card>
-          <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Niche</TableHead>
-                  <TableHead>Industry</TableHead>
-                  <TableHead className="text-right">Key topics</TableHead>
-                  <TableHead>Source</TableHead>
-                  <TableHead className="w-[88px]" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {niches.map((n) => {
-                  const topicCount = Array.isArray(n.keyTopics)
-                    ? (n.keyTopics as string[]).length
-                    : 0;
-                  return (
-                    <TableRow key={n.id} className="cursor-pointer">
-                      <TableCell className="font-medium">
-                        <Link
-                          href={`/content-studio/niches/${n.id}`}
-                          className="block hover:underline"
-                        >
-                          {n.label}
-                          <span className="ml-2 text-xs text-muted-foreground">
-                            {n.key}
-                          </span>
-                        </Link>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {n.industry}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums text-muted-foreground">
-                        {topicCount}
-                      </TableCell>
-                      <TableCell>
-                        <Badge
-                          variant={n.source === "manual" ? "default" : "secondary"}
-                          className="font-normal"
-                        >
-                          {n.source}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center justify-end gap-1">
-                          <DeleteNicheButton
-                            nicheId={n.id}
-                            nicheLabel={n.label}
-                            compact
-                          />
-                          <Link
-                            href={`/content-studio/niches/${n.id}`}
-                            aria-label={`Edit ${n.label}`}
-                          >
-                            <ChevronRight className="size-4 text-muted-foreground" />
-                          </Link>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
+        <NichesTable niches={niches} />
       )}
     </div>
   );

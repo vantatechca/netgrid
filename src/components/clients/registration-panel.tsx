@@ -13,6 +13,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -24,9 +25,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { BulkDeleteBar } from "@/components/ui/bulk-delete-bar";
+import { useRowSelection } from "@/lib/hooks/use-row-selection";
 import {
   updateRegistrationConfig,
   deleteRegistrationLead,
+  deleteRegistrationLeads,
   exportRegistrationLeadsCsv,
   type RegistrationView,
   type RegistrationPlacement,
@@ -50,6 +54,15 @@ export function RegistrationPanel({
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [pending, start] = useTransition();
+  const sel = useRowSelection(view.recent.map((l) => l.id));
+
+  async function batchDelete() {
+    const res = await deleteRegistrationLeads(sel.ids);
+    if (res.success) toast.success(res.message);
+    else toast.error(res.message);
+    sel.clear();
+    router.refresh();
+  }
 
   async function save() {
     setSaving(true);
@@ -194,6 +207,16 @@ export function RegistrationPanel({
           </div>
         </CardHeader>
         <CardContent className="p-0">
+          {sel.count > 0 && (
+            <div className="border-b p-3">
+              <BulkDeleteBar
+                count={sel.count}
+                noun="lead"
+                onClear={sel.clear}
+                onConfirm={batchDelete}
+              />
+            </div>
+          )}
           {view.recent.length === 0 ? (
             <p className="px-6 py-10 text-center text-sm text-muted-foreground">
               No registrations yet.
@@ -202,6 +225,19 @@ export function RegistrationPanel({
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-[40px]">
+                    <Checkbox
+                      aria-label="Select all leads"
+                      checked={
+                        sel.allSelected
+                          ? true
+                          : sel.someSelected
+                            ? "indeterminate"
+                            : false
+                      }
+                      onCheckedChange={(v) => sel.toggleAll(v === true)}
+                    />
+                  </TableHead>
                   <TableHead>Date</TableHead>
                   <TableHead>Name</TableHead>
                   <TableHead>Location</TableHead>
@@ -212,6 +248,13 @@ export function RegistrationPanel({
               <TableBody>
                 {view.recent.map((l) => (
                   <TableRow key={l.id}>
+                    <TableCell>
+                      <Checkbox
+                        aria-label="Select lead"
+                        checked={sel.isSelected(l.id)}
+                        onCheckedChange={(v) => sel.toggle(l.id, v === true)}
+                      />
+                    </TableCell>
                     <TableCell className="whitespace-nowrap text-muted-foreground">
                       {fmt(l.createdAt)}
                     </TableCell>

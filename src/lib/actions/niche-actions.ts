@@ -2,7 +2,7 @@
 
 import { db } from "@/lib/db";
 import { niches } from "@/lib/db/schema";
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth/helpers";
 import {
@@ -194,6 +194,24 @@ export async function deleteNiche(
 
   revalidatePath("/content-studio/niches");
   return { success: true, message: `Deleted niche "${existing.label}"` };
+}
+
+/** Delete several niche config rows at once (multi-select batch delete). */
+export async function deleteNiches(
+  ids: string[],
+): Promise<{ success: boolean; deleted: number; message: string }> {
+  await requireAdmin();
+  if (ids.length === 0) return { success: true, deleted: 0, message: "Nothing selected." };
+  const deleted = await db
+    .delete(niches)
+    .where(inArray(niches.id, ids))
+    .returning({ id: niches.id });
+  revalidatePath("/content-studio/niches");
+  return {
+    success: true,
+    deleted: deleted.length,
+    message: `Deleted ${deleted.length} niche${deleted.length === 1 ? "" : "s"}.`,
+  };
 }
 
 /** Fallback slug for a niche key when the model gives none. */

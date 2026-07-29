@@ -20,6 +20,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
 import {
   Table,
@@ -29,10 +30,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { BulkDeleteBar } from "@/components/ui/bulk-delete-bar";
+import { useRowSelection } from "@/lib/hooks/use-row-selection";
 import {
   uploadKnowledgeDocument,
   setKnowledgeDocumentActive,
   deleteKnowledgeDocument,
+  deleteKnowledgeDocuments,
   reprocessKnowledgeDocument,
   type listKnowledgeDocuments,
 } from "@/lib/actions/knowledge-actions";
@@ -68,8 +72,17 @@ export function KnowledgeBasePanel({
   const [pending, start] = useTransition();
   // "" = client-wide; otherwise the selected blog id this upload is scoped to.
   const [scopeBlogId, setScopeBlogId] = useState("");
+  const sel = useRowSelection(documents.map((d) => d.id));
 
   const blogDomainById = new Map(blogs.map((b) => [b.id, b.domain]));
+
+  async function batchDelete() {
+    const res = await deleteKnowledgeDocuments(sel.ids);
+    if (res.success) toast.success(res.message);
+    else toast.error(res.message);
+    sel.clear();
+    router.refresh();
+  }
 
   const handleFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -221,9 +234,33 @@ export function KnowledgeBasePanel({
             </p>
           </div>
         ) : (
-          <Table>
+          <>
+            {sel.count > 0 && (
+              <div className="mb-3">
+                <BulkDeleteBar
+                  count={sel.count}
+                  noun="document"
+                  onClear={sel.clear}
+                  onConfirm={batchDelete}
+                />
+              </div>
+            )}
+            <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-[40px]">
+                  <Checkbox
+                    aria-label="Select all documents"
+                    checked={
+                      sel.allSelected
+                        ? true
+                        : sel.someSelected
+                          ? "indeterminate"
+                          : false
+                    }
+                    onCheckedChange={(v) => sel.toggleAll(v === true)}
+                  />
+                </TableHead>
                 <TableHead>File</TableHead>
                 <TableHead>Type</TableHead>
                 <TableHead>Status</TableHead>
@@ -237,6 +274,13 @@ export function KnowledgeBasePanel({
                 const keywords = (doc.extractedKeywords as string[] | null) ?? [];
                 return (
                   <TableRow key={doc.id}>
+                    <TableCell>
+                      <Checkbox
+                        aria-label={`Select ${doc.fileName}`}
+                        checked={sel.isSelected(doc.id)}
+                        onCheckedChange={(v) => sel.toggle(doc.id, v === true)}
+                      />
+                    </TableCell>
                     <TableCell className="max-w-[220px]">
                       <div className="flex items-center gap-1.5">
                         <span className="truncate font-medium" title={doc.fileName}>
@@ -316,6 +360,7 @@ export function KnowledgeBasePanel({
               })}
             </TableBody>
           </Table>
+          </>
         )}
       </CardContent>
     </Card>
