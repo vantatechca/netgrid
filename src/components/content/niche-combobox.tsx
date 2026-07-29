@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, ChevronsUpDown, Loader2, Plus } from "lucide-react";
+import { Check, ChevronsUpDown, Loader2, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -140,6 +140,25 @@ export function NicheCombobox({
                   <CommandEmpty>No niches yet.</CommandEmpty>
                 )}
                 <CommandGroup>
+                  {!q && (
+                    <CommandItem
+                      value="__none__"
+                      onSelect={() => {
+                        onChange("");
+                        setOpen(false);
+                      }}
+                    >
+                      <X
+                        className={cn(
+                          "size-4",
+                          value ? "opacity-0" : "opacity-100",
+                        )}
+                      />
+                      <span className="flex-1 truncate text-muted-foreground">
+                        No niche
+                      </span>
+                    </CommandItem>
+                  )}
                   {filtered.map((o) => (
                     <CommandItem
                       key={o.key}
