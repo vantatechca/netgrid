@@ -20,6 +20,7 @@ import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import { NicheCombobox } from "@/components/content/niche-combobox";
 import { isPeptidesNiche } from "@/lib/content/cta-target";
+import { CTA_COLORS } from "@/lib/content/cta-colors";
 import {
   defaultLanguageModeForNiche,
   languageModeFromToggles,
@@ -57,6 +58,7 @@ export function ClientForm({ mode, defaultValues }: ClientFormProps) {
       ctaLabel: defaultValues?.ctaLabel ?? "",
       ctaUrl: defaultValues?.ctaUrl ?? "",
       ctaPlacement: defaultValues?.ctaPlacement ?? "bottom",
+      ctaColor: defaultValues?.ctaColor ?? "",
       // Explicit stored mode wins; a client that never set one shows the
       // checkboxes that match its legacy niche-derived behaviour.
       languageMode:
@@ -351,6 +353,47 @@ export function ClientForm({ mode, defaultValues }: ClientFormProps) {
                 </select>
                 <p className="text-xs text-muted-foreground">
                   Where the button appears within each post.
+                </p>
+              </div>
+
+              <div className="space-y-2 sm:col-span-2">
+                <Label>Button color</Label>
+                <Controller
+                  control={control}
+                  name="ctaColor"
+                  render={({ field }) => (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => field.onChange("")}
+                        title="Auto (varies per blog)"
+                        className={`flex h-8 items-center gap-1 rounded-md border px-2 text-xs ${
+                          !field.value ? "border-foreground ring-1 ring-foreground" : "border-input"
+                        }`}
+                      >
+                        Auto
+                      </button>
+                      {CTA_COLORS.map((c) => (
+                        <button
+                          key={c.key}
+                          type="button"
+                          onClick={() => field.onChange(c.key)}
+                          title={c.label}
+                          aria-label={c.label}
+                          className={`size-8 rounded-md border ${
+                            field.value === c.key
+                              ? "ring-2 ring-offset-2 ring-foreground"
+                              : "border-input"
+                          }`}
+                          style={{ background: c.hex }}
+                        />
+                      ))}
+                    </div>
+                  )}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Applies to the CTA button and the registration button.
+                  &ldquo;Auto&rdquo; keeps a per-blog color for footprint variety.
                 </p>
               </div>
             </div>

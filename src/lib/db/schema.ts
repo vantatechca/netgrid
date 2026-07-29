@@ -115,6 +115,8 @@ export const clients = pgTable("clients", {
   ctaUrl: varchar("cta_url", { length: 1000 }),
   // Where the button appears: "bottom" | "top_bottom" | "top_middle_bottom".
   ctaPlacement: varchar("cta_placement", { length: 40 }).default("bottom"),
+  // Preset CTA button color key (see cta-colors.ts). NULL = per-blog derived.
+  ctaColor: varchar("cta_color", { length: 20 }),
   // Manual seed terms (newline/comma separated) fed to the keyword scraper
   // alongside the client's niche key-topics. See client_keywords.
   keywordSeeds: text("keyword_seeds"),

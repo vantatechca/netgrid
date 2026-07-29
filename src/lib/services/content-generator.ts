@@ -454,7 +454,7 @@ export interface GenerateOptions {
    * body (link to the client's main site / contact / registration page).
    * Injected deterministically — not LLM-generated.
    */
-  cta?: { label: string; url: string; placement?: string };
+  cta?: { label: string; url: string; placement?: string; color?: string };
   /**
    * In-body contextual "money link": hyperlink the first occurrence of one of
    * `terms` (e.g. "buy bpc-157", the compound) in the opening paragraph to
@@ -470,7 +470,7 @@ export interface GenerateOptions {
    * client's own registration page. Injected deterministically — not
    * LLM-generated. Placement: "top" | "bottom" | "top_bottom".
    */
-  registrationForm?: { actionUrl: string; placement?: string };
+  registrationForm?: { actionUrl: string; placement?: string; color?: string };
   /**
    * The generated_posts row id for this post. When set, the CTA is routed
    * through the tracked redirect (/r/{postId}) and a page-view pixel is
@@ -2295,8 +2295,14 @@ ON-PAGE QUALITY (apply throughout the article):
  * Inline CSS so it renders as a button on any theme. Returns "" when the CTA
  * is incomplete or the URL isn't a safe http(s) link.
  */
+/** Only allow a plain #hex color into inline CSS (guards against injection). */
+function safeCssColor(v: string | null | undefined): string | null {
+  const s = (v ?? "").trim();
+  return /^#[0-9a-f]{3,8}$/i.test(s) ? s : null;
+}
+
 function buildCtaHtml(
-  cta?: { label: string; url: string },
+  cta?: { label: string; url: string; color?: string },
   seed?: string,
 ): string {
   const label = (cta?.label ?? "").trim();
@@ -2310,14 +2316,16 @@ function buildCtaHtml(
   const safeUrl = url.replace(/"/g, "%22").replace(/</g, "%3C").replace(/>/g, "%3E");
 
   // Per-blog button appearance + rel so the CTA markup isn't byte-identical
-  // across the network. Same blog → same button always.
+  // across the network. Same blog → same button always. A client-chosen color
+  // overrides the derived background when set.
   const s = ctaStyleForBlog(seed);
   const rel = relForBlog(seed);
+  const bg = safeCssColor(cta?.color) ?? s.bg;
 
   return (
     `\n<div style="text-align:${s.align};margin:${s.margin};">` +
     `<a href="${safeUrl}" target="_blank" rel="${rel}" ` +
-    `style="display:inline-block;padding:${s.padding};background:${s.bg};color:#ffffff;` +
+    `style="display:inline-block;padding:${s.padding};background:${bg};color:#ffffff;` +
     `font-weight:${s.weight};font-size:${s.fontSize};text-decoration:none;border-radius:${s.radius};">` +
     `${safeLabel}</a></div>`
   );
@@ -2450,9 +2458,11 @@ function buildRegistrationFormHtml(
   actionUrl: string,
   postId: string | undefined,
   seed?: string,
+  color?: string,
 ): string {
   if (!/^https?:\/\//i.test(actionUrl)) return "";
   const s = ctaStyleForBlog(seed);
+  const btnBg = safeCssColor(color) ?? s.bg;
   const safeAction = actionUrl.replace(/"/g, "%22");
   const postField = postId
     ? `<input type="hidden" name="postId" value="${postId.replace(/"/g, "")}" />`
@@ -2472,7 +2482,7 @@ function buildRegistrationFormHtml(
     `style="position:absolute;left:-9999px;width:1px;height:1px;" aria-hidden="true" />` +
     postField +
     `<button type="submit" style="display:inline-block;width:100%;padding:${s.padding};` +
-    `background:${s.bg};color:#ffffff;font-weight:${s.weight};font-size:${s.fontSize};` +
+    `background:${btnBg};color:#ffffff;font-weight:${s.weight};font-size:${s.fontSize};` +
     `border:0;border-radius:${s.radius};cursor:pointer;">Register</button>` +
     `</form></div>`
   );
@@ -2485,7 +2495,7 @@ function injectRegistrationForm(
   postId: string | undefined,
   seed?: string,
 ): string {
-  const html = buildRegistrationFormHtml(form.actionUrl, postId, seed);
+  const html = buildRegistrationFormHtml(form.actionUrl, postId, seed, form.color);
   if (!html) return body;
   const placement = form.placement ?? "bottom";
   let out = body;

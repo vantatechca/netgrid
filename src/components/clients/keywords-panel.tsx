@@ -13,6 +13,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -23,10 +24,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { BulkDeleteBar } from "@/components/ui/bulk-delete-bar";
+import { useRowSelection } from "@/lib/hooks/use-row-selection";
 import {
   scrapeClientKeywords,
   setClientKeywordActive,
   deleteClientKeyword,
+  deleteClientKeywords,
   updateClientKeywordSeeds,
   type ClientKeyword,
 } from "@/lib/actions/keyword-actions";
@@ -45,8 +49,17 @@ export function KeywordsPanel({
   const [savingSeeds, setSavingSeeds] = useState(false);
   const [scraping, setScraping] = useState(false);
   const [pending, start] = useTransition();
+  const sel = useRowSelection(keywords.map((k) => k.id));
 
   const activeCount = keywords.filter((k) => k.isActive).length;
+
+  async function batchDelete() {
+    const res = await deleteClientKeywords(sel.ids);
+    if (res.success) toast.success(res.message);
+    else toast.error(res.message);
+    sel.clear();
+    router.refresh();
+  }
 
   async function saveSeeds() {
     setSavingSeeds(true);
@@ -157,6 +170,16 @@ export function KeywordsPanel({
           </CardDescription>
         </CardHeader>
         <CardContent className="p-0">
+          {sel.count > 0 && (
+            <div className="border-b p-3">
+              <BulkDeleteBar
+                count={sel.count}
+                noun="keyword"
+                onClear={sel.clear}
+                onConfirm={batchDelete}
+              />
+            </div>
+          )}
           {keywords.length === 0 ? (
             <p className="px-6 py-10 text-center text-sm text-muted-foreground">
               No keywords yet. Add seeds above and click{" "}
@@ -166,6 +189,19 @@ export function KeywordsPanel({
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-[40px]">
+                    <Checkbox
+                      aria-label="Select all keywords"
+                      checked={
+                        sel.allSelected
+                          ? true
+                          : sel.someSelected
+                            ? "indeterminate"
+                            : false
+                      }
+                      onCheckedChange={(v) => sel.toggleAll(v === true)}
+                    />
+                  </TableHead>
                   <TableHead>Keyword</TableHead>
                   <TableHead className="text-right">Volume</TableHead>
                   <TableHead className="text-right">Signal</TableHead>
@@ -177,6 +213,13 @@ export function KeywordsPanel({
               <TableBody>
                 {keywords.map((k) => (
                   <TableRow key={k.id} className={k.isActive ? "" : "opacity-50"}>
+                    <TableCell>
+                      <Checkbox
+                        aria-label={`Select ${k.keyword}`}
+                        checked={sel.isSelected(k.id)}
+                        onCheckedChange={(v) => sel.toggle(k.id, v === true)}
+                      />
+                    </TableCell>
                     <TableCell className="font-medium">{k.keyword}</TableCell>
                     <TableCell className="text-right tabular-nums text-muted-foreground">
                       {k.searchVolume != null ? k.searchVolume.toLocaleString() : "—"}

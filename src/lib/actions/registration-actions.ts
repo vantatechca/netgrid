@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { clients, registrationLeads } from "@/lib/db/schema";
 import { requireAdmin } from "@/lib/auth/helpers";
@@ -83,6 +83,25 @@ export async function deleteRegistrationLead(id: string): Promise<void> {
     .where(eq(registrationLeads.id, id))
     .returning({ clientId: registrationLeads.clientId });
   if (row) revalidatePath(`/clients/${row.clientId}`);
+}
+
+/** Delete several captured leads at once (multi-select batch delete). */
+export async function deleteRegistrationLeads(
+  ids: string[],
+): Promise<{ success: boolean; deleted: number; message: string }> {
+  await requireAdmin();
+  if (ids.length === 0) return { success: true, deleted: 0, message: "Nothing selected." };
+  const deleted = await db
+    .delete(registrationLeads)
+    .where(inArray(registrationLeads.id, ids))
+    .returning({ clientId: registrationLeads.clientId });
+  const clientId = deleted[0]?.clientId;
+  if (clientId) revalidatePath(`/clients/${clientId}`);
+  return {
+    success: true,
+    deleted: deleted.length,
+    message: `Deleted ${deleted.length} lead${deleted.length === 1 ? "" : "s"}.`,
+  };
 }
 
 /** One CSV cell — quote and escape per RFC 4180. */

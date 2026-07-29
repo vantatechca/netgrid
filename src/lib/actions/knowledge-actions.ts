@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { and, desc, eq, isNull, or } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { activityLog, blogs, clients, knowledgeDocuments } from "@/lib/db/schema";
 import { requireAdmin } from "@/lib/auth/helpers";
@@ -254,6 +254,40 @@ export async function deleteKnowledgeDocument(id: string) {
 
   revalidatePath(`/clients/${deleted.clientId}`);
   return deleted;
+}
+
+// ─── deleteKnowledgeDocuments (batch) ─────────────────────────────────────────
+
+export async function deleteKnowledgeDocuments(
+  ids: string[],
+): Promise<{ success: boolean; deleted: number; message: string }> {
+  const session = await requireAdmin();
+  if (ids.length === 0) return { success: true, deleted: 0, message: "Nothing selected." };
+
+  const deleted = await db
+    .delete(knowledgeDocuments)
+    .where(inArray(knowledgeDocuments.id, ids))
+    .returning();
+
+  if (deleted.length > 0) {
+    await db.insert(activityLog).values(
+      deleted.map((d) => ({
+        userId: session.user.id,
+        clientId: d.clientId,
+        action: "knowledge.deleted",
+        entityType: "knowledge_document",
+        entityId: d.id,
+        details: { fileName: d.fileName, batch: true },
+      })),
+    );
+    revalidatePath(`/clients/${deleted[0].clientId}`);
+  }
+
+  return {
+    success: true,
+    deleted: deleted.length,
+    message: `Deleted ${deleted.length} document${deleted.length === 1 ? "" : "s"}.`,
+  };
 }
 
 // ─── reprocessKnowledgeDocument ───────────────────────────────────────────────

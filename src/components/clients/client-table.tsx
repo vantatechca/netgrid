@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,7 +22,9 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { MoreHorizontal, Eye, Pencil, Trash2 } from "lucide-react";
-import { deleteClient } from "@/lib/actions/client-actions";
+import { BulkDeleteBar } from "@/components/ui/bulk-delete-bar";
+import { useRowSelection } from "@/lib/hooks/use-row-selection";
+import { deleteClient, deleteClients } from "@/lib/actions/client-actions";
 import { toast } from "sonner";
 
 interface ClientRow {
@@ -51,8 +54,17 @@ const statusVariant: Record<string, "default" | "secondary" | "destructive" | "o
 export function ClientTable({ clients, total, page, pageSize }: ClientTableProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
+  const sel = useRowSelection(clients.map((c) => c.id));
 
   const totalPages = Math.ceil(total / pageSize);
+
+  async function batchArchive() {
+    const res = await deleteClients(sel.ids);
+    if (res.success) toast.success(res.message);
+    else toast.error(res.message);
+    sel.clear();
+    router.refresh();
+  }
 
   function handleDelete(id: string, name: string) {
     if (!confirm(`Are you sure you want to archive "${name}"? This will set their status to churned.`)) {
@@ -80,10 +92,33 @@ export function ClientTable({ clients, total, page, pageSize }: ClientTableProps
 
   return (
     <div className="space-y-4">
+      {sel.count > 0 && (
+        <BulkDeleteBar
+          count={sel.count}
+          noun="client"
+          actionLabel="Archive"
+          description={`This archives ${sel.count} client${sel.count === 1 ? "" : "s"} (sets their status to churned). You can still find them by filtering for churned clients.`}
+          onClear={sel.clear}
+          onConfirm={batchArchive}
+        />
+      )}
       <div className="rounded-lg border">
         <Table>
           <TableHeader>
             <TableRow>
+              <TableHead className="w-[40px]">
+                <Checkbox
+                  aria-label="Select all clients"
+                  checked={
+                    sel.allSelected
+                      ? true
+                      : sel.someSelected
+                        ? "indeterminate"
+                        : false
+                  }
+                  onCheckedChange={(v) => sel.toggleAll(v === true)}
+                />
+              </TableHead>
               <TableHead>Name</TableHead>
               <TableHead>Email</TableHead>
               <TableHead>Niche</TableHead>
@@ -97,6 +132,13 @@ export function ClientTable({ clients, total, page, pageSize }: ClientTableProps
           <TableBody>
             {clients.map((client) => (
               <TableRow key={client.id}>
+                <TableCell>
+                  <Checkbox
+                    aria-label={`Select ${client.name}`}
+                    checked={sel.isSelected(client.id)}
+                    onCheckedChange={(v) => sel.toggle(client.id, v === true)}
+                  />
+                </TableCell>
                 <TableCell>
                   <Link
                     href={`/clients/${client.id}`}

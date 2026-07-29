@@ -23,6 +23,7 @@ import { verticalForNiche } from "@/lib/content/verticals";
 import { loadNicheProfiles } from "@/lib/content/niche-registry";
 import { resolveNicheConfig } from "@/lib/content/niche-config-db";
 import { effectiveBlogCta } from "@/lib/content/cta-target";
+import { ctaColorHex } from "@/lib/content/cta-colors";
 import { resolveNextPostLanguage } from "@/lib/content/post-language";
 import { ctaRedirectUrl, getAppBaseUrl } from "@/lib/services/link-tracker";
 import { pingIndexNowFireAndForget } from "@/lib/services/index-now-pinger";
@@ -400,6 +401,7 @@ export async function runGenerateAndPublish(
       ctaLabel: clients.ctaLabel,
       ctaUrl: clients.ctaUrl,
       ctaPlacement: clients.ctaPlacement,
+      ctaColor: clients.ctaColor,
       registrationEnabled: clients.registrationFormEnabled,
       registrationPlacement: clients.registrationFormPlacement,
     })
@@ -422,6 +424,7 @@ export async function runGenerateAndPublish(
     ctaLabel: row.ctaLabel,
     ctaUrl: row.ctaUrl,
     ctaPlacement: row.ctaPlacement,
+    ctaColor: row.ctaColor,
   });
 
   if (!blogHasCredentials(blog)) {
@@ -551,6 +554,7 @@ export async function runGenerateAndPublish(
         ? {
             actionUrl: `${getAppBaseUrl()}/api/register/${blog.id}`,
             placement: row.registrationPlacement ?? "bottom",
+            color: ctaColorHex(row.ctaColor) ?? undefined,
           }
         : undefined,
       postId: generatedPostId,
@@ -954,6 +958,7 @@ async function resolveIdeationContext(blogId: string) {
       ctaLabel: clients.ctaLabel,
       ctaUrl: clients.ctaUrl,
       ctaPlacement: clients.ctaPlacement,
+      ctaColor: clients.ctaColor,
     })
     .from(blogs)
     .innerJoin(clients, eq(blogs.clientId, clients.id))
@@ -968,6 +973,7 @@ async function resolveIdeationContext(blogId: string) {
     ctaLabel: row.ctaLabel,
     ctaUrl: row.ctaUrl,
     ctaPlacement: row.ctaPlacement,
+    ctaColor: row.ctaColor,
   });
   // Custom prompts are client-wide; the persona-stack toggle is client-level.
   const customPrompt = row.clientCustomPrompt?.trim() || undefined;

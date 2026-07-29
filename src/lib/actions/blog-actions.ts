@@ -71,6 +71,7 @@ import { scanPostAfterPublishFireAndForget } from "@/lib/services/post-seo-runne
 import { relinkAfterPublishFireAndForget } from "@/lib/services/semantic-linking";
 import { resolveNicheConfig } from "@/lib/content/niche-config-db";
 import { effectiveBlogCta } from "@/lib/content/cta-target";
+import { ctaColorHex } from "@/lib/content/cta-colors";
 import { resolveNextPostLanguage } from "@/lib/content/post-language";
 import { getAppBaseUrl } from "@/lib/services/link-tracker";
 import { revalidatePath } from "next/cache";
@@ -539,6 +540,33 @@ export async function deleteBlog(id: string) {
   };
 }
 
+/**
+ * Delete several blogs at once (multi-select batch delete). Each blog is torn
+ * down through {@link deleteBlog} so its live posts are removed too; failures
+ * are counted rather than aborting the batch.
+ */
+export async function deleteBlogs(
+  ids: string[],
+): Promise<{ success: boolean; deleted: number; failed: number; message: string }> {
+  await requireAdmin();
+  let deleted = 0;
+  let failed = 0;
+  for (const id of ids) {
+    const res = await deleteBlog(id);
+    if ("error" in res) failed += 1;
+    else deleted += 1;
+  }
+  revalidatePath("/blogs");
+  return {
+    success: failed === 0,
+    deleted,
+    failed,
+    message:
+      `Deleted ${deleted} blog${deleted === 1 ? "" : "s"}` +
+      (failed > 0 ? ` · ${failed} couldn't be deleted` : ""),
+  };
+}
+
 // ─── Test Blog Connection (saved blog) ──────────────────────────────────────
 
 export async function testBlogConnection(
@@ -734,6 +762,7 @@ export async function generateBlogPost(
       ctaLabel: clients.ctaLabel,
       ctaUrl: clients.ctaUrl,
       ctaPlacement: clients.ctaPlacement,
+      ctaColor: clients.ctaColor,
       registrationEnabled: clients.registrationFormEnabled,
       registrationPlacement: clients.registrationFormPlacement,
     })
@@ -875,11 +904,13 @@ export async function generateBlogPost(
       ctaLabel: blog.ctaLabel,
       ctaUrl: blog.ctaUrl,
       ctaPlacement: blog.ctaPlacement,
+      ctaColor: blog.ctaColor,
     }),
     registrationForm: blog.registrationEnabled
       ? {
           actionUrl: `${getAppBaseUrl()}/api/register/${input.blogId}`,
           placement: blog.registrationPlacement ?? "bottom",
+          color: ctaColorHex(blog.ctaColor) ?? undefined,
         }
       : undefined,
     postId: pending.id,
@@ -2055,5 +2086,61 @@ export async function deleteGeneratedPost(
       hasLivePost && deleteLive
         ? "Post deleted from the app and the live site"
         : "Post deleted",
+  };
+}
+
+/**
+ * Batch-delete GENERATED posts (the "Generated" tab). Each row goes through
+ * {@link deleteGeneratedPost} so published rows tear down their live copy first
+ * when `deleteLive` is set; a live-delete failure keeps that one row and is
+ * counted rather than aborting the batch.
+ */
+export async function deleteGeneratedPosts(
+  ids: string[],
+  deleteLive: boolean = true,
+): Promise<{ success: boolean; deleted: number; failed: number; message: string }> {
+  await requireAdmin();
+  let deleted = 0;
+  let failed = 0;
+  for (const id of ids) {
+    const res = await deleteGeneratedPost(id, deleteLive);
+    if (res.success) deleted += 1;
+    else failed += 1;
+  }
+  return {
+    success: failed === 0,
+    deleted,
+    failed,
+    message:
+      `Deleted ${deleted} post${deleted === 1 ? "" : "s"}` +
+      (failed > 0 ? ` · ${failed} kept (live delete failed)` : ""),
+  };
+}
+
+/**
+ * Batch-delete LIVE posts (the "Live" tab). Each id is removed from the
+ * destination site through {@link deleteBlogLivePost}; failures are counted.
+ */
+export async function deleteBlogLivePosts(
+  blogId: string,
+  postIds: number[],
+  force: boolean = false,
+): Promise<{ success: boolean; deleted: number; failed: number; message: string }> {
+  await requireAdmin();
+  let deleted = 0;
+  let failed = 0;
+  for (const postId of postIds) {
+    const res = await deleteBlogLivePost(blogId, postId, force);
+    if (res.success) deleted += 1;
+    else failed += 1;
+  }
+  revalidatePath(`/blogs/${blogId}`);
+  return {
+    success: failed === 0,
+    deleted,
+    failed,
+    message:
+      `Deleted ${deleted} post${deleted === 1 ? "" : "s"}` +
+      (failed > 0 ? ` · ${failed} failed` : ""),
   };
 }
