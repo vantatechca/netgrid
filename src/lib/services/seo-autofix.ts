@@ -12,12 +12,9 @@ import {
 } from "@/lib/services/platform-client";
 import { scanBlog, type BlogDescriptor } from "@/lib/seo/scanner";
 import {
-  truncateToPx,
-  TITLE_FONT_PX,
-  DESC_FONT_PX,
-  TITLE_TARGET_PX,
-  DESC_TARGET_PX,
-} from "@/lib/seo/text-width";
+  appendRedditToTitle,
+  appendRedditToDescription,
+} from "@/lib/seo/reddit";
 
 export interface AutoFixResult {
   issueId: string;
@@ -250,10 +247,13 @@ async function autoFixShopifyIssue(
       });
       cleaned = generated.replace(/\s+/g, " ").trim();
     }
+    // Re-inject the "Reddit" SEO token (idempotent, pixel-capped) so a live
+    // meta fix keeps the token instead of overwriting it with a clean value
+    // derived from the reddit-free article title / excerpt.
     const trimmed =
       kind === "meta_title"
-        ? truncateToPx(cleaned, TITLE_FONT_PX, TITLE_TARGET_PX)
-        : truncateToPx(cleaned, DESC_FONT_PX, DESC_TARGET_PX);
+        ? appendRedditToTitle(cleaned)
+        : appendRedditToDescription(cleaned);
 
     // Resolve the numeric blog id once so updateArticle hits the right blog.
     const shopifyBlogId = (await resolveShopifyBlogId(platformBlog))?.blogId;
@@ -430,7 +430,7 @@ export async function autoFixIssue(issueId: string): Promise<AutoFixResult> {
             issueDescription: issue.description || issue.title,
           }),
       });
-      const trimmed = truncateToPx(cleaned, DESC_FONT_PX, DESC_TARGET_PX);
+      const trimmed = appendRedditToDescription(cleaned);
       await applyMetaDescription(blog, post.id, trimmed);
       // Plugin-less sites can't render a <meta name="description"> — also drop
       // the description into JSON-LD Article schema in the body so it counts.
@@ -457,7 +457,7 @@ export async function autoFixIssue(issueId: string): Promise<AutoFixResult> {
             issueDescription: issue.description || issue.title,
           }),
       });
-      const trimmed = truncateToPx(cleaned, TITLE_FONT_PX, TITLE_TARGET_PX);
+      const trimmed = appendRedditToTitle(cleaned);
       await applyMetaTitle(blog, post.id, trimmed);
       await markApplied(issueId, `meta title: ${trimmed}`);
       return { issueId, applied: true, message: `Meta title set on post ${post.id}` };
@@ -482,8 +482,8 @@ export async function autoFixIssue(issueId: string): Promise<AutoFixResult> {
       });
       const trimmed =
         kind === "og_title"
-          ? truncateToPx(cleaned, TITLE_FONT_PX, TITLE_TARGET_PX)
-          : truncateToPx(cleaned, DESC_FONT_PX, DESC_TARGET_PX);
+          ? appendRedditToTitle(cleaned)
+          : appendRedditToDescription(cleaned);
       if (kind === "og_title") {
         await applyMetaTitle(blog, post.id, trimmed);
       } else {

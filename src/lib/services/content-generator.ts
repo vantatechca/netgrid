@@ -16,11 +16,13 @@ import {
 } from "@/lib/content/language";
 import {
   truncateToPx,
-  TITLE_FONT_PX,
   DESC_FONT_PX,
-  TITLE_TARGET_PX,
   DESC_TARGET_PX,
 } from "@/lib/seo/text-width";
+import {
+  appendRedditToTitle,
+  appendRedditToDescription,
+} from "@/lib/seo/reddit";
 import {
   generateBodyImage,
   generateHeroImage,
@@ -1600,7 +1602,9 @@ export function normalizeMetaTitle(
     .replace(/(?:\s*\|\s*){2,}/g, " | ")
     .replace(/^\s*\|\s*|\s*\|\s*$/g, "")
     .trim();
-  return truncateToPx(t, TITLE_FONT_PX, TITLE_TARGET_PX);
+  // Inject the "Reddit" SEO token into the <title> surface (idempotent, and
+  // pixel-capped). Kept out of the visible article title / body.
+  return appendRedditToTitle(t);
 }
 
 /**
@@ -1616,7 +1620,9 @@ export function normalizeMetaDescription(
   fallback: string,
 ): string {
   const d = (raw || fallback || "").replace(/\s+/g, " ").trim();
-  return truncateToPx(d, DESC_FONT_PX, DESC_TARGET_PX);
+  // Inject the "Reddit" SEO token into the meta description (idempotent, and
+  // pixel-capped). Kept out of the visible article body.
+  return appendRedditToDescription(d);
 }
 
 /**

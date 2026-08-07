@@ -90,6 +90,13 @@ export interface PublishPostInput {
    * stable per-blog human name so each site has its own consistent byline.
    */
   author?: string;
+  /**
+   * Explicit URL slug (WordPress `slug` / Shopify article `handle`). When set,
+   * it overrides the platform's default title-derived slug. Used to carry the
+   * "[keyword]-reddit" SEO handle so "reddit" appears in the URL without
+   * touching the visible article title. When omitted, publishPost derives one.
+   */
+  slug?: string;
 }
 
 export interface PublishPostResult {
