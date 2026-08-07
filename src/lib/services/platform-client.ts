@@ -9,6 +9,7 @@ import * as wp from "./wp-client";
 import * as shopify from "./shopify-client";
 import * as shopifyTheme from "./shopify-theme-client";
 import type { ShopifyCreds } from "./shopify-client";
+import { redditSlug } from "@/lib/seo/reddit";
 
 /**
  * Minimal shape of a blog row for the dispatcher. Only credential fields are
@@ -179,12 +180,21 @@ export async function publishPost(
 ): Promise<PublishPostResult> {
   const platform = resolvePlatform(blog);
 
+  // Carry the "[keyword]-reddit" SEO slug into the URL. Derived from the
+  // primary keyword (tags[0]) when the caller hasn't supplied one, falling
+  // back to the meta title / title. The visible article title and body are
+  // never modified — only the handle/slug picks up the reddit token.
+  const withSlug: PublishPostInput = {
+    ...input,
+    slug: input.slug ?? redditSlug(input.tags?.[0] || input.metaTitle || input.title),
+  };
+
   if (platform === "shopify") {
     const built = buildShopifyCreds(blog);
     if (!built.ok) {
       return { success: false, message: built.message };
     }
-    return shopify.createArticle(built.creds, input, {
+    return shopify.createArticle(built.creds, withSlug, {
       blogHandle: blog.shopifyBlogHandle || undefined,
     });
   }
@@ -192,7 +202,7 @@ export async function publishPost(
   if (!blog.wpUrl || !blog.wpUsername || !blog.wpAppPassword) {
     return { success: false, message: "WordPress credentials are incomplete." };
   }
-  return wp.createPost(blog.wpUrl, blog.wpUsername, blog.wpAppPassword, input, {
+  return wp.createPost(blog.wpUrl, blog.wpUsername, blog.wpAppPassword, withSlug, {
     seoPlugin: blog.seoPlugin ?? "none",
   });
 }
