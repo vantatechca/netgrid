@@ -21,6 +21,13 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import {
   Table,
@@ -72,6 +79,8 @@ export function KnowledgeBasePanel({
   const [pending, start] = useTransition();
   // "" = client-wide; otherwise the selected blog id this upload is scoped to.
   const [scopeBlogId, setScopeBlogId] = useState("");
+  // The document whose full keywords/topics are open in the detail dialog.
+  const [viewDoc, setViewDoc] = useState<KnowledgeDoc | null>(null);
   const sel = useRowSelection(documents.map((d) => d.id));
 
   const blogDomainById = new Map(blogs.map((b) => [b.id, b.domain]));
@@ -272,6 +281,8 @@ export function KnowledgeBasePanel({
             <TableBody>
               {documents.map((doc) => {
                 const keywords = (doc.extractedKeywords as string[] | null) ?? [];
+                const topics = (doc.extractedTopics as string[] | null) ?? [];
+                const hasDetail = keywords.length > 0 || topics.length > 0;
                 return (
                   <TableRow key={doc.id}>
                     <TableCell>
@@ -311,14 +322,17 @@ export function KnowledgeBasePanel({
                       </Badge>
                     </TableCell>
                     <TableCell className="max-w-[260px]">
-                      {keywords.length > 0 ? (
-                        <span
-                          className="line-clamp-2 text-xs text-muted-foreground"
-                          title={keywords.join(", ")}
+                      {hasDetail ? (
+                        <button
+                          type="button"
+                          onClick={() => setViewDoc(doc)}
+                          title="View all keywords & topics"
+                          className="line-clamp-2 block text-left text-xs text-muted-foreground hover:text-foreground hover:underline"
                         >
-                          {keywords.slice(0, 6).join(", ")}
-                          {keywords.length > 6 ? ` +${keywords.length - 6}` : ""}
-                        </span>
+                          {keywords.length > 0
+                            ? `${keywords.slice(0, 6).join(", ")}${keywords.length > 6 ? ` +${keywords.length - 6}` : ""}`
+                            : `${topics.length} topic${topics.length === 1 ? "" : "s"}`}
+                        </button>
                       ) : (
                         <span className="text-xs text-muted-foreground">—</span>
                       )}
@@ -363,6 +377,65 @@ export function KnowledgeBasePanel({
           </>
         )}
       </CardContent>
+
+      <Dialog open={!!viewDoc} onOpenChange={(open) => !open && setViewDoc(null)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="truncate pr-6">
+              {viewDoc?.fileName}
+            </DialogTitle>
+            {viewDoc?.summary && (
+              <DialogDescription>{viewDoc.summary}</DialogDescription>
+            )}
+          </DialogHeader>
+          {viewDoc &&
+            (() => {
+              const kws =
+                (viewDoc.extractedKeywords as string[] | null) ?? [];
+              const tps = (viewDoc.extractedTopics as string[] | null) ?? [];
+              return (
+                <div className="max-h-[60vh] space-y-5 overflow-y-auto">
+                  <section>
+                    <h4 className="mb-2 text-sm font-medium">
+                      Keywords ({kws.length})
+                    </h4>
+                    {kws.length > 0 ? (
+                      <div className="flex flex-wrap gap-1.5">
+                        {kws.map((k) => (
+                          <Badge key={k} variant="secondary">
+                            {k}
+                          </Badge>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">
+                        No keywords extracted.
+                      </p>
+                    )}
+                  </section>
+                  <section>
+                    <h4 className="mb-2 text-sm font-medium">
+                      Topics ({tps.length})
+                    </h4>
+                    {tps.length > 0 ? (
+                      <div className="flex flex-wrap gap-1.5">
+                        {tps.map((t) => (
+                          <Badge key={t} variant="outline">
+                            {t}
+                          </Badge>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">
+                        No topics extracted.
+                      </p>
+                    )}
+                  </section>
+                </div>
+              );
+            })()}
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
