@@ -1,4 +1,10 @@
-import "server-only";
+// No `import "server-only"` here on purpose — see
+// src/lib/content/client-keywords.ts for the reasoning: every consumer is a
+// Server Component page, a "use server" action, an API route, or a
+// standalone tsx script, never a client component, and the real
+// `server-only` package throws under plain Node execution (it only resolves
+// to a no-op under the "react-server" export condition Next's bundler sets
+// internally).
 import { db } from "@/lib/db";
 import { appSettings } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";

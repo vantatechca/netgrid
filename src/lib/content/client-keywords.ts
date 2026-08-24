@@ -1,4 +1,11 @@
-import "server-only";
+// No `import "server-only"` here on purpose: every consumer is already a
+// "use server" action file or a standalone tsx script (e.g.
+// src/lib/db/import-city-assignments.ts), never a client component — Next's
+// own "use server" boundary already keeps this out of client bundles. The
+// guard actively broke standalone script execution (the real `server-only`
+// package throws under plain Node — it only resolves to a no-op under the
+// "react-server" export condition Next's bundler sets internally), so it's
+// been removed here rather than worked around.
 import { db } from "@/lib/db";
 import { clientKeywords } from "@/lib/db/schema";
 import { and, asc, desc, eq, sql } from "drizzle-orm";

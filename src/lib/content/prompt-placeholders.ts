@@ -1,4 +1,6 @@
-import "server-only";
+// No `import "server-only"` here on purpose — see client-keywords.ts, whose
+// same reasoning applies: every consumer is already a "use server" action
+// file or a standalone tsx script, and the guard breaks plain Node execution.
 import { topActiveClientKeywords } from "@/lib/content/client-keywords";
 import { resolveNicheConfig } from "@/lib/content/niche-config-db";
 
