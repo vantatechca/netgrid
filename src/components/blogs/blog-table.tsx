@@ -40,10 +40,17 @@ import {
   ChevronRight,
   Plus,
   Loader2,
+  Download,
 } from "lucide-react";
 import { BulkDeleteBar } from "@/components/ui/bulk-delete-bar";
 import { useRowSelection } from "@/lib/hooks/use-row-selection";
-import { deleteBlog, deleteBlogs, testBlogConnection } from "@/lib/actions/blog-actions";
+import {
+  deleteBlog,
+  deleteBlogs,
+  testBlogConnection,
+  exportBlogsCsv,
+} from "@/lib/actions/blog-actions";
+import type { BlogStatus } from "@/lib/types";
 import { toast } from "sonner";
 
 
@@ -120,6 +127,7 @@ export function BlogTable({
   const [isPending, startTransition] = useTransition();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [exporting, setExporting] = useState(false);
   const sel = useRowSelection(blogs.map((b) => b.id));
 
   const batchDelete = async () => {
@@ -223,6 +231,38 @@ export function BlogTable({
     }
   };
 
+  const handleExport = async () => {
+    setExporting(true);
+    const toastId = toast.loading("Preparing export…");
+    try {
+      const res = await exportBlogsCsv({
+        clientId,
+        search: search || undefined,
+        status: statusFilter !== "all" ? (statusFilter as BlogStatus) : undefined,
+      });
+      if (!res.success) {
+        toast.error(res.message, { id: toastId });
+        return;
+      }
+      const blob = new Blob([res.csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = res.filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success("Export ready", { id: toastId });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Export failed", {
+        id: toastId,
+      });
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       {/* Toolbar */}
@@ -260,14 +300,24 @@ export function BlogTable({
             </SelectContent>
           </Select>
         </div>
-        <Button
-          onClick={() =>
-            router.push(clientId ? `/blogs/new?clientId=${clientId}` : "/blogs/new")
-          }
-        >
-          <Plus className="size-4" data-icon="inline-start" />
-          Add Blog
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={handleExport} disabled={exporting}>
+            {exporting ? (
+              <Loader2 className="size-4 animate-spin" data-icon="inline-start" />
+            ) : (
+              <Download className="size-4" data-icon="inline-start" />
+            )}
+            Export CSV
+          </Button>
+          <Button
+            onClick={() =>
+              router.push(clientId ? `/blogs/new?clientId=${clientId}` : "/blogs/new")
+            }
+          >
+            <Plus className="size-4" data-icon="inline-start" />
+            Add Blog
+          </Button>
+        </div>
       </div>
 
       {/* Bulk actions */}

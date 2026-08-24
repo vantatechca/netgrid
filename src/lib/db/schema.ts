@@ -201,6 +201,11 @@ export const blogs = pgTable("blogs", {
   // Display name for this blog's own store, e.g. "Montreal Peptides". Null
   // falls back to a domain-derived label at read time.
   brandName: varchar("brand_name", { length: 160 }),
+  // Shopify homepage SEO — pushed to the shop's global.title_tag /
+  // global.description_tag metafields (same convention as article meta).
+  // Null means "don't touch the shop's existing metafields."
+  homepageMetaTitle: varchar("homepage_meta_title", { length: 70 }),
+  homepageMetaDescription: varchar("homepage_meta_description", { length: 320 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [

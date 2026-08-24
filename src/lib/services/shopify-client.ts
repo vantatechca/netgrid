@@ -335,6 +335,69 @@ export async function testConnection(
   }
 }
 
+/**
+ * Set the storefront's homepage SEO title/description. Shopify's "Homepage
+ * title / meta description" (Online Store → Preferences) is backed by
+ * shop-level metafields — same global.title_tag / global.description_tag
+ * convention netgrid already writes for articles, just owned by the shop
+ * itself instead of a specific resource. Unlike article updates (where
+ * nested metafields on the article PUT upsert by namespace+key), the
+ * top-level /metafields.json endpoint has no parent resource to nest
+ * under, so an existing shop metafield must be looked up by namespace+key
+ * and updated by id; only a genuinely missing key gets created.
+ */
+export async function updateShopSeoMetafields(
+  creds: ShopifyCreds,
+  input: { metaTitle?: string; metaDescription?: string },
+  apiVersion: string = DEFAULT_API_VERSION,
+): Promise<PublishPostResult> {
+  const wanted: Array<{ key: string; value: string }> = [];
+  if (input.metaTitle && input.metaTitle.trim()) {
+    wanted.push({ key: "title_tag", value: input.metaTitle.trim() });
+  }
+  if (input.metaDescription && input.metaDescription.trim()) {
+    wanted.push({ key: "description_tag", value: input.metaDescription.trim() });
+  }
+  if (wanted.length === 0) {
+    return { success: true, message: "Nothing to update" };
+  }
+
+  try {
+    const client = await createClient(creds, apiVersion);
+
+    const existing = await client.get<{
+      metafields: Array<{ id: number; key: string }>;
+    }>("/metafields.json", { params: { namespace: "global" } });
+    const existingIdByKey = new Map(
+      existing.data.metafields
+        .filter((m) => m.key === "title_tag" || m.key === "description_tag")
+        .map((m) => [m.key, m.id]),
+    );
+
+    for (const w of wanted) {
+      const existingId = existingIdByKey.get(w.key);
+      if (existingId) {
+        await client.put(`/metafields/${existingId}.json`, {
+          metafield: { id: existingId, value: w.value, type: "single_line_text_field" },
+        });
+      } else {
+        await client.post("/metafields.json", {
+          metafield: {
+            namespace: "global",
+            key: w.key,
+            value: w.value,
+            type: "single_line_text_field",
+          },
+        });
+      }
+    }
+
+    return { success: true, message: "Homepage SEO updated on Shopify" };
+  } catch (error) {
+    return { success: false, message: formatError(error) };
+  }
+}
+
 export async function listBlogs(
   creds: ShopifyCreds,
   apiVersion: string = DEFAULT_API_VERSION,

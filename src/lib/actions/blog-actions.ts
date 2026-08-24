@@ -64,7 +64,10 @@ import type {
   PublishPostInput,
   PublishPostResult,
 } from "@/lib/types";
-import { publishPost as platformPublishPost } from "@/lib/services/platform-client";
+import {
+  publishPost as platformPublishPost,
+  updateHomepageSeo as platformUpdateHomepageSeo,
+} from "@/lib/services/platform-client";
 import * as wp from "@/lib/services/wp-client";
 import { pingIndexNowFireAndForget } from "@/lib/services/index-now-pinger";
 import { scanPostAfterPublishFireAndForget } from "@/lib/services/post-seo-runner";
@@ -237,6 +240,117 @@ export async function getBlogs(
   };
 }
 
+// ─── Export Blogs (CSV) ──────────────────────────────────────────────────────
+
+interface ExportBlogsParams {
+  clientId?: string;
+  search?: string;
+  status?: BlogStatus;
+}
+
+export type ExportBlogsResult =
+  | { success: true; csv: string; filename: string }
+  | { success: false; message: string };
+
+/** Hard cap so a runaway export can't hang the request — well above any
+ * realistic network size (docs put the target ceiling at ~3,500 blogs). */
+const EXPORT_ROW_CAP = 20000;
+
+const CSV_WEEKDAY_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+function csvCell(value: string): string {
+  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+}
+
+/**
+ * Export the blogs matching the current list filters (same clientId/search/
+ * status the table is showing) as CSV — every matching row, not just the
+ * current page. Opens directly in Excel/Sheets.
+ */
+export async function exportBlogsCsv(
+  params: ExportBlogsParams = {},
+): Promise<ExportBlogsResult> {
+  await requireAdmin();
+
+  const { clientId, search, status } = params;
+  const conditions = [];
+  if (clientId) conditions.push(eq(blogs.clientId, clientId));
+  if (status) conditions.push(eq(blogs.status, status));
+  if (search) conditions.push(like(blogs.domain, `%${search}%`));
+  const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+  const rows = await db
+    .select({
+      domain: blogs.domain,
+      clientName: clients.name,
+      platform: blogs.platform,
+      city: blogs.city,
+      region: blogs.region,
+      countryCode: blogs.countryCode,
+      brandName: blogs.brandName,
+      status: blogs.status,
+      currentSeoScore: blogs.currentSeoScore,
+      lastPostVerifiedAt: blogs.lastPostVerifiedAt,
+      lastPostTitle: blogs.lastPostTitle,
+      postingFrequency: blogs.postingFrequency,
+      postingFrequencyDays: blogs.postingFrequencyDays,
+      createdAt: blogs.createdAt,
+    })
+    .from(blogs)
+    .leftJoin(clients, eq(blogs.clientId, clients.id))
+    .where(whereClause)
+    .orderBy(asc(blogs.domain))
+    .limit(EXPORT_ROW_CAP);
+
+  const header = [
+    "Domain",
+    "Client",
+    "Platform",
+    "City",
+    "Region",
+    "Country",
+    "Brand Name",
+    "Status",
+    "SEO Score",
+    "Last Post Date",
+    "Last Post Title",
+    "Posting Frequency",
+    "Posting Days",
+    "Created At",
+  ];
+
+  const lines = [header.map(csvCell).join(",")];
+  for (const r of rows) {
+    const days = (r.postingFrequencyDays ?? [])
+      .filter((d): d is number => d >= 1 && d <= 7)
+      .map((d) => CSV_WEEKDAY_SHORT[d - 1])
+      .join(" ");
+    const cells = [
+      r.domain,
+      r.clientName ?? "",
+      r.platform ?? "",
+      r.city ?? "",
+      r.region ?? "",
+      r.countryCode ?? "",
+      r.brandName ?? "",
+      r.status ?? "",
+      r.currentSeoScore != null ? String(r.currentSeoScore) : "",
+      r.lastPostVerifiedAt ? new Date(r.lastPostVerifiedAt).toISOString().slice(0, 10) : "",
+      r.lastPostTitle ?? "",
+      r.postingFrequency ?? "",
+      days,
+      new Date(r.createdAt).toISOString().slice(0, 10),
+    ];
+    lines.push(cells.map((c) => csvCell(c)).join(","));
+  }
+
+  return {
+    success: true,
+    csv: lines.join("\r\n"),
+    filename: `netgrid-blogs-${new Date().toISOString().slice(0, 10)}.csv`,
+  };
+}
+
 // ─── Get Blogs Grouped By Client (for the Blogs hub cards) ──────────────────
 
 export interface ClientBlogGroup {
@@ -318,6 +432,8 @@ export async function getBlog(id: string) {
       region: blogs.region,
       countryCode: blogs.countryCode,
       brandName: blogs.brandName,
+      homepageMetaTitle: blogs.homepageMetaTitle,
+      homepageMetaDescription: blogs.homepageMetaDescription,
       createdAt: blogs.createdAt,
       updatedAt: blogs.updatedAt,
     })
@@ -375,6 +491,8 @@ export async function createBlog(data: unknown) {
         region: cleanValue(input.region),
         countryCode: cleanValue(input.countryCode),
         brandName: cleanValue(input.brandName),
+        homepageMetaTitle: cleanValue(input.homepageMetaTitle),
+        homepageMetaDescription: cleanValue(input.homepageMetaDescription),
       })
       .returning({ id: blogs.id });
 
@@ -464,6 +582,12 @@ export async function updateBlog(id: string, data: unknown) {
     updateData.countryCode = cleanValueOrUndefined(input.countryCode);
   if (input.brandName !== undefined)
     updateData.brandName = cleanValueOrUndefined(input.brandName);
+  if (input.homepageMetaTitle !== undefined)
+    updateData.homepageMetaTitle = cleanValueOrUndefined(input.homepageMetaTitle);
+  if (input.homepageMetaDescription !== undefined)
+    updateData.homepageMetaDescription = cleanValueOrUndefined(
+      input.homepageMetaDescription,
+    );
 
   try {
     const result = await db
@@ -488,6 +612,70 @@ export async function updateBlog(id: string, data: unknown) {
       error: err instanceof Error ? err.message : "Failed to update blog",
     };
   }
+}
+
+// ─── Push Homepage SEO (Shopify) ────────────────────────────────────────────
+
+export interface PushHomepageSeoResult {
+  success: boolean;
+  message: string;
+}
+
+/**
+ * Persist a blog's homepage meta title/description and, for Shopify blogs,
+ * push them live to the shop's global.title_tag / global.description_tag
+ * metafields — the same fields Shopify's own "Homepage title & meta
+ * description" preference (Online Store → Preferences) reads. WordPress
+ * blogs still get the DB save (so the intent is captured), just no live
+ * push yet — see updateHomepageSeo in platform-client.ts.
+ */
+export async function pushHomepageSeo(
+  blogId: string,
+  input: { metaTitle?: string; metaDescription?: string },
+): Promise<PushHomepageSeoResult> {
+  await requireAdmin();
+
+  const [blog] = await db
+    .select({
+      id: blogs.id,
+      platform: blogs.platform,
+      shopifyAuthMode: blogs.shopifyAuthMode,
+      shopifyStoreUrl: blogs.shopifyStoreUrl,
+      shopifyAdminApiToken: blogs.shopifyAdminApiToken,
+      shopifyClientId: blogs.shopifyClientId,
+      shopifyClientSecret: blogs.shopifyClientSecret,
+    })
+    .from(blogs)
+    .where(eq(blogs.id, blogId));
+
+  if (!blog) {
+    return { success: false, message: "Blog not found" };
+  }
+
+  await db
+    .update(blogs)
+    .set({
+      homepageMetaTitle: cleanValue(input.metaTitle),
+      homepageMetaDescription: cleanValue(input.metaDescription),
+      updatedAt: new Date(),
+    })
+    .where(eq(blogs.id, blogId));
+
+  revalidatePath(`/blogs/${blogId}`);
+
+  if (blog.platform !== "shopify") {
+    return {
+      success: true,
+      message: "Saved. WordPress homepage SEO isn't auto-pushed yet — set it in your SEO plugin's Homepage tab.",
+    };
+  }
+
+  const push = await platformUpdateHomepageSeo(blog, {
+    metaTitle: input.metaTitle,
+    metaDescription: input.metaDescription,
+  });
+
+  return { success: push.success, message: push.message };
 }
 
 // ─── Delete Blog (Soft) ─────────────────────────────────────────────────────

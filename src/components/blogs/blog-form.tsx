@@ -16,6 +16,7 @@ import {
   createBlog,
   updateBlog,
   testShopifyConnection,
+  pushHomepageSeo,
 } from "@/lib/actions/blog-actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -139,6 +140,7 @@ export function BlogForm({
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [testResult, setTestResult] = useState<TestResult>({ kind: "idle" });
+  const [homepageSeoPushing, setHomepageSeoPushing] = useState(false);
 
   // Coerce existing posting days into a clean array. Handles the migration
   // case where some rows may still come through as a single number.
@@ -181,6 +183,8 @@ export function BlogForm({
       region: defaultValues?.region || "",
       countryCode: defaultValues?.countryCode || "",
       brandName: defaultValues?.brandName || "",
+      homepageMetaTitle: defaultValues?.homepageMetaTitle || "",
+      homepageMetaDescription: defaultValues?.homepageMetaDescription || "",
     },
   });
 
@@ -326,6 +330,31 @@ export function BlogForm({
       setTestResult({ kind: "ok", message: res.message });
     } else {
       setTestResult({ kind: "err", message: res.message });
+    }
+  };
+
+  const handlePushHomepageSeo = async () => {
+    if (!blogId) return;
+    const v = getValues();
+    setHomepageSeoPushing(true);
+    const toastId = toast.loading("Saving and pushing homepage SEO…");
+    try {
+      const res = await pushHomepageSeo(blogId, {
+        metaTitle: v.homepageMetaTitle,
+        metaDescription: v.homepageMetaDescription,
+      });
+      if (res.success) {
+        toast.success(res.message, { id: toastId });
+      } else {
+        toast.error(res.message, { id: toastId });
+      }
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to push homepage SEO",
+        { id: toastId },
+      );
+    } finally {
+      setHomepageSeoPushing(false);
     }
   };
 
@@ -722,6 +751,60 @@ export function BlogForm({
             register={register}
             errors={errors}
           />
+        </CardContent>
+      </Card>
+
+      {/* Homepage SEO (Shopify) */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Homepage SEO</CardTitle>
+          <CardDescription>
+            {platform === "shopify"
+              ? "Sets the storefront homepage's <title> and meta description — Shopify's global.title_tag / description_tag metafields (Online Store → Preferences → Homepage)."
+              : "Shopify only for now — for WordPress, set this in your SEO plugin's Homepage tab (Yoast/RankMath → Search Appearance)."}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Field
+            label="Homepage Meta Title"
+            name="homepageMetaTitle"
+            placeholder="e.g. Buy Peptides Online | Montreal Peptides"
+            register={register}
+            errors={errors}
+          />
+          <div className="space-y-1.5">
+            <Label htmlFor="homepageMetaDescription">Homepage Meta Description</Label>
+            <Textarea
+              id="homepageMetaDescription"
+              rows={3}
+              placeholder="e.g. Montreal Peptides ships research peptides across Canada with same-day tracking..."
+              {...register("homepageMetaDescription")}
+            />
+            {errors.homepageMetaDescription && (
+              <p className="text-xs text-destructive">
+                {(errors.homepageMetaDescription as { message?: string })?.message}
+              </p>
+            )}
+          </div>
+          {mode === "edit" && blogId && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handlePushHomepageSeo}
+              disabled={homepageSeoPushing || platform !== "shopify"}
+            >
+              {homepageSeoPushing && (
+                <Loader2 className="mr-2 size-4 animate-spin" />
+              )}
+              Save &amp; push to Shopify
+            </Button>
+          )}
+          {mode === "create" && (
+            <p className="text-xs text-muted-foreground">
+              Save the blog first, then push homepage SEO from its detail page.
+            </p>
+          )}
         </CardContent>
       </Card>
 

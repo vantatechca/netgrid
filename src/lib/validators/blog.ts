@@ -28,6 +28,18 @@ const optionalString = z.preprocess(
   z.string().optional(),
 );
 
+// Optional string with a max length: same empty-friendly pattern, capped.
+const optionalStringMax = (max: number, message: string) =>
+  z.preprocess(
+    (v) => {
+      if (v === undefined || v === null) return undefined;
+      if (typeof v !== "string") return v;
+      const trimmed = v.trim();
+      return trimmed.length === 0 ? undefined : trimmed;
+    },
+    z.string().max(max, message).optional(),
+  );
+
 // Optional URL: same empty-friendly pattern; non-empty values must parse
 // as a URL.
 const optionalUrl = z.preprocess(
@@ -143,6 +155,12 @@ export const createBlogSchema = z
     region: optionalString,
     countryCode: optionalCountryCode,
     brandName: optionalString,
+
+    // Shopify homepage SEO — pushed to the shop's global.title_tag /
+    // global.description_tag metafields. Capped to what those fields render
+    // usefully as (Google truncates well before either limit anyway).
+    homepageMetaTitle: optionalStringMax(70, "Keep it under 70 characters"),
+    homepageMetaDescription: optionalStringMax(320, "Keep it under 320 characters"),
   })
   .superRefine((data, ctx) => {
     // Only enforce credentials when activating the blog AND only for the
@@ -232,6 +250,9 @@ export const updateBlogSchema = z.object({
   region: optionalString,
   countryCode: optionalCountryCode,
   brandName: optionalString,
+
+  homepageMetaTitle: optionalStringMax(70, "Keep it under 70 characters"),
+  homepageMetaDescription: optionalStringMax(320, "Keep it under 320 characters"),
 });
 
 export type CreateBlogInput = z.infer<typeof createBlogSchema>;

@@ -489,3 +489,28 @@ export async function backfillPostSeo(
     blog.seoPlugin ?? "none",
   );
 }
+
+/**
+ * Push the storefront homepage's SEO title/description live. Shopify only —
+ * WordPress homepage SEO is plugin-driven (Yoast/RankMath's own "Homepage"
+ * tab under Search Appearance) and isn't wired up here yet.
+ */
+export async function updateHomepageSeo(
+  blog: PlatformBlog,
+  input: { metaTitle?: string; metaDescription?: string },
+): Promise<PublishPostResult> {
+  const platform = resolvePlatform(blog);
+
+  if (platform !== "shopify") {
+    return {
+      success: false,
+      message:
+        "Homepage SEO push isn't supported for WordPress yet — set it directly in your SEO plugin's Homepage tab (Yoast/RankMath → Search Appearance).",
+    };
+  }
+
+  const built = buildShopifyCreds(blog);
+  if (!built.ok) return { success: false, message: built.message };
+
+  return shopify.updateShopSeoMetafields(built.creds, input);
+}
