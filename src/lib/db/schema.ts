@@ -46,6 +46,7 @@ export const checkTypeEnum = pgEnum("check_type", ["scheduled", "manual"]);
 export const thirdPartySourceEnum = pgEnum("third_party_source", ["ahrefs", "semrush", "moz"]);
 export const generatedPostStatusEnum = pgEnum("generated_post_status", ["pending", "generating", "generated", "publishing", "published", "failed"]);
 export const keywordTargetStatusEnum = pgEnum("keyword_target_status", ["pending", "generating", "generated", "failed", "skipped"]);
+export const dataforseoRunStatusEnum = pgEnum("dataforseo_run_status", ["pending", "success", "failed"]);
 export const scrubberStrictnessEnum = pgEnum("scrubber_strictness", ["loose", "standard", "strict"]);
 export const compliancePlacementEnum = pgEnum("compliance_placement", [
   "TOP",
@@ -679,11 +680,46 @@ export const clientKeywords = pgTable("client_keywords", {
   bestPosition: integer("best_position"),
   isActive: boolean("is_active").notNull().default(true),
   fetchedAt: timestamp("fetched_at").defaultNow().notNull(),
+  // DataForSEO fields — nullable, populated only for source='dataforseo' rows.
+  // Autocomplete rows never touch these. See migrations/0037.
+  keywordDifficulty: integer("keyword_difficulty"),
+  competition: decimal("competition", { precision: 6, scale: 4 }),
+  lowTopOfPageBid: decimal("low_top_of_page_bid", { precision: 10, scale: 2 }),
+  highTopOfPageBid: decimal("high_top_of_page_bid", { precision: 10, scale: 2 }),
+  monthlySearches: jsonb("monthly_searches"),
+  mainIntent: varchar("main_intent", { length: 32 }),
+  locationCode: integer("location_code"),
+  raw: jsonb("raw"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [
   uniqueIndex("client_keywords_client_keyword_idx").on(table.clientId, table.keyword),
   index("client_keywords_client_active_idx").on(table.clientId, table.isActive),
+]);
+
+// ─── dataforseo_runs ────────────────────────────────────────────────────────
+//
+// One row per (client, seed) DataForSEO pull — cost tracking and debugging,
+// kept separate from the keyword data itself (which lands in client_keywords
+// above). A run's cost is real money, unlike the free Autocomplete scrape.
+
+export const dataforseoRuns = pgTable("dataforseo_runs", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  clientId: uuid("client_id")
+    .notNull()
+    .references(() => clients.id, { onDelete: "cascade" }),
+  seed: varchar("seed", { length: 200 }).notNull(),
+  endpoint: varchar("endpoint", { length: 120 }).notNull(),
+  locationCode: integer("location_code").notNull(),
+  languageCode: varchar("language_code", { length: 16 }).notNull(),
+  status: dataforseoRunStatusEnum("status").notNull().default("pending"),
+  itemsReturned: integer("items_returned").notNull().default(0),
+  cost: decimal("cost", { precision: 10, scale: 4 }),
+  error: text("error"),
+  startedAt: timestamp("started_at").defaultNow().notNull(),
+  finishedAt: timestamp("finished_at"),
+}, (table) => [
+  index("dataforseo_runs_client_idx").on(table.clientId, table.startedAt),
 ]);
 
 // ─── peptide_location_targets ─────────────────────────────────────────────────
