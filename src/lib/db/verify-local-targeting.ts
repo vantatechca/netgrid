@@ -220,6 +220,61 @@ async function main() {
       claimD ? `unexpectedly claimed "${claimD.keyword}"` : "undefined, as expected",
     );
 
+    // ── 2b. Cross-sibling reservation ─────────────────────────────────────
+    // A second blog on the SAME client, building its ledger from the same
+    // client-wide keyword pool — this is exactly the "every sibling ranks
+    // the same list and picks the same #1" scenario the reservation fix
+    // addresses. At this point on the first blog: claimA's keyword is
+    // 'failed' (not reserved — a failed attempt didn't cover the topic),
+    // claimB's is 'generated' (reserved), claimC's is 'generating'
+    // (reserved).
+    console.log("\n2b. Cross-sibling keyword reservation");
+    const [siblingBlog] = await db
+      .insert(blogs)
+      .values({
+        clientId: client.id,
+        domain: `sibling-${FIXTURE_DOMAIN}`,
+        city: `${FIXTURE_CITY} Sibling`,
+        status: "setup",
+      })
+      .returning({ id: blogs.id, domain: blogs.domain });
+    console.log(`Fixture sibling blog: ${siblingBlog.id} (${siblingBlog.domain})`);
+
+    const siblingBuild = await buildKeywordTargetsForBlogInternal(siblingBlog.id);
+    record(
+      "sibling builder upserts the same client-wide keyword pool",
+      siblingBuild.targeted && siblingBuild.upserted === FIXTURE_KEYWORDS.length,
+      `targeted=${siblingBuild.targeted} upserted=${siblingBuild.upserted}/${FIXTURE_KEYWORDS.length}`,
+    );
+
+    const reservedKeywords = new Set([claimB?.keyword, claimC?.keyword].filter(Boolean));
+    const siblingClaim1 = await claimKeywordTargetForBlog(siblingBlog.id);
+    record(
+      "sibling claim avoids a keyword reserved (generating/generated) on another blog",
+      Boolean(siblingClaim1) && !reservedKeywords.has(siblingClaim1?.keyword),
+      siblingClaim1
+        ? `sibling claimed "${siblingClaim1.keyword}" (reserved elsewhere: ${[...reservedKeywords].join(", ")})`
+        : "claim returned undefined",
+    );
+    record(
+      "sibling claim picked the one keyword that's free network-wide (the failed one)",
+      siblingClaim1?.keyword === claimA?.keyword,
+      `expected "${claimA?.keyword}", got "${siblingClaim1?.keyword}"`,
+    );
+
+    // Every remaining pending row on the sibling is now reserved elsewhere
+    // in the client (the two rows matching claimB/claimC's keywords) — the
+    // next claim must not return undefined just because nothing is "free";
+    // it should wrap around and reuse the best-priority one anyway.
+    const siblingClaim2 = await claimKeywordTargetForBlog(siblingBlog.id);
+    record(
+      "pool exhausted network-wide — claim wraps around instead of starving the sibling",
+      Boolean(siblingClaim2),
+      siblingClaim2
+        ? `claimed "${siblingClaim2.keyword}" despite it being reserved elsewhere — wrapped around`
+        : "unexpectedly undefined",
+    );
+
     // ── 3. Custom-prompt placeholder interpolation ───────────────────────
     console.log("\n3. Placeholder interpolation");
     record(

@@ -10,6 +10,7 @@ import {
 } from "@/lib/settings/app-settings";
 import { ctaRedirectUrl, trackingPixelImg } from "@/lib/services/link-tracker";
 import { SUB_NICHES } from "@/lib/content/libraries/sub-niches";
+import { findMostSimilarTitle } from "@/lib/content/topic-similarity";
 import {
   FRENCH_ONLY_NICHE_KEYS,
   MIXED_LANGUAGE_NICHE_KEYS,
@@ -2762,29 +2763,68 @@ Return JSON only:
     ? `\n\nCONTENT BRIEF (operator instructions — every topic MUST fit this exactly; it overrides the niche's generic topics):\n${brief}`
     : "";
 
-  const user = `Recent titles already used across this client's sites — avoid duplicating or closely echoing any of these (this includes sister sites in the same network, so the client's blogs don't converge on the same topic):
-${recentList}${briefSection}${profileAnchorSection}${knowledgeSection}${newsSection}
+  // The "don't overlap with recent titles" instruction above is a prompt
+  // ask, not an enforced check — the model can (and does) return a reworded
+  // near-duplicate ("BPC-157 vs TB-500" vs "BPC-157 TB500 Cost in Toronto")
+  // that technically isn't string-identical to anything in recentTitles.
+  // Score the actual output against recentTitles and retry with an explicit
+  // "too similar to X" correction, bounded so a stubborn model can't loop
+  // forever or blow up cost.
+  const MAX_IDEATION_ATTEMPTS = 3;
+  let rejectionNote = "";
+  let lastResult: { topic: string; keywords: string[] } | undefined;
+
+  for (let attempt = 1; attempt <= MAX_IDEATION_ATTEMPTS; attempt++) {
+    const user = `Recent titles already used across this client's sites — avoid duplicating or closely echoing any of these (this includes sister sites in the same network, so the client's blogs don't converge on the same topic):
+${recentList}${briefSection}${profileAnchorSection}${knowledgeSection}${newsSection}${rejectionNote}
 
 Suggest the next post's topic.`;
 
-  const { text } = await callClaude(system, user, {
-    maxTokens: 300,
-    temperature: 0.9,
-    expectJson: true,
-  });
+    const { text } = await callClaude(system, user, {
+      maxTokens: 300,
+      temperature: 0.9,
+      expectJson: true,
+    });
 
-  try {
-    const parsed = safeParseClaudeJson<{ topic?: unknown; keywords?: unknown }>(text);
-    return {
-      topic: String(parsed.topic || "").slice(0, 500),
-      keywords: Array.isArray(parsed.keywords) ? parsed.keywords.map(String) : [],
-    };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "parse error";
-    throw new Error(
-      `Topic ideation returned invalid JSON: ${msg} | response preview: ${text.slice(0, 200)}`,
+    let result: { topic: string; keywords: string[] };
+    try {
+      const parsed = safeParseClaudeJson<{ topic?: unknown; keywords?: unknown }>(text);
+      result = {
+        topic: String(parsed.topic || "").slice(0, 500),
+        keywords: Array.isArray(parsed.keywords) ? parsed.keywords.map(String) : [],
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "parse error";
+      throw new Error(
+        `Topic ideation returned invalid JSON: ${msg} | response preview: ${text.slice(0, 200)}`,
+      );
+    }
+
+    lastResult = result;
+    const similar = findMostSimilarTitle(result.topic, recentTitles);
+    if (!similar) return result;
+
+    if (attempt === MAX_IDEATION_ATTEMPTS) {
+      console.warn(
+        `[ideateTopic] accepting "${result.topic}" after ${attempt} attempts despite ` +
+          `${Math.round(similar.score * 100)}% word overlap with "${similar.title}"`,
+      );
+      return result;
+    }
+
+    console.info(
+      `[ideateTopic] attempt ${attempt} too similar (${Math.round(similar.score * 100)}%) ` +
+        `to "${similar.title}" — retrying`,
     );
+    rejectionNote =
+      `\n\nYour previous suggestion "${result.topic}" is too similar to an existing title ` +
+      `"${similar.title}" (${Math.round(similar.score * 100)}% word overlap). Pick a genuinely ` +
+      `different subject or angle — do not just reword the same idea.`;
   }
+
+  // Unreachable — the loop always returns by MAX_IDEATION_ATTEMPTS — but
+  // TypeScript can't see that, and lastResult is always set by attempt 1.
+  return lastResult!;
 }
 
 // ─── Keyword suggestion (manual "Suggest keywords" button) ──────────────────
