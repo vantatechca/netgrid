@@ -304,6 +304,10 @@ export async function getBlog(id: string) {
       lastSeoScanAt: blogs.lastSeoScanAt,
       status: blogs.status,
       notesInternal: blogs.notesInternal,
+      city: blogs.city,
+      region: blogs.region,
+      countryCode: blogs.countryCode,
+      brandName: blogs.brandName,
       createdAt: blogs.createdAt,
       updatedAt: blogs.updatedAt,
     })
@@ -357,6 +361,10 @@ export async function createBlog(data: unknown) {
         postingFrequencyDays: cleanPostingDays(input.postingFrequencyDays),
         status: input.status,
         notesInternal: cleanValue(input.notesInternal),
+        city: cleanValue(input.city),
+        region: cleanValue(input.region),
+        countryCode: cleanValue(input.countryCode),
+        brandName: cleanValue(input.brandName),
       })
       .returning({ id: blogs.id });
 
@@ -438,6 +446,14 @@ export async function updateBlog(id: string, data: unknown) {
   if (input.status !== undefined) updateData.status = input.status;
   if (input.notesInternal !== undefined)
     updateData.notesInternal = cleanValueOrUndefined(input.notesInternal);
+  if (input.city !== undefined)
+    updateData.city = cleanValueOrUndefined(input.city);
+  if (input.region !== undefined)
+    updateData.region = cleanValueOrUndefined(input.region);
+  if (input.countryCode !== undefined)
+    updateData.countryCode = cleanValueOrUndefined(input.countryCode);
+  if (input.brandName !== undefined)
+    updateData.brandName = cleanValueOrUndefined(input.brandName);
 
   try {
     const result = await db

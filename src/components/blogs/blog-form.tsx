@@ -9,8 +9,9 @@ import {
 } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useRouter } from "next/navigation";
-import { useState, useTransition } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { createBlogSchema, type CreateBlogInput } from "@/lib/validators/blog";
+import { deriveBrandName } from "@/lib/content/brand";
 import {
   createBlog,
   updateBlog,
@@ -176,6 +177,10 @@ export function BlogForm({
       postingFrequencyDays: initialPostingDays,
       status: defaultValues?.status || "active",
       notesInternal: defaultValues?.notesInternal || "",
+      city: defaultValues?.city || "",
+      region: defaultValues?.region || "",
+      countryCode: defaultValues?.countryCode || "",
+      brandName: defaultValues?.brandName || "",
     },
   });
 
@@ -190,6 +195,13 @@ export function BlogForm({
 
   const platform = watch("platform");
   const selectedDays = (watch("postingFrequencyDays") as number[] | undefined) ?? [];
+  const domainValue = watch("domain");
+  // Suggestion only — never written to the form until the operator types it
+  // themselves. See lib/content/brand.ts for why this can't be authoritative.
+  const suggestedBrandName = useMemo(
+    () => deriveBrandName(domainValue) ?? undefined,
+    [domainValue],
+  );
 
   const toggleDay = (day: number) => {
     const current = (getValues("postingFrequencyDays") as number[] | undefined) ?? [];
@@ -668,6 +680,48 @@ export function BlogForm({
 
           {/* Hidden field — frequency is always "weekly" */}
           <input type="hidden" {...register("postingFrequency")} value="weekly" />
+        </CardContent>
+      </Card>
+
+      {/* Local Targeting */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Local Targeting</CardTitle>
+          <CardDescription>
+            Leave City blank to keep this blog on ordinary topic ideation.
+            Setting a City switches it to keyword+city targeted content once
+            that path is live — see the local keyword content plan.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 sm:grid-cols-2">
+          <Field
+            label="City"
+            name="city"
+            placeholder="e.g. Montreal"
+            register={register}
+            errors={errors}
+          />
+          <Field
+            label="Region / Province / State"
+            name="region"
+            placeholder="e.g. Quebec"
+            register={register}
+            errors={errors}
+          />
+          <Field
+            label="Country Code"
+            name="countryCode"
+            placeholder="e.g. CA"
+            register={register}
+            errors={errors}
+          />
+          <Field
+            label="Brand Name"
+            name="brandName"
+            placeholder={suggestedBrandName ?? "e.g. Montreal Peptides"}
+            register={register}
+            errors={errors}
+          />
         </CardContent>
       </Card>
 

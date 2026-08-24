@@ -130,6 +130,11 @@ export default async function BlogDetailPage({
             postingFrequencyDays: blog.postingFrequencyDays ?? undefined,
             status: (blog.status as "active" | "paused" | "setup" | "decommissioned") || "active",
             notesInternal: blog.notesInternal || "",
+            // Local keyword-targeted content
+            city: blog.city || "",
+            region: blog.region || "",
+            countryCode: blog.countryCode || "",
+            brandName: blog.brandName || "",
           }}
         />
       </div>
