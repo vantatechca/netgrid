@@ -24,6 +24,11 @@ import {
   appendRedditToDescription,
 } from "@/lib/seo/reddit";
 import {
+  ensureLocalTargetTitle,
+  ensureLocalTargetDescription,
+  type LocalTargetMetaContext,
+} from "@/lib/seo/local-target";
+import {
   generateBodyImage,
   generateHeroImage,
 } from "@/lib/services/image-generator";
@@ -502,6 +507,25 @@ export interface GenerateOptions {
    * a generatedPersona are present; otherwise it's a no-op.
    */
   applyPersona?: boolean;
+  /**
+   * Local keyword-targeted content (see docs/local-keyword-content-plan.md).
+   * Present only when a blog_keyword_targets row was claimed for this post —
+   * the caller (runGenerateAndPublish) resolves this; absent for every post
+   * on a blog with no assigned city, which keeps this feature strictly
+   * additive. When set: the article works the exact keyword phrase in
+   * naturally, gives the city substantive (not find-and-replace) treatment,
+   * and names brandName once in the body as the source. The meta title and
+   * description are guaranteed to carry keyword + city regardless of what
+   * Claude wrote — see lib/seo/local-target.ts.
+   */
+  localTarget?: {
+    keyword: string;
+    city: string;
+    region?: string | null;
+    countryCode?: string | null;
+    brandName?: string | null;
+    brandUrl?: string | null;
+  };
 }
 
 export interface GeneratedContent {
@@ -1593,6 +1617,7 @@ export function dedupeAnchorText(html: string): string {
 export function normalizeMetaTitle(
   raw: string | null | undefined,
   fallback: string,
+  localTarget?: LocalTargetMetaContext,
 ): string {
   let t = (raw || fallback || "").replace(/\s+/g, " ").trim();
   // Separator normalization: spaced dashes → vertical bar.
@@ -1602,6 +1627,12 @@ export function normalizeMetaTitle(
     .replace(/(?:\s*\|\s*){2,}/g, " | ")
     .replace(/^\s*\|\s*|\s*\|\s*$/g, "")
     .trim();
+  // Guarantee keyword + city survive regardless of what Claude wrote — BEFORE
+  // the Reddit injection below, so keyword+city lead the pixel-truncation-
+  // from-the-right (see lib/seo/local-target.ts and the plan's "Meta title —
+  // the ordering constraint"). No-op when Claude already complied, and a
+  // no-op entirely when this post has no local target.
+  if (localTarget) t = ensureLocalTargetTitle(t, localTarget);
   // Inject the "Reddit" SEO token into the <title> surface (idempotent, and
   // pixel-capped). Kept out of the visible article title / body.
   return appendRedditToTitle(t);
@@ -1618,8 +1649,14 @@ export function normalizeMetaTitle(
 export function normalizeMetaDescription(
   raw: string | null | undefined,
   fallback: string,
+  localTarget?: LocalTargetMetaContext,
 ): string {
-  const d = (raw || fallback || "").replace(/\s+/g, " ").trim();
+  let d = (raw || fallback || "").replace(/\s+/g, " ").trim();
+  // Guarantee the description LEADS with keyword + city — BEFORE the Reddit
+  // injection below, so the lead clause survives pixel-truncation-from-the-
+  // right even if the rest gets cut. No-op when Claude already led with them,
+  // and a no-op entirely when this post has no local target.
+  if (localTarget) d = ensureLocalTargetDescription(d, localTarget);
   // Inject the "Reddit" SEO token into the meta description (idempotent, and
   // pixel-capped). Kept out of the visible article body.
   return appendRedditToDescription(d);
@@ -2297,6 +2334,27 @@ ON-PAGE QUALITY (apply throughout the article):
 - Make the opening paragraph clearly on-topic: reference the article's main subject naturally in the first few sentences.`;
 
 /**
+ * Local keyword-targeted content directive — appended alongside
+ * SEO_QUALITY_DIRECTIVE whenever opts.localTarget is set (see
+ * docs/local-keyword-content-plan.md §5). Absent otherwise, so a blog with
+ * no assigned city gets byte-for-byte the same prompt as before this
+ * feature existed.
+ */
+function buildLocalTargetingDirective(
+  target: NonNullable<GenerateOptions["localTarget"]>,
+): string {
+  const brandLine = target.brandName
+    ? `\n- Name "${target.brandName}" once in the body as the source for this, linked to ${target.brandUrl ?? "the site's own domain"}. Do not repeat it in every section.`
+    : "";
+  return `
+
+LOCAL TARGETING (this post targets a real search query for a specific market — apply throughout):
+- Use the exact phrase "${target.keyword}" naturally: once in the opening paragraph, once in an <h2> heading, and once in the closing. Never as a repeated block.
+- Give ${target.city} substantive treatment — local delivery/shipping expectations, regional context, or regulation that actually applies there. Not a mechanical find-and-replace city drop.${brandLine}
+- Never invent a physical storefront, local address, phone number, or in-person pickup in ${target.city} unless the reference material below explicitly supplies one.`;
+}
+
+/**
  * Build the styled call-to-action button appended to the bottom of a post.
  * Inline CSS so it renders as a button on any theme. Returns "" when the CTA
  * is incomplete or the URL isn't a safe http(s) link.
@@ -2892,6 +2950,12 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
   // per-blog prefix) so the article draws on the client's own material.
   const knowledgeContext = buildKnowledgeContext(opts.knowledgeSummaries);
 
+  // Local keyword-targeted content — "" for every post on a blog with no
+  // assigned city, which is what keeps this feature strictly additive.
+  const localTargetingDirective = opts.localTarget
+    ? buildLocalTargetingDirective(opts.localTarget)
+    : "";
+
   let system: string;
   let user: string;
   let maxTokens: number;
@@ -2904,7 +2968,8 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
       buildCustomSystemPrompt(opts, nicheForCustom) +
       languageDirective +
       knowledgeContext +
-      SEO_QUALITY_DIRECTIVE;
+      SEO_QUALITY_DIRECTIVE +
+      localTargetingDirective;
     user = buildUserPrompt(opts);
     if (newsLinksClause) user = user + newsLinksClause;
     if (internalLinksClause) user = user + internalLinksClause;
@@ -2918,7 +2983,12 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
       // gets a topical value instead of the generic "General Content".
       nicheLabel: opts.niche,
     });
-    system = composed.systemPrompt + languageDirective + knowledgeContext + SEO_QUALITY_DIRECTIVE;
+    system =
+      composed.systemPrompt +
+      languageDirective +
+      knowledgeContext +
+      SEO_QUALITY_DIRECTIVE +
+      localTargetingDirective;
     user = composed.userPrompt;
     // Append the external-news-links clause (no-op for peptides — they
     // skip this entirely upstream).
@@ -2942,7 +3012,12 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
     const effectiveMax = Math.min(opts.styleProfile.wordBandMax, MAX_WORDS);
     maxTokens = Math.min(4096, Math.max(3000, Math.round(effectiveMax * 3.2)));
   } else {
-    system = buildSystemPrompt(opts) + languageDirective + knowledgeContext + SEO_QUALITY_DIRECTIVE;
+    system =
+      buildSystemPrompt(opts) +
+      languageDirective +
+      knowledgeContext +
+      SEO_QUALITY_DIRECTIVE +
+      localTargetingDirective;
     user = buildUserPrompt(opts);
     if (newsLinksClause) {
       user = user + newsLinksClause;
@@ -3303,14 +3378,23 @@ The "content" field is the full HTML article body — at least ${MIN_WORDS} word
   const totalTokens = totalInputTokens + totalOutputTokens;
   const costUsd = genCost;
 
+  const metaTargetContext: LocalTargetMetaContext | undefined = opts.localTarget
+    ? {
+        keyword: opts.localTarget.keyword,
+        city: opts.localTarget.city,
+        brandName: opts.localTarget.brandName,
+      }
+    : undefined;
+
   return {
     title: parsed.title,
     content: body,
     excerpt: normalizeExcerpt(parsed.excerpt || generateExcerpt(body)),
-    metaTitle: normalizeMetaTitle(parsed.metaTitle, parsed.title),
+    metaTitle: normalizeMetaTitle(parsed.metaTitle, parsed.title, metaTargetContext),
     metaDescription: normalizeMetaDescription(
       parsed.metaDescription,
       generateExcerpt(body),
+      metaTargetContext,
     ),
     keywords: parsed.keywords && parsed.keywords.length > 0 ? parsed.keywords : opts.keywords,
     wordCount,
