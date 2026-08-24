@@ -1,0 +1,76 @@
+{
+  "_PROVISIONAL": "Hand-written from docs/dataforseo-keyword-pipeline.md §3, NOT captured from a real API call — no credentials were available. Regenerate with scripts/capture-dataforseo-fixtures.ts once an operator has real credentials, per the plan's §8 'Verify before coding'.",
+  "version": "0.1-provisional",
+  "status_code": 20000,
+  "status_message": "Ok.",
+  "cost": 0.0125,
+  "tasks": [
+    {
+      "id": "provisional-task-1",
+      "status_code": 20000,
+      "status_message": "Ok.",
+      "cost": 0.0125,
+      "result": [
+        {
+          "items": [
+            {
+              "keyword": "bpc 157",
+              "keyword_info": {
+                "search_volume": 22200,
+                "cpc": null,
+                "competition": null,
+                "low_top_of_page_bid": null,
+                "high_top_of_page_bid": null,
+                "monthly_searches": [
+                  { "year": 2026, "month": 7, "search_volume": 22200 },
+                  { "year": 2026, "month": 6, "search_volume": 18100 },
+                  { "year": 2026, "month": 5, "search_volume": 19500 }
+                ]
+              },
+              "keyword_properties": {
+                "keyword_difficulty": 34
+              },
+              "search_intent_info": {
+                "main_intent": "informational"
+              }
+            },
+            {
+              "keyword": "where to buy bpc 157",
+              "keyword_info": {
+                "search_volume": 2900,
+                "cpc": null,
+                "competition": null,
+                "low_top_of_page_bid": null,
+                "high_top_of_page_bid": null,
+                "monthly_searches": [
+                  { "year": 2026, "month": 7, "search_volume": 2900 },
+                  { "year": 2026, "month": 6, "search_volume": 2400 }
+                ]
+              },
+              "keyword_properties": {
+                "keyword_difficulty": 41
+              },
+              "search_intent_info": {
+                "main_intent": "transactional"
+              }
+            },
+            {
+              "keyword": "bpc 157 dosage",
+              "keyword_info": {
+                "search_volume": 8100
+              },
+              "keyword_properties": {},
+              "search_intent_info": {}
+            },
+            {
+              "keyword": "",
+              "keyword_info": {
+                "search_volume": 100
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
