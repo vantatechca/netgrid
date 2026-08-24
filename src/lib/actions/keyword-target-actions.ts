@@ -17,7 +17,7 @@ export type BlogKeywordTarget = typeof blogKeywordTargets.$inferSelect;
 /** Cap on how many of a client's top-ranked keywords become ledger candidates. */
 const CANDIDATE_LIMIT = 40;
 
-interface BuildResult {
+export interface BuildResult {
   blogId: string;
   city: string | null;
   targeted: boolean;
@@ -48,7 +48,7 @@ async function knownCities(): Promise<string[]> {
  * generating/generated/failed/skipped keeps its status untouched, since that
  * column is deliberately absent from the upsert's `set`.
  */
-async function buildKeywordTargetsForBlogCore(blogId: string): Promise<BuildResult> {
+export async function buildKeywordTargetsForBlogInternal(blogId: string): Promise<BuildResult> {
   const [blog] = await db
     .select({ id: blogs.id, clientId: blogs.clientId, city: blogs.city })
     .from(blogs)
@@ -133,7 +133,7 @@ async function buildKeywordTargetsForBlogCore(blogId: string): Promise<BuildResu
 /** Admin-triggered on-demand rebuild for one blog (e.g. after assigning a city). */
 export async function buildKeywordTargetsForBlog(blogId: string): Promise<BuildResult> {
   await requireAdmin();
-  const result = await buildKeywordTargetsForBlogCore(blogId);
+  const result = await buildKeywordTargetsForBlogInternal(blogId);
   revalidatePath(`/blogs/${blogId}`);
   return result;
 }
@@ -162,7 +162,7 @@ export async function rebuildAllKeywordTargetsInternal(): Promise<{
 
   for (const { id } of rows) {
     try {
-      const result = await buildKeywordTargetsForBlogCore(id);
+      const result = await buildKeywordTargetsForBlogInternal(id);
       if (result.targeted) blogsTargeted++;
       targetsUpserted += result.upserted;
     } catch (err) {
@@ -189,7 +189,7 @@ export interface ClaimedKeywordTarget {
  * Claim the best pending keyword target for a blog — marks it 'generating'
  * and returns it, or undefined when there's nothing to claim (no city, or
  * every target already generating/generated/failed/skipped; see
- * buildKeywordTargetsForBlogCore for how rows get here). Select-then-
+ * buildKeywordTargetsForBlogInternal for how rows get here). Select-then-
  * conditional-update rather than a single locking statement: each blog
  * belongs to exactly one auto-publish shard (shardForBlog), so two processes
  * never race to claim the same blog's rows — the status='pending' re-check on
