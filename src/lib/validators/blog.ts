@@ -43,6 +43,21 @@ const optionalUrl = z.preprocess(
     .optional(),
 );
 
+// Optional 2-letter country code: same empty-friendly pattern, uppercased
+// before validation so "ca" and "CA" are equivalent.
+const optionalCountryCode = z.preprocess(
+  (v) => {
+    if (v === undefined || v === null) return undefined;
+    if (typeof v !== "string") return v;
+    const trimmed = v.trim();
+    return trimmed.length === 0 ? undefined : trimmed.toUpperCase();
+  },
+  z
+    .string()
+    .regex(/^[A-Z]{2}$/, "Use a 2-letter country code (e.g. CA, US)")
+    .optional(),
+);
+
 // Optional positive integer: handles "", undefined, NaN, strings, numbers
 const optionalNumber = z
   .union([z.string(), z.number(), z.undefined(), z.null()])
@@ -119,6 +134,15 @@ export const createBlogSchema = z
       .optional()
       .default("setup"),
     notesInternal: optionalString,
+
+    // Local keyword-targeted content (see docs/local-keyword-content-plan.md).
+    // city is the feature's on/off switch — leave it blank to keep this blog
+    // on the ordinary topic-ideation flow. Always operator-entered; the form
+    // only ever *suggests* a brand name from the domain, never the city.
+    city: optionalString,
+    region: optionalString,
+    countryCode: optionalCountryCode,
+    brandName: optionalString,
   })
   .superRefine((data, ctx) => {
     // Only enforce credentials when activating the blog AND only for the
@@ -203,6 +227,11 @@ export const updateBlogSchema = z.object({
   postingFrequencyDays: postingDays,
   status: z.enum(["active", "paused", "setup", "decommissioned"]).optional(),
   notesInternal: optionalString,
+
+  city: optionalString,
+  region: optionalString,
+  countryCode: optionalCountryCode,
+  brandName: optionalString,
 });
 
 export type CreateBlogInput = z.infer<typeof createBlogSchema>;
