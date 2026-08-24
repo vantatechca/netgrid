@@ -98,6 +98,7 @@ interface GetBlogsResult {
     wpUrl: string | null;
     seoPlugin: string | null;
     shopifyStoreUrl: string | null;
+    city: string | null;
     postingFrequency: string | null;
     postingFrequencyDays: number[] | null;
     lastPostVerifiedAt: Date | null;
@@ -198,6 +199,7 @@ export async function getBlogs(
       wpUrl: blogs.wpUrl,
       seoPlugin: blogs.seoPlugin,
       shopifyStoreUrl: blogs.shopifyStoreUrl,
+      city: blogs.city,
       postingFrequency: blogs.postingFrequency,
       postingFrequencyDays: blogs.postingFrequencyDays,
       lastPostVerifiedAt: blogs.lastPostVerifiedAt,

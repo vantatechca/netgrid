@@ -6,7 +6,6 @@ import { getSeoScans, getSeoIssues } from "@/lib/actions/seo-actions";
 import { getMessages } from "@/lib/actions/message-actions";
 import { listKnowledgeDocuments } from "@/lib/actions/knowledge-actions";
 import { listClientKeywords } from "@/lib/actions/keyword-actions";
-import { getLocationCampaign } from "@/lib/actions/location-actions";
 import { getRegistrationView } from "@/lib/actions/registration-actions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -31,7 +30,6 @@ import { MessageThread } from "@/components/messages/message-thread";
 import { ClientForm } from "@/components/clients/client-form";
 import { KnowledgeBasePanel } from "@/components/clients/knowledge-base-panel";
 import { KeywordsPanel } from "@/components/clients/keywords-panel";
-import { LocationPagesPanel } from "@/components/clients/location-pages-panel";
 import { RegistrationPanel } from "@/components/clients/registration-panel";
 import { CustomPromptCard } from "@/components/content/custom-prompt-card";
 import { TriggerClientPostsButton } from "@/components/clients/trigger-client-posts-button";
@@ -45,7 +43,6 @@ import {
   Globe,
   KeyRound,
   Lock,
-  MapPin,
   MessageSquare,
   Pencil,
   UserPlus,
@@ -171,7 +168,6 @@ export default async function ClientDetailPage({
     messages,
     knowledgeDocs,
     keywords,
-    locationCampaign,
     registrationView,
   ] =
     (await Promise.all([
@@ -199,7 +195,6 @@ export default async function ClientDetailPage({
       getMessages({ clientId, pageSize: 200 }).catch(() => []),
       listKnowledgeDocuments(clientId).catch(() => []),
       listClientKeywords(clientId).catch(() => []),
-      getLocationCampaign(clientId).catch(() => null),
       getRegistrationView(clientId).catch(() => null),
     ]).catch(() => {
       notFound();
@@ -212,7 +207,6 @@ export default async function ClientDetailPage({
       Awaited<ReturnType<typeof getMessages>>,
       Awaited<ReturnType<typeof listKnowledgeDocuments>>,
       Awaited<ReturnType<typeof listClientKeywords>>,
-      Awaited<ReturnType<typeof getLocationCampaign>> | null,
       Awaited<ReturnType<typeof getRegistrationView>> | null,
     ];
 
@@ -351,12 +345,6 @@ export default async function ClientDetailPage({
             <KeyRound className="size-4" />
             Keywords ({keywords.length})
           </TabsTrigger>
-          {locationCampaign?.isPeptides && (
-            <TabsTrigger value="locations">
-              <MapPin className="size-4" />
-              Location pages ({locationCampaign.counts.total})
-            </TabsTrigger>
-          )}
           <TabsTrigger value="registrations">
             <UserPlus className="size-4" />
             Registrations{registrationView ? ` (${registrationView.leadCount})` : ""}
@@ -642,13 +630,6 @@ export default async function ClientDetailPage({
             initialSeeds={client.keywordSeeds ?? ""}
           />
         </TabsContent>
-
-        {/* Location Pages Tab (peptides only) */}
-        {locationCampaign?.isPeptides && (
-          <TabsContent value="locations" className="pt-4">
-            <LocationPagesPanel clientId={client.id} view={locationCampaign} />
-          </TabsContent>
-        )}
 
         {/* Registrations Tab */}
         {registrationView && (

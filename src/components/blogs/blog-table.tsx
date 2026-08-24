@@ -55,6 +55,7 @@ interface BlogRow {
   clientName: string;
   domain: string;
   wpUrl: string | null;
+  city: string | null;
   status: string | null;
   currentSeoScore: number | null;
   lastPostVerifiedAt: Date | null;
@@ -305,6 +306,7 @@ export function BlogTable({
                 </span>
               </TableHead>
               {showClientColumn && <TableHead>Client</TableHead>}
+              <TableHead>Location/City</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>SEO Score</TableHead>
               <TableHead>Last Post</TableHead>
@@ -343,6 +345,9 @@ export function BlogTable({
                       {blog.clientName}
                     </TableCell>
                   )}
+                  <TableCell className="text-muted-foreground">
+                    {blog.city || "--"}
+                  </TableCell>
                   <TableCell>
                     <Badge variant={STATUS_VARIANTS[blog.status ?? "setup"] ?? "outline"}>
                       {blog.status ?? "setup"}
