@@ -55,6 +55,9 @@ later without touching the ledger or the generator.
 3. **Ledger table** — `blog_keyword_targets`, mirroring `peptide_location_targets`.
 4. **Unify onto the new path** — the peptide matrix builder feeds the ledger
    instead of running its own generation loop.
+5. **Custom prompts keep their authority and gain placeholders** — a brief can
+   reference `{keyword}` and `{city}` directly (§6), so the operator controls
+   the sentence while the database supplies the values.
 
 ---
 
@@ -200,7 +203,71 @@ On success, the ledger row goes `generated` with the post id; on failure,
 
 ---
 
-## 6. Unifying the peptide drip
+## 6. Custom prompts — placeholder interpolation
+
+Some clients have a custom prompt (`clients.customPrompt`, client-wide; the
+per-blog `blogs.custom_prompt` column is dead — retained for back-compat, never
+read). Today that brief is the **top-priority** anchor: it overrides the style
+profile's compound canon in `ideateTopic` and replaces the styled system prompt
+entirely in `generateContent`.
+
+That authority is preserved. The brief does not lose to the ledger — instead it
+gains the ability to **reference** what the database now holds:
+
+```
+generate a seo rich topic about {keyword} in {city}
+```
+
+### Supported placeholders
+
+| Token | Source |
+|---|---|
+| `{keyword}` | the claimed `blog_keyword_targets.keyword` |
+| `{city}` | `blogs.city` |
+| `{region}` | `blogs.region` |
+| `{country}` | `blogs.country_code` |
+| `{brand}` | `blogs.brand_name` (or the domain-derived fallback) |
+| `{domain}` | `blogs.domain` |
+
+### Interpolation rules
+
+- **One seam.** `runGenerateAndPublish` resolves the blog, city, and claimed
+  target before either consumer runs, so the prompt string is interpolated
+  **once** at load and the already-rendered text flows into both `ideateTopic`'s
+  brief section and `buildCustomSystemPrompt`. Neither of them learns about
+  placeholders.
+- **Unknown tokens are left literal**, not blanked. `{keywrd}` renders as
+  `{keywrd}` and is logged, so a typo is visible in the output instead of
+  silently producing "a topic about  in Montreal".
+- **A placeholder never renders empty.** If `{keyword}` is used but no target can
+  be claimed (ledger drained, no city), fall back in order: the blog's
+  top-ranked scraped keyword regardless of ledger status → the niche's key
+  topic → drop the local targeting and take today's pure-brief path. An empty
+  substitution would produce a malformed instruction, which is worse than not
+  targeting at all.
+- **Placeholders are optional.** A custom prompt with no tokens still gets the
+  claimed keyword and city through the standard `LOCAL_TARGETING_DIRECTIVE`
+  (§5). The tokens exist so the operator can control *where in their own
+  sentence* the values land, not to opt in.
+
+### Assumption worth confirming in review
+
+Because targeting activates only once a blog has a city assigned — and cities
+are new and assigned deliberately, one blog at a time — **existing custom-prompt
+clients are unaffected until someone gives their blog a city.** That is what
+makes it safe to have keyword targeting apply uniformly rather than behind
+another per-client toggle.
+
+### One contradiction to fix
+
+`buildCustomSystemPrompt` currently instructs the model to produce a title with
+**"no site/brand name"**, which fights the brand-in-title decision (§2) — but
+only on the custom-prompt path. That line becomes conditional: brand stays out
+of the title for non-local posts, and is permitted for local-targeted ones where
+it survives the pixel budget (§5). The body-and-money-link placement is
+unaffected either way.
+
+## 7. Unifying the peptide drip
 
 `buildLocationMatrix()` stops writing `peptide_location_targets` rows it
 generates from, and instead writes `blog_keyword_targets` rows with
@@ -215,7 +282,7 @@ unique index prevents re-targeting a query that already has a live page.
 
 ---
 
-## 7. Risks worth stating plainly
+## 8. Risks worth stating plainly
 
 **This is programmatic local content at network scale, which is the exact shape
 Google's scaled-content-abuse and doorway-page guidance targets.** The existing
@@ -243,7 +310,7 @@ gets materially better when the DataForSEO corpus lands and real
 
 ---
 
-## 8. Rollout
+## 9. Rollout
 
 1. **Migration + fields** — city/region/country/brand on blogs, ledger table, admin form fields with domain-derived suggestions
 2. **Target builder** — matrix + intent-aware templates, admin preview of pending rows
@@ -254,7 +321,7 @@ gets materially better when the DataForSEO corpus lands and real
 Phases 1–3 are independently shippable; the feature does nothing until a blog
 has a city, which makes rollout controllable one blog at a time.
 
-## 9. Definition of done
+## 10. Definition of done
 
 - [ ] `0036` applied; blogs carry city/region/country/brand; ledger table with its unique index
 - [ ] Weekly scrape produces ledger rows automatically for city-bearing blogs
@@ -263,4 +330,6 @@ has a city, which makes rollout controllable one blog at a time.
 - [ ] Blogs without a city are byte-for-byte unaffected
 - [ ] Re-running the builder is idempotent; a failed target doesn't abort the run
 - [ ] Peptide location targets backfilled; drip cron retired without orphaning post links
+- [ ] A custom prompt containing `{keyword}` / `{city}` renders with real values; unknown tokens survive literally; no placeholder ever renders empty
+- [ ] Custom-prompt clients whose blogs have no city behave exactly as they do today
 - [ ] No new runtime dependency
