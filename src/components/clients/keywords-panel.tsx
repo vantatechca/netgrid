@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Loader2, RefreshCw, Save, Trash2 } from "lucide-react";
+import { Loader2, RefreshCw, Save, Trash2, DollarSign } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,6 +24,16 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { BulkDeleteBar } from "@/components/ui/bulk-delete-bar";
 import { useRowSelection } from "@/lib/hooks/use-row-selection";
 import {
@@ -34,6 +44,7 @@ import {
   updateClientKeywordSeeds,
   type ClientKeyword,
 } from "@/lib/actions/keyword-actions";
+import { scrapeClientKeywordsViaDataForSeo } from "@/lib/actions/dataforseo-actions";
 
 export function KeywordsPanel({
   clientId,
@@ -48,6 +59,8 @@ export function KeywordsPanel({
   const [seeds, setSeeds] = useState(initialSeeds);
   const [savingSeeds, setSavingSeeds] = useState(false);
   const [scraping, setScraping] = useState(false);
+  const [scrapingDfs, setScrapingDfs] = useState(false);
+  const [dfsConfirmOpen, setDfsConfirmOpen] = useState(false);
   const [pending, start] = useTransition();
   const sel = useRowSelection(keywords.map((k) => k.id));
 
@@ -87,6 +100,27 @@ export function KeywordsPanel({
     }
   }
 
+  async function scrapeDfs() {
+    setDfsConfirmOpen(false);
+    setScrapingDfs(true);
+    const toastId = toast.loading("Pulling real search volume…", {
+      description: "Querying DataForSEO — this spends real API credit.",
+    });
+    try {
+      const res = await scrapeClientKeywordsViaDataForSeo(clientId);
+      if (res.success) {
+        toast.success(res.message, { id: toastId });
+      } else {
+        toast.error(res.message, { id: toastId });
+      }
+      router.refresh();
+    } catch {
+      toast.error("DataForSEO scrape failed", { id: toastId });
+    } finally {
+      setScrapingDfs(false);
+    }
+  }
+
   function toggle(id: string, isActive: boolean) {
     start(async () => {
       try {
@@ -117,9 +151,8 @@ export function KeywordsPanel({
           <CardTitle>Keyword seeds</CardTitle>
           <CardDescription>
             Starting terms for the scraper — one per line (or comma-separated).
-            These are combined with the client&apos;s niche key-topics, expanded
-            via Google Autocomplete, and stored below. Active keywords are fed
-            into every generated post (top 40 by rank).
+            These are combined with the client&apos;s niche key-topics. Active
+            keywords are fed into every generated post (top 40 by rank).
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -147,13 +180,48 @@ export function KeywordsPanel({
               )}
               Scrape keywords
             </Button>
+            <Button
+              variant="secondary"
+              onClick={() => setDfsConfirmOpen(true)}
+              disabled={scrapingDfs}
+            >
+              {scrapingDfs ? (
+                <Loader2 className="size-4 animate-spin" data-icon="inline-start" />
+              ) : (
+                <DollarSign className="size-4" data-icon="inline-start" />
+              )}
+              Scrape via DataForSEO
+            </Button>
             <span className="text-xs text-muted-foreground">
-              Save your seeds first, then scrape. Re-scraping refreshes and adds
-              new terms without losing your active/off choices.
+              &ldquo;Scrape keywords&rdquo; expands seeds via Google Autocomplete —
+              free, no real search volume. &ldquo;Scrape via DataForSEO&rdquo; pulls
+              real search volume and difficulty for the same seeds — spends real
+              API credit. Re-scraping refreshes and adds new terms without
+              losing your active/off choices.
             </span>
           </div>
         </CardContent>
       </Card>
+
+      <AlertDialog open={dfsConfirmOpen} onOpenChange={setDfsConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Scrape via DataForSEO?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This queries the DataForSEO API for real search volume, CPC, and
+              difficulty on this client&apos;s seed keywords — up to 10 seeds,
+              capped at a per-run cost ceiling. Unlike the free Autocomplete
+              scrape, this spends real API credit every time it runs.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={scrapeDfs}>
+              Scrape now
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Keyword list */}
       <Card>
@@ -204,6 +272,8 @@ export function KeywordsPanel({
                   </TableHead>
                   <TableHead>Keyword</TableHead>
                   <TableHead className="text-right">Volume</TableHead>
+                  <TableHead className="text-right">CPC</TableHead>
+                  <TableHead className="text-right">Difficulty</TableHead>
                   <TableHead className="text-right">Signal</TableHead>
                   <TableHead>Source</TableHead>
                   <TableHead className="w-[90px] text-center">Active</TableHead>
@@ -225,8 +295,15 @@ export function KeywordsPanel({
                       {k.searchVolume != null ? k.searchVolume.toLocaleString() : "—"}
                     </TableCell>
                     <TableCell className="text-right tabular-nums text-muted-foreground">
-                      {k.hitCount}
-                      {k.bestPosition != null ? ` · #${k.bestPosition + 1}` : ""}
+                      {k.cpc != null ? `$${Number(k.cpc).toFixed(2)}` : "—"}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground">
+                      {k.keywordDifficulty ?? "—"}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground">
+                      {k.source === "dataforseo"
+                        ? "—"
+                        : `${k.hitCount}${k.bestPosition != null ? ` · #${k.bestPosition + 1}` : ""}`}
                     </TableCell>
                     <TableCell>
                       <Badge variant="outline" className="font-normal text-[10px]">

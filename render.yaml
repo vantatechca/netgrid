@@ -64,6 +64,18 @@ services:
         sync: false
       - key: SEMRUSH_API_KEY
         sync: false
+      # Real search volume for the per-client keyword pool (client_keywords),
+      # admin-triggered on demand from the client's Keywords tab — NOT wired
+      # into any cron, since a pull costs real money unlike the free
+      # Autocomplete scrape. LOGIN/PASSWORD are API credentials from the
+      # DataForSEO dashboard, not the account password. MAX_RUN_COST caps
+      # spend per pull in USD; optional, defaults to 5.00.
+      - key: DATAFORSEO_LOGIN
+        sync: false
+      - key: DATAFORSEO_PASSWORD
+        sync: false
+      - key: DATAFORSEO_MAX_RUN_COST
+        sync: false
       - key: CRON_SECRET
         sync: false
 
