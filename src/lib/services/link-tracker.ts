@@ -1,4 +1,8 @@
-import "server-only";
+// No `import "server-only"` here on purpose — see
+// src/lib/content/client-keywords.ts for the reasoning: every consumer is an
+// API route handler, a "use server" action, or a standalone tsx script,
+// never a client component, and the real `server-only` package throws under
+// plain Node execution.
 import { db } from "@/lib/db";
 import { linkEvents, generatedPosts, clients, blogs } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
