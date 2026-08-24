@@ -45,6 +45,7 @@ export const seoTrendEnum = pgEnum("seo_trend", ["improving", "stable", "declini
 export const checkTypeEnum = pgEnum("check_type", ["scheduled", "manual"]);
 export const thirdPartySourceEnum = pgEnum("third_party_source", ["ahrefs", "semrush", "moz"]);
 export const generatedPostStatusEnum = pgEnum("generated_post_status", ["pending", "generating", "generated", "publishing", "published", "failed"]);
+export const keywordTargetStatusEnum = pgEnum("keyword_target_status", ["pending", "generating", "generated", "failed", "skipped"]);
 export const scrubberStrictnessEnum = pgEnum("scrubber_strictness", ["loose", "standard", "strict"]);
 export const compliancePlacementEnum = pgEnum("compliance_placement", [
   "TOP",
@@ -189,6 +190,16 @@ export const blogs = pgTable("blogs", {
   // client-wide only (see clients.customPrompt) — this column is retained for
   // back-compat but is no longer read or written by the app.
   customPrompt: text("custom_prompt"),
+  // Local keyword-targeted content (see docs/local-keyword-content-plan.md).
+  // city is the feature's on/off switch: null means this blog keeps the
+  // ordinary ideateTopic flow. Assignment is manual — the domain is not a
+  // reliable source of the city (pizzeriacrosta.ca carries none at all).
+  city: varchar("city", { length: 120 }),
+  region: varchar("region", { length: 120 }),
+  countryCode: varchar("country_code", { length: 2 }),
+  // Display name for this blog's own store, e.g. "Montreal Peptides". Null
+  // falls back to a domain-derived label at read time.
+  brandName: varchar("brand_name", { length: 160 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [
@@ -716,6 +727,53 @@ export const peptideLocationTargets = pgTable("peptide_location_targets", {
   ),
   index("peptide_location_targets_blog_status_idx").on(table.blogId, table.status),
   index("peptide_location_targets_client_idx").on(table.clientId),
+]);
+
+// ─── blog_keyword_targets ──────────────────────────────────────────────────────
+//
+// Local keyword-targeted content ledger. One row = one candidate "[keyword] in
+// [city]" post for a blog — pairing the blog's assigned city (blogs.city) with
+// one of its own scraped keywords (client_keywords). Built by
+// buildKeywordTargetsForBlog() whenever the blog has a city; claimed by
+// runAutoPublishCron in priority order, one claim per due blog per run. See
+// docs/local-keyword-content-plan.md.
+//
+// Niche-agnostic and strictly additive: a blog with no city never gets rows
+// here and keeps today's ideateTopic flow untouched. Same shape as
+// peptide_location_targets (which this table eventually unifies with), except
+// keyed on a real scraped keyword instead of a client-picked compound.
+
+export const blogKeywordTargets = pgTable("blog_keyword_targets", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  blogId: uuid("blog_id")
+    .notNull()
+    .references(() => blogs.id, { onDelete: "cascade" }),
+  clientId: uuid("client_id")
+    .notNull()
+    .references(() => clients.id, { onDelete: "cascade" }),
+  keyword: varchar("keyword", { length: 255 }).notNull(),
+  // Snapshot of blogs.city at build time — kept even if the blog's city is
+  // later reassigned, so historical rows still describe what was targeted.
+  city: varchar("city", { length: 120 }).notNull(),
+  topicTitle: varchar("topic_title", { length: 500 }).notNull(),
+  status: keywordTargetStatusEnum("status").notNull().default("pending"),
+  // Rank snapshot at build time (lower = higher priority). Real search
+  // volume once the DataForSEO corpus lands; the Autocomplete popularity
+  // proxy (hitCount/bestPosition ordering) until then.
+  priority: integer("priority").notNull().default(0),
+  keywordSource: varchar("keyword_source", { length: 32 }).notNull().default("google_autocomplete"),
+  searchVolume: integer("search_volume"),
+  generatedPostId: uuid("generated_post_id").references(() => generatedPosts.id, {
+    onDelete: "set null",
+  }),
+  failureReason: text("failure_reason"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  generatedAt: timestamp("generated_at"),
+}, (table) => [
+  uniqueIndex("blog_keyword_targets_unique_idx").on(table.blogId, table.keyword, table.city),
+  index("blog_keyword_targets_blog_status_priority_idx").on(table.blogId, table.status, table.priority),
+  index("blog_keyword_targets_client_idx").on(table.clientId),
 ]);
 
 // ─── registration_leads ───────────────────────────────────────────────────────
