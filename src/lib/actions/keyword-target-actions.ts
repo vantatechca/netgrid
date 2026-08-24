@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { and, eq, isNotNull, sql } from "drizzle-orm";
+import { and, asc, eq, isNotNull, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { blogs, blogKeywordTargets } from "@/lib/db/schema";
 import { requireAdmin } from "@/lib/auth/helpers";
@@ -174,4 +174,101 @@ export async function rebuildAllKeywordTargetsInternal(): Promise<{
   }
 
   return { blogsProcessed: rows.length, blogsTargeted, targetsUpserted, failed };
+}
+
+// ─── Claim / lifecycle (called by runGenerateAndPublish) ────────────────────
+
+export interface ClaimedKeywordTarget {
+  id: string;
+  keyword: string;
+  city: string;
+  topicTitle: string;
+}
+
+/**
+ * Claim the best pending keyword target for a blog — marks it 'generating'
+ * and returns it, or undefined when there's nothing to claim (no city, or
+ * every target already generating/generated/failed/skipped; see
+ * buildKeywordTargetsForBlogCore for how rows get here). Select-then-
+ * conditional-update rather than a single locking statement: each blog
+ * belongs to exactly one auto-publish shard (shardForBlog), so two processes
+ * never race to claim the same blog's rows — the status='pending' re-check on
+ * the update is a defensive guard, not a correctness requirement. Never
+ * throws — a lookup failure just means this post falls back to ordinary
+ * ideation, same as "no city" or "ledger drained".
+ */
+export async function claimKeywordTargetForBlog(
+  blogId: string,
+): Promise<ClaimedKeywordTarget | undefined> {
+  try {
+    const [candidate] = await db
+      .select({ id: blogKeywordTargets.id })
+      .from(blogKeywordTargets)
+      .where(and(eq(blogKeywordTargets.blogId, blogId), eq(blogKeywordTargets.status, "pending")))
+      .orderBy(asc(blogKeywordTargets.priority))
+      .limit(1);
+    if (!candidate) return undefined;
+
+    const [claimed] = await db
+      .update(blogKeywordTargets)
+      .set({ status: "generating", updatedAt: new Date() })
+      .where(and(eq(blogKeywordTargets.id, candidate.id), eq(blogKeywordTargets.status, "pending")))
+      .returning({
+        id: blogKeywordTargets.id,
+        keyword: blogKeywordTargets.keyword,
+        city: blogKeywordTargets.city,
+        topicTitle: blogKeywordTargets.topicTitle,
+      });
+    return claimed;
+  } catch (err) {
+    console.warn(
+      `[keyword-target] claim failed for blog ${blogId}:`,
+      err instanceof Error ? err.message : err,
+    );
+    return undefined;
+  }
+}
+
+/** Mark a claimed target generated — the post actually targeted its keyword and published. */
+export async function markKeywordTargetGenerated(
+  id: string,
+  generatedPostId: string,
+): Promise<void> {
+  try {
+    await db
+      .update(blogKeywordTargets)
+      .set({
+        status: "generated",
+        generatedPostId,
+        failureReason: null,
+        generatedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(blogKeywordTargets.id, id));
+  } catch (err) {
+    console.warn(
+      `[keyword-target] failed to mark ${id} generated:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
+/**
+ * Mark a claimed target failed — either generation/publish itself failed, or
+ * the run fell back to a generic re-ideated topic (so this keyword was never
+ * actually covered). Either way the row goes back into the pool for a future
+ * run rather than sitting stuck 'generating' forever.
+ */
+export async function markKeywordTargetFailed(id: string, reason: string): Promise<void> {
+  try {
+    await db
+      .update(blogKeywordTargets)
+      .set({ status: "failed", failureReason: reason.slice(0, 2000), updatedAt: new Date() })
+      .where(eq(blogKeywordTargets.id, id));
+  } catch (err) {
+    console.warn(
+      `[keyword-target] failed to mark ${id} failed:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
 }
