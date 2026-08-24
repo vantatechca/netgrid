@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { and, asc, eq, isNotNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { blogs, blogKeywordTargets } from "@/lib/db/schema";
 import { requireAdmin } from "@/lib/auth/helpers";
@@ -189,30 +189,69 @@ export interface ClaimedKeywordTarget {
  * Claim the best pending keyword target for a blog — marks it 'generating'
  * and returns it, or undefined when there's nothing to claim (no city, or
  * every target already generating/generated/failed/skipped; see
- * buildKeywordTargetsForBlogInternal for how rows get here). Select-then-
- * conditional-update rather than a single locking statement: each blog
- * belongs to exactly one auto-publish shard (shardForBlog), so two processes
- * never race to claim the same blog's rows — the status='pending' re-check on
- * the update is a defensive guard, not a correctness requirement. Never
- * throws — a lookup failure just means this post falls back to ordinary
- * ideation, same as "no city" or "ledger drained".
+ * buildKeywordTargetsForBlogInternal for how rows get here).
+ *
+ * Every sibling blog of a client builds its ledger from the SAME client-wide
+ * ranked keyword pool (client_keywords, see topActiveClientKeywordsWithMeta),
+ * so every sibling's own #1-priority pending row tends to be the identical
+ * keyword — the only thing that differed was the city templated into the
+ * title. Left unchecked, a client running many sibling blogs converges on
+ * the same handful of topics network-wide. So: prefer this blog's best
+ * pending row whose keyword no OTHER blog of the same client is currently
+ * generating or has already generated (cross-sibling reservation) — this
+ * spreads the network across the pool instead of every sibling picking the
+ * same top keyword. Only once every one of this blog's pending keywords is
+ * already reserved by a sibling (the pool has cycled through the whole
+ * client) does it fall back to this blog's plain best pending row regardless
+ * of sibling reservation — i.e. rotate through the ranked pool, wrap back to
+ * #1 once exhausted, rather than starving a blog of new content forever.
+ *
+ * Select-then-conditional-update rather than a single locking statement:
+ * each blog belongs to exactly one auto-publish shard (shardForBlog), so two
+ * processes never race to claim the same BLOG's rows — the status='pending'
+ * re-check on the update is a defensive guard, not a correctness
+ * requirement. Two SIBLING blogs claiming in the same tick (different
+ * shards) could in principle both compute the same "free" keyword before
+ * either transitions to 'generating' — an accepted, rare race, not the
+ * systemic every-sibling-picks-#1 problem this fixes. Never throws — a
+ * lookup failure just means this post falls back to ordinary ideation, same
+ * as "no city" or "ledger drained".
  */
 export async function claimKeywordTargetForBlog(
   blogId: string,
 ): Promise<ClaimedKeywordTarget | undefined> {
   try {
-    const [candidate] = await db
-      .select({ id: blogKeywordTargets.id })
+    const pendingRows = await db
+      .select({
+        id: blogKeywordTargets.id,
+        keyword: blogKeywordTargets.keyword,
+        clientId: blogKeywordTargets.clientId,
+      })
       .from(blogKeywordTargets)
       .where(and(eq(blogKeywordTargets.blogId, blogId), eq(blogKeywordTargets.status, "pending")))
-      .orderBy(asc(blogKeywordTargets.priority))
-      .limit(1);
-    if (!candidate) return undefined;
+      .orderBy(asc(blogKeywordTargets.priority));
+    if (pendingRows.length === 0) return undefined;
+
+    const clientId = pendingRows[0].clientId;
+    const reservedRows = await db
+      .selectDistinct({ keyword: blogKeywordTargets.keyword })
+      .from(blogKeywordTargets)
+      .where(
+        and(
+          eq(blogKeywordTargets.clientId, clientId),
+          ne(blogKeywordTargets.blogId, blogId),
+          inArray(blogKeywordTargets.status, ["generating", "generated"]),
+        ),
+      );
+    const reserved = new Set(reservedRows.map((r) => r.keyword));
+
+    const free = pendingRows.find((r) => !reserved.has(r.keyword));
+    const chosen = free ?? pendingRows[0];
 
     const [claimed] = await db
       .update(blogKeywordTargets)
       .set({ status: "generating", updatedAt: new Date() })
-      .where(and(eq(blogKeywordTargets.id, candidate.id), eq(blogKeywordTargets.status, "pending")))
+      .where(and(eq(blogKeywordTargets.id, chosen.id), eq(blogKeywordTargets.status, "pending")))
       .returning({
         id: blogKeywordTargets.id,
         keyword: blogKeywordTargets.keyword,
