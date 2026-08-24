@@ -1,7 +1,7 @@
 "use server";
 
 import { db } from "@/lib/db";
-import { blogs, clients, generatedPosts } from "@/lib/db/schema";
+import { blogs, clients, generatedPosts, blogKeywordTargets } from "@/lib/db/schema";
 import { requireAdmin } from "@/lib/auth/helpers";
 import { createBlogSchema, updateBlogSchema } from "@/lib/validators/blog";
 import {
@@ -70,7 +70,15 @@ import { pingIndexNowFireAndForget } from "@/lib/services/index-now-pinger";
 import { scanPostAfterPublishFireAndForget } from "@/lib/services/post-seo-runner";
 import { relinkAfterPublishFireAndForget } from "@/lib/services/semantic-linking";
 import { resolveNicheConfig } from "@/lib/content/niche-config-db";
-import { effectiveBlogCta } from "@/lib/content/cta-target";
+import { effectiveBlogCta, blogDomainCtaUrl } from "@/lib/content/cta-target";
+import { deriveBrandName } from "@/lib/content/brand";
+import { hasPlaceholders, interpolatePromptPlaceholders } from "@/lib/content/prompt-placeholders";
+import {
+  claimKeywordTargetForBlog,
+  markKeywordTargetGenerated,
+  markKeywordTargetFailed,
+  type ClaimedKeywordTarget,
+} from "@/lib/actions/keyword-target-actions";
 import { ctaColorHex } from "@/lib/content/cta-colors";
 import { resolveNextPostLanguage } from "@/lib/content/post-language";
 import { getAppBaseUrl } from "@/lib/services/link-tracker";
@@ -772,6 +780,10 @@ export async function generateBlogPost(
       clientId: blogs.clientId,
       domain: blogs.domain,
       platform: blogs.platform,
+      city: blogs.city,
+      region: blogs.region,
+      countryCode: blogs.countryCode,
+      brandName: blogs.brandName,
       niche: clients.niche,
       languageMode: clients.languageMode,
       clientCustomPrompt: clients.customPrompt,
@@ -833,7 +845,7 @@ export async function generateBlogPost(
   // Custom prompts are client-wide. Resolved once here and reused for BOTH
   // topic ideation and article generation, so topics stay on-brand for the
   // brief instead of drifting to the niche's generic topics.
-  const customPrompt = blog.clientCustomPrompt?.trim() || undefined;
+  let customPrompt = blog.clientCustomPrompt?.trim() || undefined;
 
   // Client Knowledge Base (client-wide + per-blog active docs). Previously the
   // manual "Generate post" path skipped this entirely — only the cron path used
@@ -841,32 +853,84 @@ export async function generateBlogPost(
   // and feed it into BOTH ideation and writing, matching the auto path.
   const knowledge = await getActiveKnowledgeForBlog(input.blogId);
 
-  if (!topic) {
-    // Own + sibling-blog recent titles, so ideation avoids network-wide repeats.
-    const recent = await getRecentTitles(input.blogId, blog.clientId);
+  // Local keyword-targeted content (see docs/local-keyword-content-plan.md).
+  // Claim the best pending keyword target for this blog — same gate as the
+  // auto-publish path (runGenerateAndPublish): only when the caller hasn't
+  // already supplied an explicit topic. Previously this manual "Generate
+  // post" path never claimed from — or referenced — blog_keyword_targets at
+  // all, so it ignored city/keyword assignment entirely.
+  const claimedTarget: ClaimedKeywordTarget | undefined = topic
+    ? undefined
+    : await claimKeywordTargetForBlog(input.blogId);
 
-    try {
-      const idea = await ideateTopic(
-        blog.niche,
-        recent,
-        {
-          verticalKey: verticalForPost?.key ?? null,
-          styleProfile: styleProfile ?? undefined,
-          language: postLanguage,
-          customPrompt,
-          knowledge,
-        },
-      );
-      topic = idea.topic;
-      if (keywords.length === 0) keywords = idea.keywords;
-    } catch (err) {
-      return {
-        success: false,
-        message:
-          err instanceof Error
-            ? `Topic ideation failed: ${err.message}`
-            : "Topic ideation failed",
-      };
+  const brandName = blog.brandName || deriveBrandName(blog.domain) || undefined;
+  const localTarget = claimedTarget
+    ? {
+        keyword: claimedTarget.keyword,
+        city: claimedTarget.city,
+        region: blog.region,
+        countryCode: blog.countryCode,
+        brandName,
+        brandUrl: blogDomainCtaUrl(blog.domain) ?? undefined,
+      }
+    : undefined;
+
+  // Custom prompts can reference {keyword}/{city}/{region}/{country}/{brand}/
+  // {domain} — same interpolation the auto path uses. No-op when the prompt
+  // has no placeholders.
+  if (customPrompt && hasPlaceholders(customPrompt)) {
+    customPrompt = await interpolatePromptPlaceholders(
+      customPrompt,
+      {
+        clientId: blog.clientId,
+        domain: blog.domain,
+        city: blog.city,
+        region: blog.region,
+        countryCode: blog.countryCode,
+        niche: blog.niche,
+      },
+      claimedTarget,
+      brandName,
+    );
+  }
+
+  // Tracks whether the post that ends up published actually targeted the
+  // claimed keyword — set only when attempt 1 (below) succeeds using
+  // localTarget. A fallback recovery attempt (a re-ideated, unrelated topic)
+  // must not be reported back to the ledger as covering the claimed keyword.
+  let generatedViaLocalTarget = false;
+
+  if (!topic) {
+    if (claimedTarget) {
+      topic = claimedTarget.topicTitle;
+      if (keywords.length === 0) keywords = [claimedTarget.keyword];
+    } else {
+      // Own + sibling-blog recent titles, so ideation avoids network-wide repeats.
+      const recent = await getRecentTitles(input.blogId, blog.clientId);
+
+      try {
+        const idea = await ideateTopic(
+          blog.niche,
+          recent,
+          {
+            verticalKey: verticalForPost?.key ?? null,
+            styleProfile: styleProfile ?? undefined,
+            language: postLanguage,
+            customPrompt,
+            knowledge,
+          },
+        );
+        topic = idea.topic;
+        if (keywords.length === 0) keywords = idea.keywords;
+      } catch (err) {
+        return {
+          success: false,
+          message:
+            err instanceof Error
+              ? `Topic ideation failed: ${err.message}`
+              : "Topic ideation failed",
+        };
+      }
     }
   }
 
@@ -899,7 +963,11 @@ export async function generateBlogPost(
   // customPrompt resolved above (reused for ideation); persona-stack is client-level.
   const applyPersona = Boolean(customPrompt) && Boolean(blog.clientStackPersona);
 
-  const buildOpts = (t: string, kw: string[]): GenerateOptions => ({
+  const buildOpts = (
+    t: string,
+    kw: string[],
+    useLocalTarget: boolean,
+  ): GenerateOptions => ({
     topic: t,
     keywords: kw,
     wordCount: input.wordCount ?? 700,
@@ -915,6 +983,7 @@ export async function generateBlogPost(
     styleProfile: styleProfile ?? undefined,
     verticalKey: verticalForPost?.key ?? null,
     language: postLanguage,
+    localTarget: useLocalTarget ? localTarget : undefined,
     cta: effectiveBlogCta({
       niche: blog.niche,
       blogDomain: blog.domain,
@@ -946,7 +1015,10 @@ export async function generateBlogPost(
       console.info(
         `[generateBlogPost] attempt ${attempt}/${MAX_TOPIC_ATTEMPTS} for ${blog.domain}: "${currentTopic}"`,
       );
-      result = await generateContent(buildOpts(currentTopic, currentKeywords));
+      result = await generateContent(
+        buildOpts(currentTopic, currentKeywords, attempt === 1),
+      );
+      if (attempt === 1 && claimedTarget) generatedViaLocalTarget = true;
       if (attempt > 1) {
         console.info(
           `[generateBlogPost] recovered on attempt ${attempt} with new topic`,
@@ -974,6 +1046,12 @@ export async function generateBlogPost(
           })
           .where(eq(generatedPosts.id, pending.id));
         revalidatePath(`/blogs/${input.blogId}/posts`);
+        if (claimedTarget) {
+          await markKeywordTargetFailed(
+            claimedTarget.id,
+            `All ${MAX_TOPIC_ATTEMPTS} topic attempts failed — ${combined}`,
+          );
+        }
         return {
           success: false,
           message: `Generation failed on ${MAX_TOPIC_ATTEMPTS} different topics. Last error: ${message}`,
@@ -1032,6 +1110,12 @@ export async function generateBlogPost(
           })
           .where(eq(generatedPosts.id, pending.id));
         revalidatePath(`/blogs/${input.blogId}/posts`);
+        if (claimedTarget) {
+          await markKeywordTargetFailed(
+            claimedTarget.id,
+            `Generation failed for "${currentTopic}": ${message}; re-ideation also failed: ${ideationMsg}`,
+          );
+        }
         return {
           success: false,
           message: `Both generation and re-ideation failed: ${message}; ${ideationMsg}`,
@@ -1044,6 +1128,28 @@ export async function generateBlogPost(
     // Unreachable in practice (the loop either breaks with a result or
     // returns inside the failure branches) but TypeScript needs the guard.
     return { success: false, message: "Generation pipeline exited without a result" };
+  }
+
+  // Local keyword-targeted content: resolve the claim now that generation is
+  // done. A fallback recovery attempt published on an unrelated, re-ideated
+  // topic never covered the claimed keyword, so the row goes straight back to
+  // the pool ('failed', retryable) rather than waiting on publish. When the
+  // claimed keyword WAS covered, leave the row 'generating' (claimed) — it's
+  // only resolved to 'generated' once the post actually goes live, in
+  // publishGeneratedPost below, since a draft left unpublished hasn't
+  // actually delivered the keyword-targeted content yet.
+  if (claimedTarget) {
+    if (generatedViaLocalTarget) {
+      await db
+        .update(blogKeywordTargets)
+        .set({ generatedPostId: pending.id, updatedAt: new Date() })
+        .where(eq(blogKeywordTargets.id, claimedTarget.id));
+    } else {
+      await markKeywordTargetFailed(
+        claimedTarget.id,
+        "Fell back to a re-ideated topic after the keyword-target attempt failed",
+      );
+    }
   }
 
   // Cost log — per-post breakdown so the operator can spot drift fast.
@@ -1401,6 +1507,13 @@ export async function publishGeneratedPost(
     // (and, on Shopify, the related-posts metafield), plus refresh its
     // neighbours' links. Fire-and-forget; no-op when OPENAI_API_KEY is unset.
     relinkAfterPublishFireAndForget(generatedPostId);
+
+    // Local keyword-targeted content: this is the single choke point every
+    // publish path goes through (immediate "Generate & publish" and a later
+    // manual "Publish" of a draft alike), so it's also where a claimed
+    // ledger row gets resolved to 'generated' — only once the post has
+    // actually gone live, per docs/local-keyword-content-plan.md.
+    await resolveKeywordTargetForPublishedPost(generatedPostId, true);
   } else {
     await db
       .update(generatedPosts)
@@ -1410,9 +1523,48 @@ export async function publishGeneratedPost(
         updatedAt: new Date(),
       })
       .where(eq(generatedPosts.id, generatedPostId));
+
+    await resolveKeywordTargetForPublishedPost(
+      generatedPostId,
+      false,
+      `Publish failed: ${result.message}`,
+    );
   }
 
   return result;
+}
+
+/**
+ * Resolve any claimed (status='generating') keyword-target ledger row linked
+ * to this generated post — set by generateBlogPost right after a successful,
+ * on-target generation. No-op when this post never claimed a target (the
+ * common case for blogs with no city assigned).
+ */
+async function resolveKeywordTargetForPublishedPost(
+  generatedPostId: string,
+  published: boolean,
+  failureReason?: string,
+): Promise<void> {
+  const [claimed] = await db
+    .select({ id: blogKeywordTargets.id })
+    .from(blogKeywordTargets)
+    .where(
+      and(
+        eq(blogKeywordTargets.generatedPostId, generatedPostId),
+        eq(blogKeywordTargets.status, "generating"),
+      ),
+    )
+    .limit(1);
+  if (!claimed) return;
+
+  if (published) {
+    await markKeywordTargetGenerated(claimed.id, generatedPostId);
+  } else {
+    await markKeywordTargetFailed(
+      claimed.id,
+      failureReason ?? "Publish failed",
+    );
+  }
 }
 
 // ─── Retry a Failed Generated Post ──────────────────────────────────────────
