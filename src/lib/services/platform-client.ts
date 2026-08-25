@@ -9,7 +9,7 @@ import * as wp from "./wp-client";
 import * as shopify from "./shopify-client";
 import * as shopifyTheme from "./shopify-theme-client";
 import type { ShopifyCreds } from "./shopify-client";
-import { redditSlug } from "@/lib/seo/reddit";
+import { buildPostSlug } from "@/lib/seo/reddit";
 
 /**
  * Minimal shape of a blog row for the dispatcher. Only credential fields are
@@ -17,6 +17,8 @@ import { redditSlug } from "@/lib/seo/reddit";
  */
 export interface PlatformBlog {
   platform: Platform | null;
+  /** Used to vary the published URL slug between "-reddit" and "-{city}". */
+  city?: string | null;
 
   // WordPress
   wpUrl?: string | null;
@@ -180,13 +182,16 @@ export async function publishPost(
 ): Promise<PublishPostResult> {
   const platform = resolvePlatform(blog);
 
-  // Carry the "[keyword]-reddit" SEO slug into the URL. Derived from the
-  // primary keyword (tags[0]) when the caller hasn't supplied one, falling
-  // back to the meta title / title. The visible article title and body are
-  // never modified — only the handle/slug picks up the reddit token.
+  // Carry the "[keyword]-reddit" or "[keyword]-{city}" SEO slug into the
+  // URL. Derived from the primary keyword (tags[0]) when the caller hasn't
+  // supplied one, falling back to the meta title / title. The visible
+  // article title and body are never modified — only the handle/slug picks
+  // up the suffix.
   const withSlug: PublishPostInput = {
     ...input,
-    slug: input.slug ?? redditSlug(input.tags?.[0] || input.metaTitle || input.title),
+    slug:
+      input.slug ??
+      buildPostSlug(input.tags?.[0] || input.metaTitle || input.title, blog.city),
   };
 
   if (platform === "shopify") {

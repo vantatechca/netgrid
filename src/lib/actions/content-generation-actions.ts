@@ -768,6 +768,7 @@ export async function runGenerateAndPublish(
     // 5. Publish via platform-client (handles WP + Shopify)
     const platformBlog: PlatformBlog = {
       platform: blog.platform,
+      city: blog.city,
       wpUrl: blog.wpUrl,
       wpUsername: blog.wpUsername,
       wpAppPassword: blog.wpAppPassword,

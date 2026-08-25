@@ -2344,9 +2344,12 @@ ON-PAGE QUALITY (apply throughout the article):
 function buildLocalTargetingDirective(
   target: NonNullable<GenerateOptions["localTarget"]>,
 ): string {
-  const brandLine = target.brandName
-    ? `\n- Name "${target.brandName}" once in the body as the source for this, linked to ${target.brandUrl ?? "the site's own domain"}. Do not repeat it in every section.`
-    : "";
+  const brandLine =
+    target.brandName && target.brandUrl
+      ? `\n- Name "${target.brandName}" once in the body as the source, formatted as an HTML hyperlink: <a href="${target.brandUrl}">${target.brandName}</a>. Do not repeat it in every section, and never leave it as plain unlinked text.`
+      : target.brandName
+        ? `\n- Name "${target.brandName}" once in the body as the source for this. Do not repeat it in every section.`
+        : "";
   return `
 
 LOCAL TARGETING (this post targets a real search query for a specific market — apply throughout):

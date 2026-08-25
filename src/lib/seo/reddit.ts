@@ -95,6 +95,35 @@ export function redditSlug(source: string | null | undefined): string {
   return `${base}-reddit`;
 }
 
+/**
+ * Build the post's URL slug: the primary-keyword segment followed by EITHER
+ * the "-reddit" AI-citation-bait token above OR a "-{city}" local-SEO
+ * suffix — chosen at random per post (when a city is available) so URLs
+ * across the network don't all look mechanically identical. A "[keyword]
+ * -reddit" pattern repeated on every single post reads as templated; mixing
+ * in the real target city both varies the pattern and puts a genuine local
+ * signal directly in the URL. Falls back to the reddit suffix when no city
+ * is available (nothing else to vary with). Idempotent against a source
+ * that already ends in "-reddit" or "-{city}".
+ */
+export function buildPostSlug(
+  source: string | null | undefined,
+  city: string | null | undefined,
+): string {
+  const primary = (source || "").split("|")[0];
+  const base = slugifyBase(primary);
+  const citySlug = city ? slugifyBase(city) : "";
+
+  if (!base) return citySlug || "reddit";
+  if (/(?:^|-)reddit$/.test(base)) return base;
+  if (citySlug && new RegExp(`(?:^|-)${citySlug}$`).test(base)) return base;
+
+  if (citySlug && Math.random() < 0.5) {
+    return `${base}-${citySlug}`;
+  }
+  return `${base}-reddit`;
+}
+
 /** Lowercase, diacritic-folded, hyphen-joined slug of `text` (no suffix). */
 function slugifyBase(text: string): string {
   const slug = text
