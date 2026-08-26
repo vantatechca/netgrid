@@ -18,6 +18,29 @@ esac
 # match the longest-running route (auto-publish, 600s) plus headroom.
 MAX_TIME="${CRON_MAX_TIME:-660}"
 
-exec curl -fsS --retry 3 --max-time "$MAX_TIME" \
+# -f is deliberately NOT used any more: it suppresses the response body on any
+# HTTP status >= 400, which is exactly the body carrying {"error": "..."} from
+# the route's catch block. We capture the body, print it, and translate the
+# status into the exit code ourselves.
+#
+# The authoritative record of what happened is now the cron_runs row the route
+# writes (see src/lib/services/run-telemetry.ts) — this output is for a human
+# tailing the container during an incident.
+BODY_FILE=$(mktemp)
+STATUS=$(curl -sS --retry 3 --max-time "$MAX_TIME" \
   -H "Authorization: Bearer ${CRON_SECRET}" \
-  "$URL"
+  -o "$BODY_FILE" -w '%{http_code}' \
+  "$URL") || STATUS="000"
+
+echo "[cron] $(date -u +%Y-%m-%dT%H:%M:%SZ) ${CRON_PATH} -> HTTP ${STATUS}"
+head -c 8000 "$BODY_FILE"
+echo
+rm -f "$BODY_FILE"
+
+case "$STATUS" in
+  2??) exit 0 ;;
+  *)
+    echo "[cron] FAILED: HTTP ${STATUS} for ${CRON_PATH}" >&2
+    exit 1
+    ;;
+esac

@@ -36,6 +36,15 @@ import { resolveNextPostLanguage } from "@/lib/content/post-language";
 import { ctaRedirectUrl, getAppBaseUrl } from "@/lib/services/link-tracker";
 import { pingIndexNowFireAndForget } from "@/lib/services/index-now-pinger";
 import { scanPostAfterPublishFireAndForget } from "@/lib/services/post-seo-runner";
+import {
+  runWithTelemetry,
+  withBlog,
+  setCounter,
+  snapshotCounters,
+  currentRunId,
+  recordPipelineError,
+  type RunCounters,
+} from "@/lib/services/run-telemetry";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -1175,6 +1184,14 @@ export interface AutoPublishResult {
     status: "published" | "generated" | "failed" | "skipped" | "deferred";
     message: string;
   }>;
+  /**
+   * cron_runs.id for this invocation. The durable record lives in Postgres
+   * whether or not anyone reads this response; this is the join key into
+   * pipeline_errors. Undefined only when TELEMETRY_ENABLED=0.
+   */
+  runId?: string;
+  /** Full per-run counter set — mirrors cron_runs.counters. */
+  counters?: RunCounters;
 }
 
 /**
@@ -1207,20 +1224,15 @@ export interface AutoPublishResult {
  * In-memory counters update as we go so subsequent blogs in the same run
  * see correct per-client totals and per-blog daily counts.
  */
-export async function runAutoPublishCron(
-  opts: {
-    /** This cron service's shard index (0-based). Default 0 = no sharding. */
-    shardIndex?: number;
-    /** Total number of parallel cron services. Default 1 = no sharding. */
-    shardCount?: number;
-  } = {},
-): Promise<AutoPublishResult> {
-  const now = new Date();
-  const todayStart = startOfUtcDay(now);
-  const currentHour = now.getUTCHours();
-
-  // Sharding params — validated + defaulted. When shardCount<=1 the
-  // shard filter is a no-op (every blog is in shard 0).
+/**
+ * Sharding params — validated + defaulted. When shardCount<=1 the shard
+ * filter is a no-op (every blog is in shard 0). Extracted so the telemetry
+ * wrapper can label the run with the same values the body uses.
+ */
+function resolveShard(opts: { shardIndex?: number; shardCount?: number }): {
+  shardIndex: number;
+  shardCount: number;
+} {
   const shardCount =
     Number.isInteger(opts.shardCount) && opts.shardCount! > 0
       ? opts.shardCount!
@@ -1231,6 +1243,37 @@ export async function runAutoPublishCron(
     opts.shardIndex! < shardCount
       ? opts.shardIndex!
       : 0;
+  return { shardIndex, shardCount };
+}
+
+export async function runAutoPublishCron(
+  opts: {
+    /** This cron service's shard index (0-based). Default 0 = no sharding. */
+    shardIndex?: number;
+    /** Total number of parallel cron services. Default 1 = no sharding. */
+    shardCount?: number;
+  } = {},
+): Promise<AutoPublishResult> {
+  const { shardIndex, shardCount } = resolveShard(opts);
+  // The wrapper persists exactly one cron_runs row plus every
+  // pipeline_errors buffered inside, whether the body resolves or throws.
+  return runWithTelemetry(
+    {
+      job: "auto-publish",
+      shardIndex: shardCount > 1 ? shardIndex : null,
+      shardCount: shardCount > 1 ? shardCount : null,
+    },
+    () => runAutoPublishCronInner(opts),
+  );
+}
+
+async function runAutoPublishCronInner(
+  opts: { shardIndex?: number; shardCount?: number } = {},
+): Promise<AutoPublishResult> {
+  const now = new Date();
+  const todayStart = startOfUtcDay(now);
+  const currentHour = now.getUTCHours();
+  const { shardIndex, shardCount } = resolveShard(opts);
 
   // 1. Active blogs with at least one cadence field set. Sort at the DB
   //    layer by lastPostVerifiedAt ASC NULLS FIRST so we can stream
@@ -1485,6 +1528,18 @@ export async function runAutoPublishCron(
   );
 
   async function publishOne(entry: QueueEntry): Promise<void> {
+    const { blog } = entry;
+    // Everything below — generateContent, the image pipeline, publishPost,
+    // the detached IndexNow ping — records against THIS blog. withBlog
+    // shares the counters and error buffer by reference, so parallel
+    // workers accumulate into one run while attribution stays per-blog.
+    return withBlog(
+      { blogId: blog.id, clientId: blog.clientId, domain: blog.domain },
+      () => publishOneInner(entry),
+    );
+  }
+
+  async function publishOneInner(entry: QueueEntry): Promise<void> {
     const { blog, todayCount, clientCount, preferredHour } = entry;
     let lastError: unknown = null;
 
@@ -1538,10 +1593,18 @@ export async function runAutoPublishCron(
     failed++;
     const message =
       lastError instanceof Error ? lastError.message : "Unknown error";
-    console.error(
-      `Auto-publish failed for ${blog.domain} after retry:`,
-      lastError,
-    );
+    recordPipelineError({
+      site: "auto-publish.publishOne",
+      code: "PUBLISH_ATTEMPT_FAILED",
+      severity: "error",
+      message: `Auto-publish failed for ${blog.domain} after retry: ${message}`,
+      context: {
+        domain: blog.domain,
+        platform: blog.platform,
+        preferredHour,
+        stack: lastError instanceof Error ? lastError.stack?.slice(0, 2000) : null,
+      },
+    });
     results.push({
       blogId: blog.id,
       domain: blog.domain,
@@ -1567,10 +1630,21 @@ export async function runAutoPublishCron(
     Array.from({ length: Math.min(concurrency, toRun.length) }, () => worker()),
   );
 
+  const considered = shardCount > 1 ? shardFilteredRows.length : rows.length;
+  // Mirror the run-level numbers into the durable counter set. The deep
+  // counters (truncatedSalvaged, imageless, providerUsed, ...) were already
+  // bumped in place by the generator during publishOne.
+  setCounter("considered", considered);
+  setCounter("due", queue.length);
+  setCounter("published", published);
+  setCounter("failed", failed);
+  setCounter("skipped", skipped);
+  setCounter("deferred", deferredQueue.length);
+
   return {
     // When sharded, "considered" is the count this shard saw after
     // filtering; totalActiveBlogs is the full network size.
-    considered: shardCount > 1 ? shardFilteredRows.length : rows.length,
+    considered,
     ...(shardCount > 1
       ? {
           totalActiveBlogs: rows.length,
@@ -1586,5 +1660,7 @@ export async function runAutoPublishCron(
     currentHourUtc: currentHour,
     maxPerRun: MAX_BLOGS_PER_CRON_RUN,
     results,
+    runId: currentRunId(),
+    counters: snapshotCounters(),
   };
 }

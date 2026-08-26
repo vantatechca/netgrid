@@ -8,6 +8,7 @@
 import { db } from "@/lib/db";
 import { appSettings } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
+import { recordPipelineError } from "@/lib/services/run-telemetry";
 
 // ─── Keys ────────────────────────────────────────────────────────────────────
 
@@ -65,25 +66,36 @@ function now(): number {
 async function readSetting(key: string): Promise<string | null> {
   const hit = cache.get(key);
   if (hit && now() - hit.at < CACHE_TTL_MS) return hit.value;
-  let value: string | null = null;
   try {
     const [row] = await db
       .select({ value: appSettings.value })
       .from(appSettings)
       .where(eq(appSettings.key, key))
       .limit(1);
-    value = row?.value ?? null;
+    const value = row?.value ?? null;
+    cache.set(key, { value, at: now() });
+    return value;
   } catch (err) {
     // Table missing (un-migrated env) or transient error — fall back to
     // defaults so generation never breaks on a settings lookup.
-    console.warn(
-      `[app-settings] read failed for "${key}":`,
-      err instanceof Error ? err.message : err,
-    );
-    value = null;
+    //
+    // Two deliberate differences from the old behaviour:
+    //   1. Typed record instead of console.warn, so a settings outage is
+    //      queryable and alertable instead of one line in one container.
+    //   2. We do NOT cache this null. The old code cached the failure for
+    //      15s, which silently reverted the whole fleet's model provider
+    //      to DEFAULT_CONTENT_MODEL / DEFAULT_FIX_MODEL for that window.
+    //      A previously-cached good value is also left in place, so a
+    //      blip re-reads rather than degrading.
+    recordPipelineError({
+      site: "app-settings.readSetting",
+      code: "SETTINGS_READ_FAILED",
+      severity: "error",
+      message: err instanceof Error ? err.message : String(err),
+      context: { key, hadCachedValue: hit !== undefined },
+    });
+    return hit?.value ?? null;
   }
-  cache.set(key, { value, at: now() });
-  return value;
 }
 
 export async function setAppSetting(key: string, value: string): Promise<void> {

@@ -528,6 +528,101 @@ export const activityLog = pgTable("activity_log", {
   index("activity_log_created_at_idx").on(table.createdAt),
 ]);
 
+// ─── cron_runs ──────────────────────────────────────────────────────────────
+//
+// One row per cron invocation (T22). This is the durable replacement for
+// returning AutoPublishResult to a curl: the counters land here whether or
+// not anyone reads the HTTP response, and they survive container restarts.
+//
+// Deliberately NOT foreign-keyed (same convention as link_events, see
+// migrations/0026_link_events.sql) — a telemetry write must never fail
+// because a blog or client row moved underneath it.
+export const cronRuns = pgTable("cron_runs", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  /** Job name, e.g. "auto-publish", "post-verification", "alerts". */
+  job: varchar("job", { length: 64 }).notNull(),
+  /** 0-based shard index, or null when the job is not sharded. */
+  shardIndex: integer("shard_index"),
+  shardCount: integer("shard_count"),
+  startedAt: timestamp("started_at").notNull(),
+  finishedAt: timestamp("finished_at").defaultNow().notNull(),
+  durationMs: integer("duration_ms").notNull(),
+  /** false when the run body threw. */
+  ok: boolean("ok").default(true).notNull(),
+  /** RunCounters — see src/lib/services/run-telemetry.ts. jsonb so the
+   * counter set can grow without a migration. */
+  counters: jsonb("counters").notNull(),
+  /** Total pipeline_errors recorded during this run (including any
+   * dropped past the in-memory buffer cap). */
+  errorCount: integer("error_count").default(0).notNull(),
+  /** First 25 errors inline, so the run row alone is readable. */
+  errorSample: jsonb("error_sample"),
+  fatalError: text("fatal_error"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("cron_runs_job_started_idx").on(table.job, table.startedAt),
+  index("cron_runs_started_at_idx").on(table.startedAt),
+]);
+
+// ─── pipeline_errors ────────────────────────────────────────────────────────
+//
+// One row per typed failure. Replaces the ~131 console.warn/console.error
+// dead-ends. Normalised (rather than only living inside cron_runs.errors)
+// so "how many META_WRITE_FAILED across how many distinct blogs in the
+// last 24h" is one indexed query, and so failures outside a cron run
+// (manual Generate now, /r/ redirect, webhook) are captured too.
+export const pipelineErrors = pgTable("pipeline_errors", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  /** cron_runs.id when inside a run; null for ad-hoc failures. */
+  runId: uuid("run_id"),
+  job: varchar("job", { length: 64 }).notNull(),
+  /** Code location, e.g. "content-generator.images". */
+  site: varchar("site", { length: 64 }).notNull(),
+  /** PipelineErrorCode — see run-telemetry.ts. */
+  code: varchar("code", { length: 64 }).notNull(),
+  /** "warn" | "error" | "fatal". */
+  severity: varchar("severity", { length: 16 }).default("error").notNull(),
+  blogId: uuid("blog_id"),
+  clientId: uuid("client_id"),
+  postId: uuid("post_id"),
+  message: text("message").notNull(),
+  context: jsonb("context"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("pipeline_errors_created_at_idx").on(table.createdAt),
+  index("pipeline_errors_code_created_idx").on(table.code, table.createdAt),
+  index("pipeline_errors_blog_id_idx").on(table.blogId),
+  index("pipeline_errors_run_id_idx").on(table.runId),
+]);
+
+// ─── alert_log / alert_suppression ──────────────────────────────────────────
+//
+// alert_log is the audit trail of everything the alerter tried to send
+// (including delivery failures). alert_suppression is the per-key cooldown
+// claim: alert_key is the PRIMARY KEY, so the conditional upsert in
+// pipeline-alerts.ts is atomic across the four concurrently-running
+// auto-publish shards without needing a transaction (the neon-http driver
+// has none).
+export const alertLog = pgTable("alert_log", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  alertKey: varchar("alert_key", { length: 160 }).notNull(),
+  severity: varchar("severity", { length: 16 }).notNull(),
+  subject: varchar("subject", { length: 300 }).notNull(),
+  body: text("body").notNull(),
+  delivered: boolean("delivered").default(false).notNull(),
+  deliveryError: text("delivery_error"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("alert_log_key_created_idx").on(table.alertKey, table.createdAt),
+  index("alert_log_created_idx").on(table.createdAt),
+]);
+
+export const alertSuppression = pgTable("alert_suppression", {
+  alertKey: varchar("alert_key", { length: 160 }).primaryKey(),
+  suppressedUntil: timestamp("suppressed_until").notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 // ─── news_items ─────────────────────────────────────────────────────────────
 //
 // Cached headlines fetched from Google News RSS (and optional NewsAPI /

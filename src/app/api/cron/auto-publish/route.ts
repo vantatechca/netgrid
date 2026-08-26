@@ -32,8 +32,14 @@ export async function GET(request: Request) {
     });
     return NextResponse.json(result);
   } catch (error) {
-    console.error("Auto-publish cron error:", error);
+    // runWithTelemetry already persisted a cron_runs row with ok=false and
+    // a CRON_RUN_FATAL pipeline_errors row before re-throwing, so this is
+    // purely the HTTP surface. Keep the console line for the live tail.
+    console.error("[auto-publish] cron error:", error);
     const message = error instanceof Error ? error.message : "Auto-publish failed";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json(
+      { error: message, job: "auto-publish" },
+      { status: 500 },
+    );
   }
 }
