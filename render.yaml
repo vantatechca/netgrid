@@ -26,6 +26,16 @@ services:
         value: "06:00"
       - key: POST_CHECK_INTERVAL_HOURS
         value: "6"
+      # Pipeline telemetry (T22). TELEMETRY_ENABLED=0 is the rollback lever —
+      # it turns every cron_runs / pipeline_errors write into a no-op without
+      # a code deploy; counters still accumulate in memory and every
+      # recordPipelineError still emits its console line.
+      # TELEMETRY_BACKGROUND_WAIT_MS caps how long a run waits for detached
+      # IndexNow / post-scan work before flushing its row.
+      - key: TELEMETRY_ENABLED
+        value: "1"
+      - key: TELEMETRY_BACKGROUND_WAIT_MS
+        value: "15000"
       - key: DATABASE_URL
         sync: false
       - key: NEXTAUTH_URL
