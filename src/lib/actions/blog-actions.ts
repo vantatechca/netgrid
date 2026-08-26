@@ -888,6 +888,7 @@ export async function publishBlogPost(
     .select({
       domain: blogs.domain,
       platform: blogs.platform,
+      city: blogs.city,
       wpUrl: blogs.wpUrl,
       wpUsername: blogs.wpUsername,
       wpAppPassword: blogs.wpAppPassword,
