@@ -1,9 +1,11 @@
 import type { ScrubberStrictness, StyleProfile } from "../types";
-import { runLayer1 } from "./layer1";
+import { runLayer1, runLayer1ShortText, type ShortFieldKey } from "./layer1";
 import { runLayer2Uniformity } from "./layer2";
 import type {
+  ScrubbedFields,
   ScrubberReport,
   ScrubberResult,
+  ScrubberVerdict,
   Violation,
 } from "./types";
 
@@ -56,7 +58,23 @@ export interface RunScrubberInput {
   skeletonId?: number;
   /** Voice id used (for the report). */
   voiceId?: number;
+  /**
+   * Short-form fields that ship WITH the post but are not part of the body.
+   * Pass the FINAL, already-normalized strings (post normalizeMetaTitle /
+   * normalizeExcerpt) — the scrubber returns fixed replacements in
+   * `result.fields`, and its verdict accounts for them.
+   */
+  fields?: ScrubbedFields;
+  /** 0 on the first pass; 1 or 2 on a caller-driven regeneration. */
+  attempt?: 0 | 1 | 2;
 }
+
+const SHORT_FIELDS: readonly ShortFieldKey[] = [
+  "title",
+  "metaTitle",
+  "metaDescription",
+  "excerpt",
+];
 
 /**
  * Run the scrubber on a generated post. Returns the (possibly auto-fixed)
@@ -76,12 +94,28 @@ export function runScrubber(input: RunScrubberInput): ScrubberResult {
   const l1 = runLayer1(input.content, profile);
   violations.push(...l1.violations);
   fixesApplied.push(...l1.fixesApplied);
-  let content = l1.content;
+  const content = l1.content;
 
   // If Layer 1 hit a terminal violation (tag set 6 + heading), skip Layer 2.
   if (!l1.terminal) {
     const l2 = runLayer2Uniformity(content, profile);
     violations.push(...l2);
+  }
+
+  // Short fields — title / meta / excerpt. Before T07 these bypassed every
+  // check, so an em dash or a blocklisted word in the title shipped straight
+  // to the SERP. Their violations count toward the same thresholds as the
+  // body's, which is what makes the title a first-class part of the verdict.
+  const fields: ScrubbedFields = {};
+  for (const key of SHORT_FIELDS) {
+    const raw = input.fields?.[key];
+    if (typeof raw !== "string" || raw.length === 0) continue;
+    const r = runLayer1ShortText(raw, key, profile);
+    fields[key] = r.text;
+    violations.push(...r.violations);
+    for (const f of r.fixesApplied) {
+      if (!fixesApplied.includes(f)) fixesApplied.push(f);
+    }
   }
 
   const bucketed = bucket(violations);
@@ -91,22 +125,32 @@ export function runScrubber(input: RunScrubberInput): ScrubberResult {
   const hasTerminal = bucketed.critical.length > 0 || l1.terminal;
 
   let action: ScrubberReport["action"];
+  let verdict: ScrubberVerdict;
   let regenerateRequested = false;
   let flaggedForReview = false;
   let finalStatus: ScrubberReport["finalStatus"];
 
   if (hasTerminal) {
     action = "REGENERATE_NEEDED";
+    verdict = "regenerate_requested";
     regenerateRequested = true;
-    flaggedForReview = false;
+    // T07: was `false`. A terminal violation is the WORST verdict the
+    // scrubber can reach, and the same branch already set finalStatus to
+    // FLAGGED_FOR_REVIEW — the boolean and the report disagreed. The effect
+    // was that the only posts guaranteed to reach publish carrying no review
+    // flag were the ones the scrubber had rejected outright.
+    flaggedForReview = true;
     finalStatus = "FLAGGED_FOR_REVIEW";
   } else if (passes) {
     action = "ACCEPTED";
+    verdict = "accepted";
     finalStatus = "ACCEPTED";
   } else {
-    // Doesn't pass but no critical — semantic rewrite would help. For MVP we
-    // flag for review and let admin re-roll manually rather than auto-retry.
+    // Doesn't pass but no critical — semantic rewrite would help. Re-rolling
+    // the same prompt rarely clears a threshold breach, so this verdict is
+    // NOT a regenerate request: it holds the post for a human instead.
     action = "ACCEPT_WITH_FLAG";
+    verdict = "accepted_with_flag";
     flaggedForReview = true;
     finalStatus = "FLAGGED_FOR_REVIEW";
   }
@@ -119,11 +163,18 @@ export function runScrubber(input: RunScrubberInput): ScrubberResult {
     violations: bucketed,
     fixesApplied,
     action,
-    attempts: 0,
+    attempts: input.attempt ?? 0,
     finalStatus,
   };
 
-  return { content, report, flaggedForReview, regenerateRequested };
+  return {
+    content,
+    fields,
+    report,
+    verdict,
+    flaggedForReview,
+    regenerateRequested,
+  };
 }
 
 /**
@@ -134,8 +185,12 @@ export function runScrubber(input: RunScrubberInput): ScrubberResult {
  * This gives every niche the "punctuation auto-fix + AI-tell warning" win
  * without requiring a full profile assignment.
  */
-export function runScrubberLite(content: string): {
+export function runScrubberLite(
+  content: string,
+  fields?: ScrubbedFields,
+): {
   content: string;
+  fields: ScrubbedFields;
   violationCount: number;
   fixesApplied: ScrubberReport["fixesApplied"];
 } {
@@ -165,11 +220,45 @@ export function runScrubberLite(content: string): {
   const v = r.violations.filter(
     (x) => x.kind !== "compliance_missing" && x.kind !== "compliance_drift",
   );
+  // Same punctuation win for the short fields. No thresholds on this path —
+  // the violations are counted for logging only, never gating.
+  const scrubbedFields: ScrubbedFields = {};
+  let shortViolations = 0;
+  const fixes = [...r.fixesApplied];
+  for (const key of SHORT_FIELDS) {
+    const raw = fields?.[key];
+    if (typeof raw !== "string" || raw.length === 0) continue;
+    const sres = runLayer1ShortText(raw, key, syntheticProfile);
+    scrubbedFields[key] = sres.text;
+    shortViolations += sres.violations.length;
+    for (const f of sres.fixesApplied) {
+      if (!fixes.includes(f)) fixes.push(f);
+    }
+  }
+
   return {
     content: r.content,
-    violationCount: v.length,
-    fixesApplied: r.fixesApplied,
+    fields: scrubbedFields,
+    violationCount: v.length + shortViolations,
+    fixesApplied: fixes,
   };
 }
 
-export type { ScrubberReport, ScrubberResult } from "./types";
+export type {
+  ScrubbedFields,
+  ScrubberReport,
+  ScrubberResult,
+  ScrubberVerdict,
+  Violation,
+} from "./types";
+
+export {
+  DEFAULT_SCRUBBER_ENFORCEMENT,
+  logScrubberVerdict,
+  scrubberEnforcementMode,
+  scrubberSummary,
+  shouldHoldForReview,
+  SCRUBBER_HOLD_PREFIX,
+  SCRUBBER_REJECT_REASON,
+  type ScrubberEnforcement,
+} from "./enforcement";

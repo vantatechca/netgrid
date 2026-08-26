@@ -36,6 +36,7 @@ import { resolveNextPostLanguage } from "@/lib/content/post-language";
 import { ctaRedirectUrl, getAppBaseUrl } from "@/lib/services/link-tracker";
 import { pingIndexNowFireAndForget } from "@/lib/services/index-now-pinger";
 import { scanPostAfterPublishFireAndForget } from "@/lib/services/post-seo-runner";
+import { logScrubberVerdict } from "@/lib/content/scrubber";
 import {
   runWithTelemetry,
   withBlog,
@@ -804,6 +805,19 @@ export async function runGenerateAndPublish(
         updatedAt: new Date(),
       })
       .where(eq(generatedPosts.id, generatedPostId));
+
+    // Shadow-mode instrument (T07). In "shadow" — the default — this prints
+    // held=true for posts that enforcement WOULD stop, while the post still
+    // publishes, so a week of logs answers "what fraction of the network
+    // does the gate stop?" before anything is actually blocked.
+    logScrubberVerdict({
+      domain: blog.domain,
+      generatedPostId,
+      strictness: styleProfile?.scrubberStrictness ?? null,
+      verdict: content.scrubberVerdict,
+      flaggedForReview: content.flaggedForReview ?? false,
+      report: content.scrubberReport,
+    });
 
     // 5. Publish via platform-client (handles WP + Shopify)
     const platformBlog: PlatformBlog = {

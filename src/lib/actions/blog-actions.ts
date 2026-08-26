@@ -1,6 +1,7 @@
 "use server";
 
 import { db } from "@/lib/db";
+import { logScrubberVerdict } from "@/lib/content/scrubber";
 import { blogs, clients, generatedPosts, blogKeywordTargets } from "@/lib/db/schema";
 import { requireAdmin } from "@/lib/auth/helpers";
 import { createBlogSchema, updateBlogSchema } from "@/lib/validators/blog";
@@ -1390,6 +1391,17 @@ export async function generateBlogPost(
       updatedAt: new Date(),
     })
     .where(eq(generatedPosts.id, pending.id));
+
+  // Shadow-mode instrument (T07) — same call the auto-publish path makes, so
+  // manual generations show up in the same [scrubber-gate] log stream.
+  logScrubberVerdict({
+    domain: blog.domain,
+    generatedPostId: pending.id,
+    strictness: styleProfile?.scrubberStrictness ?? null,
+    verdict: result.scrubberVerdict,
+    flaggedForReview: result.flaggedForReview ?? false,
+    report: result.scrubberReport,
+  });
 
   revalidatePath(`/blogs/${input.blogId}/posts`);
 

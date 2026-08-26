@@ -52,6 +52,12 @@ services:
         sync: false
       - key: DEEPSEEK_TIMEOUT_MS
         sync: false
+      # Scrubber publish gate (T07). off | shadow | enforce.
+      # Ships as "shadow": the verdict is logged, the post still publishes.
+      # Flip to "enforce" only after a week of shadow data shows what
+      # fraction of the network the gate would actually stop.
+      - key: SCRUBBER_ENFORCEMENT
+        value: shadow
       - key: DATABASE_URL
         sync: false
       - key: NEXTAUTH_URL
