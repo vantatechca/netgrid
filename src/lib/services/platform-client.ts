@@ -9,7 +9,7 @@ import * as wp from "./wp-client";
 import * as shopify from "./shopify-client";
 import * as shopifyTheme from "./shopify-theme-client";
 import type { ShopifyCreds } from "./shopify-client";
-import { buildPostSlug } from "@/lib/seo/reddit";
+import { postSlug } from "@/lib/seo/meta-suffix";
 
 /**
  * Minimal shape of a blog row for the dispatcher. Only credential fields are
@@ -17,9 +17,6 @@ import { buildPostSlug } from "@/lib/seo/reddit";
  */
 export interface PlatformBlog {
   platform: Platform | null;
-  /** Used to vary the published URL slug between "-reddit" and "-{city}". */
-  city?: string | null;
-
   // WordPress
   wpUrl?: string | null;
   wpUsername?: string | null;
@@ -182,16 +179,23 @@ export async function publishPost(
 ): Promise<PublishPostResult> {
   const platform = resolvePlatform(blog);
 
-  // Carry the "[keyword]-reddit" or "[keyword]-{city}" SEO slug into the
-  // URL. Derived from the primary keyword (tags[0]) when the caller hasn't
-  // supplied one, falling back to the meta title / title. The visible
-  // article title and body are never modified — only the handle/slug picks
-  // up the suffix.
+  // Keyword-first URL slug for NEW posts: the primary keyword (tags[0]) when
+  // the caller hasn't supplied one, falling back to the meta title / title.
+  // No suffix of any kind — T01 removed both the "-reddit" token and the
+  // randomised "-{city}" alternative that replaced it. The city variant went
+  // too because Math.random() made a post's URL unreproducible between
+  // generation attempts, and because bolting a city onto a keyword with no
+  // local intent is itself a defect (T09). An explicit slug from the caller
+  // always wins; an unusable source yields "" and we omit the field entirely
+  // so WordPress / Shopify derive their own handle from the title. This only
+  // affects posts being CREATED — no update path in this module sends a
+  // slug/handle, so live URLs are never rewritten.
+  const derived =
+    input.slug?.trim() ||
+    postSlug(input.tags?.[0] || input.metaTitle || input.title);
   const withSlug: PublishPostInput = {
     ...input,
-    slug:
-      input.slug ??
-      buildPostSlug(input.tags?.[0] || input.metaTitle || input.title, blog.city),
+    slug: derived || undefined,
   };
 
   if (platform === "shopify") {

@@ -21,9 +21,10 @@ import {
   DESC_TARGET_PX,
 } from "@/lib/seo/text-width";
 import {
-  appendRedditToTitle,
-  appendRedditToDescription,
-} from "@/lib/seo/reddit";
+  appendBrandToTitle,
+  capMetaDescription,
+  stripLegacyRedditToken,
+} from "@/lib/seo/meta-suffix";
 import {
   ensureLocalTargetTitle,
   ensureLocalTargetDescription,
@@ -508,6 +509,15 @@ export interface GenerateOptions {
    * a generatedPersona are present; otherwise it's a no-op.
    */
   applyPersona?: boolean;
+  /**
+   * Operator-confirmed store name for this blog (blogs.brand_name). Appended
+   * to the meta TITLE as " | {brandName}" when the keyword title still fits
+   * beside it — see lib/seo/meta-suffix.ts. Null/undefined means no suffix.
+   * Callers must pass blogs.brand_name verbatim and must NOT substitute
+   * content/brand.ts's deriveBrandName() — that value is a form-prefill
+   * suggestion, never authoritative.
+   */
+  brandName?: string | null;
   /**
    * Local keyword-targeted content (see docs/local-keyword-content-plan.md).
    * Present only when a blog_keyword_targets row was claimed for this post —
@@ -1607,20 +1617,29 @@ export function dedupeAnchorText(html: string): string {
 
 /**
  * Normalize the SEO meta TITLE (the <title> / title-tag) to the audit spec:
+ *   - strip any legacy " Reddit" token left in a stored value (T01)
  *   - collapse whitespace
  *   - convert spaced-hyphen / en-dash / em-dash separators to " | "
  *     (Seobility / Google best practice) and collapse duplicates
+ *   - append " | {brandName}" when the blog has an operator-confirmed brand
+ *     AND the keyword title still fits beside it — the brand is the
+ *     drop-first element, never the keyword
  *   - cap at TITLE_TARGET_PX (strict-safe under the 580px limit) on a word
- *     boundary — NO brand/site-name suffix is appended (we set the SEO
- *     title explicitly, overriding the theme template that would add one)
- * Falls back to the article title when Claude omitted metaTitle.
+ *     boundary
+ * Falls back to the article title when the model omitted metaTitle.
  */
 export function normalizeMetaTitle(
   raw: string | null | undefined,
   fallback: string,
   localTarget?: LocalTargetMetaContext,
+  brandName?: string | null,
 ): string {
-  let t = (raw || fallback || "").replace(/\s+/g, " ").trim();
+  // Strip the legacy token BEFORE choosing between raw and fallback, so a
+  // stored value of exactly "Reddit" (the pre-T01 empty-completion bug)
+  // collapses to "" and the article title takes over.
+  let t = (stripLegacyRedditToken(raw) || stripLegacyRedditToken(fallback) || "")
+    .replace(/\s+/g, " ")
+    .trim();
   // Separator normalization: spaced dashes → vertical bar.
   t = t.replace(/\s*[–—]\s*/g, " | ").replace(/\s+-\s+/g, " | ");
   // Collapse any doubled separators and strip leading/trailing ones.
@@ -1628,39 +1647,41 @@ export function normalizeMetaTitle(
     .replace(/(?:\s*\|\s*){2,}/g, " | ")
     .replace(/^\s*\|\s*|\s*\|\s*$/g, "")
     .trim();
-  // Guarantee keyword + city survive regardless of what Claude wrote — BEFORE
-  // the Reddit injection below, so keyword+city lead the pixel-truncation-
-  // from-the-right (see lib/seo/local-target.ts and the plan's "Meta title —
-  // the ordering constraint"). No-op when Claude already complied, and a
-  // no-op entirely when this post has no local target.
+  // Guarantee keyword + city survive regardless of what the model wrote —
+  // BEFORE the brand suffix below, so keyword+city lead the
+  // pixel-truncation-from-the-right (see lib/seo/local-target.ts). No-op when
+  // the model already complied, and a no-op entirely when this post has no
+  // local target.
   if (localTarget) t = ensureLocalTargetTitle(t, localTarget);
-  // Inject the "Reddit" SEO token into the <title> surface (idempotent, and
-  // pixel-capped). Kept out of the visible article title / body.
-  return appendRedditToTitle(t);
+  // Brand suffix + pixel cap. No-op suffix when brandName is null/empty or
+  // already present in the title (local-target's titleLead may have added it).
+  return appendBrandToTitle(t, brandName);
 }
 
 /**
  * Normalize the SEO meta DESCRIPTION to the audit spec:
+ *   - strip any legacy " Reddit" token left in a stored value (T01)
  *   - collapse whitespace
  *   - cap at DESC_TARGET_PX (strict-safe under the 1000px limit) on a word
  *     boundary
- * We never pad shorts — a shorter accurate description beats filler.
- * Falls back to a body-derived excerpt when Claude omitted metaDescription.
+ * No suffix of any kind. We never pad shorts — a shorter accurate description
+ * beats filler. Falls back to a body-derived excerpt when the model omitted
+ * metaDescription.
  */
 export function normalizeMetaDescription(
   raw: string | null | undefined,
   fallback: string,
   localTarget?: LocalTargetMetaContext,
 ): string {
-  let d = (raw || fallback || "").replace(/\s+/g, " ").trim();
-  // Guarantee the description LEADS with keyword + city — BEFORE the Reddit
-  // injection below, so the lead clause survives pixel-truncation-from-the-
-  // right even if the rest gets cut. No-op when Claude already led with them,
-  // and a no-op entirely when this post has no local target.
+  let d = (stripLegacyRedditToken(raw) || stripLegacyRedditToken(fallback) || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  // Guarantee the description LEADS with keyword + city, so the lead clause
+  // survives pixel-truncation-from-the-right even if the rest gets cut. No-op
+  // when the model already led with them, and a no-op entirely when this post
+  // has no local target.
   if (localTarget) d = ensureLocalTargetDescription(d, localTarget);
-  // Inject the "Reddit" SEO token into the meta description (idempotent, and
-  // pixel-capped). Kept out of the visible article body.
-  return appendRedditToDescription(d);
+  return capMetaDescription(d);
 }
 
 /**
@@ -3433,7 +3454,12 @@ The "content" field is the full HTML article body — at least ${MIN_WORDS} word
     title: parsed.title,
     content: body,
     excerpt: normalizeExcerpt(parsed.excerpt || generateExcerpt(body)),
-    metaTitle: normalizeMetaTitle(parsed.metaTitle, parsed.title, metaTargetContext),
+    metaTitle: normalizeMetaTitle(
+      parsed.metaTitle,
+      parsed.title,
+      metaTargetContext,
+      opts.brandName,
+    ),
     metaDescription: normalizeMetaDescription(
       parsed.metaDescription,
       generateExcerpt(body),

@@ -12,9 +12,9 @@ import {
 } from "@/lib/services/platform-client";
 import { scanBlog, type BlogDescriptor } from "@/lib/seo/scanner";
 import {
-  appendRedditToTitle,
-  appendRedditToDescription,
-} from "@/lib/seo/reddit";
+  appendBrandToTitle,
+  capMetaDescription,
+} from "@/lib/seo/meta-suffix";
 
 export interface AutoFixResult {
   issueId: string;
@@ -109,6 +109,36 @@ async function resolveMetaValue(opts: {
   const s = (opts.source ?? "").replace(/\s+/g, " ").trim();
   if (s) return s;
   return (await opts.generate()).replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Shortest value we will ever write to a live meta field. Anything shorter is
+ * not a meta description or a title — it is a failed generation.
+ */
+const MIN_META_CHARS = 15;
+
+/**
+ * Refuse to write a meta value the model didn't actually produce.
+ *
+ * callFixModel returns "" (not a throw) when a provider returns no content —
+ * DeepSeek with no choices, or an Anthropic response with no text block (see
+ * claude-client.ts:69-83). Before T01 that empty string flowed into
+ * appendRedditToTitle("") and wrote the literal word "Reddit" to live title
+ * tags. Throwing here lands in the caller's catch, which marks the issue
+ * failed and leaves it retryable.
+ */
+function assertUsableMeta(
+  value: string,
+  kind: "meta_title" | "meta_description",
+): string {
+  const v = value.replace(/\s+/g, " ").trim();
+  if (v.length < MIN_META_CHARS) {
+    throw new Error(
+      `Refusing to write a ${kind} of ${v.length} character(s) ("${v}") — ` +
+        `the model returned nothing usable. Issue left unfixed for a retry.`,
+    );
+  }
+  return v;
 }
 
 /**
@@ -247,13 +277,17 @@ async function autoFixShopifyIssue(
       });
       cleaned = generated.replace(/\s+/g, " ").trim();
     }
-    // Re-inject the "Reddit" SEO token (idempotent, pixel-capped) so a live
-    // meta fix keeps the token instead of overwriting it with a clean value
-    // derived from the reddit-free article title / excerpt.
+    // Never write a value the model didn't produce (see assertUsableMeta).
+    const checked = assertUsableMeta(cleaned, issueType);
+    // Brand suffix + pixel cap. Shopify writes go to the global.title_tag /
+    // description_tag metafields, never to the visible article title. The
+    // suffix is a no-op when blogs.brand_name is null — which is the correct
+    // setting for a store whose theme already appends "– Store Name" to the
+    // rendered <title> (see seo-backfill-actions.ts:71-74).
     const trimmed =
       kind === "meta_title"
-        ? appendRedditToTitle(cleaned)
-        : appendRedditToDescription(cleaned);
+        ? appendBrandToTitle(checked, blog.brandName)
+        : capMetaDescription(checked);
 
     // Resolve the numeric blog id once so updateArticle hits the right blog.
     const shopifyBlogId = (await resolveShopifyBlogId(platformBlog))?.blogId;
@@ -430,7 +464,9 @@ export async function autoFixIssue(issueId: string): Promise<AutoFixResult> {
             issueDescription: issue.description || issue.title,
           }),
       });
-      const trimmed = appendRedditToDescription(cleaned);
+      const trimmed = capMetaDescription(
+        assertUsableMeta(cleaned, "meta_description"),
+      );
       await applyMetaDescription(blog, post.id, trimmed);
       // Plugin-less sites can't render a <meta name="description"> — also drop
       // the description into JSON-LD Article schema in the body so it counts.
@@ -457,7 +493,16 @@ export async function autoFixIssue(issueId: string): Promise<AutoFixResult> {
             issueDescription: issue.description || issue.title,
           }),
       });
-      const trimmed = appendRedditToTitle(cleaned);
+      // Only Yoast / RankMath own a separate title tag. With seoPlugin
+      // "none", applyMetaTitle below falls back to wp.updatePost({ title }),
+      // which rewrites the reader-facing post title — so no brand suffix
+      // there. Pixel capping still applies in both cases.
+      const trimmed = appendBrandToTitle(
+        assertUsableMeta(cleaned, "meta_title"),
+        blog.seoPlugin === "yoast" || blog.seoPlugin === "rankmath"
+          ? blog.brandName
+          : null,
+      );
       await applyMetaTitle(blog, post.id, trimmed);
       await markApplied(issueId, `meta title: ${trimmed}`);
       return { issueId, applied: true, message: `Meta title set on post ${post.id}` };
@@ -480,10 +525,19 @@ export async function autoFixIssue(issueId: string): Promise<AutoFixResult> {
             issueDescription: issue.description || issue.title,
           }),
       });
+      const checked = assertUsableMeta(
+        cleaned,
+        kind === "og_title" ? "meta_title" : "meta_description",
+      );
       const trimmed =
         kind === "og_title"
-          ? appendRedditToTitle(cleaned)
-          : appendRedditToDescription(cleaned);
+          ? appendBrandToTitle(
+              checked,
+              blog.seoPlugin === "yoast" || blog.seoPlugin === "rankmath"
+                ? blog.brandName
+                : null,
+            )
+          : capMetaDescription(checked);
       if (kind === "og_title") {
         await applyMetaTitle(blog, post.id, trimmed);
       } else {

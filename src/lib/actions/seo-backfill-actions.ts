@@ -58,8 +58,9 @@ export interface BackfillResult {
  * Retroactively apply the current SEO rules to a blog's already-published
  * posts:
  *   - meta title  → pixel-capped (≤580px), keyword-first, " | " separator,
- *                   no brand suffix  (written to Shopify global.title_tag /
- *                   WP Yoast|RankMath title)
+ *                   legacy "Reddit" token stripped, and " | {brand}" appended
+ *                   when blogs.brand_name is set AND the keyword title fits
+ *                   (written to Shopify global.title_tag / WP Yoast|RankMath)
  *   - meta description → pixel-capped (≤1000px)  (Shopify description_tag /
  *                        WP Yoast|RankMath description)
  *   - body H1     → demoted to H2 so the post title stays the sole H1
@@ -151,7 +152,12 @@ export async function backfillBlogSeo(
       }
 
       // Compute the compliant meta from stored values (title/excerpt fallbacks).
-      const newMetaTitle = normalizeMetaTitle(row.metaTitle, row.title ?? "");
+      const newMetaTitle = normalizeMetaTitle(
+        row.metaTitle,
+        row.title ?? "",
+        undefined,
+        blog.brandName,
+      );
       const newMetaDescription = normalizeMetaDescription(
         row.metaDescription,
         row.excerpt ?? "",
