@@ -1243,6 +1243,7 @@ export async function runAutoPublishCron(
     .where(
       and(
         eq(blogs.status, "active"),
+        eq(clients.status, "active"),
         or(isNotNull(blogs.postingFrequency), isNotNull(blogs.postingFrequencyDays)),
       ),
     )

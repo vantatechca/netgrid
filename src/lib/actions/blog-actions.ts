@@ -884,7 +884,7 @@ export async function publishBlogPost(
 ): Promise<PublishPostResult> {
   await requireAdmin();
 
-  const [blog] = await db
+  const [row] = await db
     .select({
       domain: blogs.domain,
       platform: blogs.platform,
@@ -898,22 +898,28 @@ export async function publishBlogPost(
       shopifyClientId: blogs.shopifyClientId,
       shopifyClientSecret: blogs.shopifyClientSecret,
       shopifyBlogHandle: blogs.shopifyBlogHandle,
+      clientStatus: clients.status,
     })
     .from(blogs)
+    .innerJoin(clients, eq(blogs.clientId, clients.id))
     .where(eq(blogs.id, id));
 
-  if (!blog) {
+  if (!row) {
     return { success: false, message: "Blog not found" };
   }
 
-  const result = await platformPublishPost(blog, input);
+  if (row.clientStatus === "paused") {
+    return { success: false, message: "This client is paused — publishing is disabled until it's unpaused." };
+  }
+
+  const result = await platformPublishPost(row, input);
 
   // After first successful Shopify publish, cache the resolved blog handle so
   // later publishes skip the listBlogs roundtrip.
   if (
     result.success &&
-    blog.platform === "shopify" &&
-    !blog.shopifyBlogHandle &&
+    row.platform === "shopify" &&
+    !row.shopifyBlogHandle &&
     "blogHandle" in result &&
     typeof result.blogHandle === "string" &&
     result.blogHandle
@@ -984,6 +990,7 @@ export async function generateBlogPost(
       ctaColor: clients.ctaColor,
       registrationEnabled: clients.registrationFormEnabled,
       registrationPlacement: clients.registrationFormPlacement,
+      clientStatus: clients.status,
     })
     .from(blogs)
     .leftJoin(clients, eq(blogs.clientId, clients.id))
@@ -991,6 +998,10 @@ export async function generateBlogPost(
 
   if (!blog) {
     return { success: false, message: "Blog not found" };
+  }
+
+  if (blog.clientStatus === "paused") {
+    return { success: false, message: "This client is paused — content generation is disabled until it's unpaused." };
   }
 
   // 2. Load (or lazily assign) the blog's locked style profile FIRST so

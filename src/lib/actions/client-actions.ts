@@ -297,6 +297,58 @@ export async function deleteClients(
   };
 }
 
+// ─── pauseClient / unpauseClient ────────────────────────────────────────────
+
+export async function pauseClient(id: string) {
+  const session = await requireAdmin();
+
+  const [updatedClient] = await db
+    .update(clients)
+    .set({ status: "paused", updatedAt: new Date() })
+    .where(eq(clients.id, id))
+    .returning();
+
+  if (!updatedClient) {
+    throw new Error("Client not found");
+  }
+
+  await db.insert(activityLog).values({
+    userId: session.user.id,
+    clientId: id,
+    action: "client.paused",
+    entityType: "client",
+    entityId: id,
+    details: { name: updatedClient.name },
+  });
+
+  return updatedClient;
+}
+
+export async function unpauseClient(id: string) {
+  const session = await requireAdmin();
+
+  const [updatedClient] = await db
+    .update(clients)
+    .set({ status: "active", updatedAt: new Date() })
+    .where(eq(clients.id, id))
+    .returning();
+
+  if (!updatedClient) {
+    throw new Error("Client not found");
+  }
+
+  await db.insert(activityLog).values({
+    userId: session.user.id,
+    clientId: id,
+    action: "client.unpaused",
+    entityType: "client",
+    entityId: id,
+    details: { name: updatedClient.name },
+  });
+
+  return updatedClient;
+}
+
 // ─── getClientStats ─────────────────────────────────────────────────────────
 
 export async function getClientStats(id: string) {
