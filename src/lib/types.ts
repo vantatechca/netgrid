@@ -99,11 +99,31 @@ export interface PublishPostInput {
   slug?: string;
 }
 
+/**
+ * Outcome of the SEO title/description write that accompanies a publish.
+ *
+ *   "written"     — the platform confirmed the write (WP Yoast / RankMath
+ *                   endpoint returned 2xx).
+ *   "unverified"  — the values were sent but the platform gives us no
+ *                   confirmation. Shopify nests metafields inside the article
+ *                   POST and silently drops invalid ones, so a 2xx on the
+ *                   article says nothing about the metafields.
+ *   "skipped"     — nothing to write, or the site runs no SEO plugin and has
+ *                   no REST surface that could accept a head meta tag.
+ *   "failed"      — the write was attempted and threw.
+ */
+export type MetaWriteStatus = "written" | "unverified" | "skipped" | "failed";
+
 export interface PublishPostResult {
   success: boolean;
   message: string;
   postId?: string | number;
   postUrl?: string;
+  /**
+   * Optional so every existing construction site still type-checks. Absent is
+   * treated as "unverified" by the auto-publish counter — see T14.
+   */
+  metaStatus?: MetaWriteStatus;
 }
 
 // Activity log entry details

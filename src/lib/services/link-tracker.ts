@@ -7,6 +7,7 @@ import { db } from "@/lib/db";
 import { linkEvents, generatedPosts, clients, blogs } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { effectiveCtaDestination } from "@/lib/content/cta-target";
+import { recordPipelineError } from "@/lib/services/run-telemetry";
 
 /**
  * Netgrid-hosted link tracking for published posts. CTA buttons point at
@@ -92,10 +93,15 @@ export async function logLinkEvent(input: {
       userAgent: input.userAgent?.slice(0, 1000) ?? null,
     });
   } catch (err) {
-    console.warn(
-      "[link-tracker] log failed:",
-      err instanceof Error ? err.message : err,
-    );
+    // Silent loss here means the view / CTA-click analytics the client is
+    // billed on simply never arrive.
+    recordPipelineError({
+      site: "link-tracker.logEvent",
+      code: "LINK_EVENT_LOG_FAILED",
+      severity: "error",
+      message: `log failed: ${err instanceof Error ? err.message : String(err)}`,
+      context: { type: input.type },
+    });
   }
 }
 
@@ -118,10 +124,13 @@ export async function resolveBlogClient(
       .limit(1);
     return row ?? null;
   } catch (err) {
-    console.warn(
-      "[link-tracker] resolve blog failed:",
-      err instanceof Error ? err.message : err,
-    );
+    recordPipelineError({
+      site: "link-tracker.resolveBlogClient",
+      code: "LINK_RESOLVE_FAILED",
+      severity: "error",
+      message: `resolve blog failed: ${err instanceof Error ? err.message : String(err)}`,
+      blogId,
+    });
     return null;
   }
 }
@@ -158,10 +167,16 @@ export async function resolveBlogRedirect(
       }),
     };
   } catch (err) {
-    console.warn(
-      "[link-tracker] resolve blog redirect failed:",
-      err instanceof Error ? err.message : err,
-    );
+    // A failure here sends the visitor nowhere.
+    recordPipelineError({
+      site: "link-tracker.resolveBlogRedirect",
+      code: "LINK_RESOLVE_FAILED",
+      severity: "error",
+      message: `resolve blog redirect failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+      blogId,
+    });
     return null;
   }
 }
@@ -201,10 +216,14 @@ export async function resolvePostRedirect(
       }),
     };
   } catch (err) {
-    console.warn(
-      "[link-tracker] resolve failed:",
-      err instanceof Error ? err.message : err,
-    );
+    // A failure here sends the visitor nowhere.
+    recordPipelineError({
+      site: "link-tracker.resolvePostRedirect",
+      code: "LINK_RESOLVE_FAILED",
+      severity: "error",
+      message: `resolve failed: ${err instanceof Error ? err.message : String(err)}`,
+      postId,
+    });
     return null;
   }
 }

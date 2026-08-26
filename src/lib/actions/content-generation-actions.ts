@@ -39,7 +39,9 @@ import { scanPostAfterPublishFireAndForget } from "@/lib/services/post-seo-runne
 import {
   runWithTelemetry,
   withBlog,
+  bumpCounter,
   setCounter,
+  setCurrentPostId,
   snapshotCounters,
   currentRunId,
   recordPipelineError,
@@ -590,6 +592,10 @@ export async function runGenerateAndPublish(
     .returning({ id: generatedPosts.id });
 
   const generatedPostId = pending.id;
+  // Attach the post id to the current telemetry frame so everything the
+  // generator records below — truncation salvage, imageless, scrubber —
+  // is joinable to this generated_posts row. No-op outside a cron run.
+  setCurrentPostId(generatedPostId);
 
   try {
     // 5. Generate content using the style profile loaded in step 2.
@@ -599,6 +605,23 @@ export async function runGenerateAndPublish(
     //    internal links into the article (Stage 1 of the footprint audit
     //    fixes — the single biggest SEO signal we were missing).
     const internalLinkRefs = await getInternalLinkRefs(blog.id, 8);
+    // Zero refs means the article will be generated with no internal-link
+    // clause at all. Normal for a blog's first few posts; a persistent
+    // fleet-wide rate means externalPostUrl is not being recorded, which
+    // is a publish-path bug, not a cold start. See T16.
+    if (internalLinkRefs.length === 0) {
+      bumpCounter("linkingSkipped");
+      recordPipelineError({
+        site: "auto-publish.internalLinks",
+        code: "INTERNAL_LINKS_UNAVAILABLE",
+        severity: "warn",
+        message: `No published sibling posts with a URL on ${blog.domain} — article will have zero internal links`,
+        blogId: blog.id,
+        clientId: blog.clientId,
+        postId: generatedPostId,
+        context: { domain: blog.domain },
+      });
+    }
 
     // Niche config from the editable `niches` DB table (falls back to code
     // when there's no row). Resolved once here, reused across topic retries.
@@ -681,9 +704,14 @@ export async function runGenerateAndPublish(
         const msg =
           genErr instanceof Error ? genErr.message : "Generation failed";
         topicFailures.push({ topic: currentTopic, error: msg });
-        console.warn(
-          `[runGenerateAndPublish] attempt ${attempt} failed for "${currentTopic}": ${msg.slice(0, 200)}`,
-        );
+        recordPipelineError({
+          site: "auto-publish.topicAttempt",
+          code: "TOPIC_ATTEMPT_FAILED",
+          severity: "warn",
+          message: `attempt ${attempt} failed for "${currentTopic}": ${msg.slice(0, 200)}`,
+          postId: generatedPostId,
+          context: { attempt, topic: currentTopic },
+        });
 
         if (attempt === MAX_TOPIC_ATTEMPTS) {
           // Out of budget — rethrow so the outer catch marks the row
@@ -834,6 +862,28 @@ export async function runGenerateAndPublish(
 
     // 6. Mark published, update blog's last-post tracking
     const publishedAt = new Date();
+
+    // Was the SEO title/description actually written? An absent metaStatus
+    // means the platform adapter has not been taught to report it, which is
+    // the same operational risk as an explicit "unverified". See T14.
+    if (publish.metaStatus !== "written") {
+      bumpCounter("metaWriteUnverified");
+      recordPipelineError({
+        site: "auto-publish.metaWrite",
+        code: "META_WRITE_UNVERIFIED",
+        severity: publish.metaStatus === "failed" ? "error" : "warn",
+        message: `Published to ${blog.domain} with metaStatus=${publish.metaStatus ?? "absent"}`,
+        blogId: blog.id,
+        clientId: blog.clientId,
+        postId: generatedPostId,
+        context: {
+          domain: blog.domain,
+          platform: blog.platform,
+          seoPlugin: blog.seoPlugin,
+          metaStatus: publish.metaStatus ?? null,
+        },
+      });
+    }
     await db
       .update(generatedPosts)
       .set({

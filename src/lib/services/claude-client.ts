@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { getFixModel, isDeepSeekFixModel } from "@/lib/settings/app-settings";
+import { recordPipelineError } from "@/lib/services/run-telemetry";
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
@@ -16,7 +17,15 @@ const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || "deepseek-v4-pro";
 async function fixModel(): Promise<string> {
   try {
     return await getFixModel();
-  } catch {
+  } catch (err) {
+    recordPipelineError({
+      site: "claude-client.fixModel",
+      code: "FIX_MODEL_LOOKUP_FAILED",
+      severity: "error",
+      message: `Fix-model lookup failed, using the env default: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    });
     return process.env.CLAUDE_MODEL || "claude-sonnet-4-6";
   }
 }
@@ -69,7 +78,22 @@ async function callFixModel(opts: {
     const data = (await res.json()) as {
       choices?: Array<{ message?: { content?: string } }>;
     };
-    return data.choices?.[0]?.message?.content ?? "";
+    const text = data.choices?.[0]?.message?.content ?? "";
+    // An empty string is NOT a valid fix. seo-autofix trims whatever comes
+    // back and pushes it straight to the live site as the meta title or
+    // description, so a silent empty response blanks a real tag. We do not
+    // change control flow here (that is T25's job) — but the operator must
+    // be able to see it happening.
+    if (!text.trim()) {
+      recordPipelineError({
+        site: "claude-client.callFixModel",
+        code: "FIX_MODEL_EMPTY",
+        severity: "error",
+        message: "DeepSeek fix-model call returned empty content",
+        context: { model, maxTokens: opts.maxTokens, json: Boolean(opts.json) },
+      });
+    }
+    return text;
   }
 
   const message = await anthropic.messages.create({
@@ -79,7 +103,19 @@ async function callFixModel(opts: {
     messages: [{ role: "user", content: opts.user }],
   });
   const textBlock = message.content.find((b) => b.type === "text");
-  return textBlock?.text || "";
+  const text = textBlock?.text || "";
+  if (!text.trim()) {
+    recordPipelineError({
+      site: "claude-client.callFixModel",
+      code: "FIX_MODEL_EMPTY",
+      severity: "error",
+      message: `Anthropic fix-model call returned no text block (stop_reason=${
+        message.stop_reason ?? "unknown"
+      })`,
+      context: { model, maxTokens: opts.maxTokens, json: Boolean(opts.json) },
+    });
+  }
+  return text;
 }
 
 export async function generateSeoFix(params: {
@@ -175,7 +211,16 @@ Return ONLY valid JSON with keys: title (short, under 100 chars), description (1
 
   try {
     return JSON.parse(text || "{}");
-  } catch {
+  } catch (err) {
+    recordPipelineError({
+      site: "claude-client.issueDescription",
+      code: "ISSUE_DESC_PARSE_FAILED",
+      severity: "warn",
+      message: `Issue-description JSON did not parse, using the stub: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+      context: { issueType: params.issueType, rawLength: text.length },
+    });
     return {
       title: params.issueType,
       description: params.technicalDetails,

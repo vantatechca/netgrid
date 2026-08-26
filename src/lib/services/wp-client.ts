@@ -1,9 +1,11 @@
 import axios, { type AxiosInstance, type AxiosError } from "axios";
+import { recordPipelineError } from "@/lib/services/run-telemetry";
 import type {
   WpConnectionResult,
   SeoPlugin,
   PublishPostInput,
   PublishPostResult,
+  MetaWriteStatus,
 } from "@/lib/types";
 import { compressImageDataUri } from "./image-compress";
 
@@ -345,7 +347,7 @@ export async function createPost(
     // Best-effort: a meta-write failure must not fail an otherwise-published
     // post. Sites with no SEO plugin can't accept head meta via REST, so we
     // skip them (the theme controls <title> and emits no meta description).
-    const metaWritten = await writeWpSeoMeta(
+    const metaStatus = await writeWpSeoMeta(
       wpUrl,
       username,
       appPassword,
@@ -363,10 +365,11 @@ export async function createPost(
       message: `Post "${res.data.title.rendered}" ${
         wpStatus === "publish" ? "published" : "saved as draft"
       }${featuredMediaId ? " with featured image" : ""}${
-        metaWritten ? " (SEO meta set)" : ""
+        metaStatus === "written" ? " (SEO meta set)" : ""
       }`,
       postId: res.data.id,
       postUrl: res.data.link,
+      metaStatus,
     };
   } catch (error) {
     return { success: false, message: formatError(error) };
@@ -393,11 +396,24 @@ async function writeWpSeoMeta(
   postId: number,
   meta: { metaTitle?: string; metaDescription?: string; focusKeyword?: string },
   seoPlugin: SeoPlugin,
-): Promise<boolean> {
+): Promise<MetaWriteStatus> {
   const metaTitle = meta.metaTitle?.trim();
   const metaDescription = meta.metaDescription?.trim();
-  if (!metaTitle && !metaDescription) return false;
-  if (seoPlugin === "none") return false;
+  if (!metaTitle && !metaDescription) return "skipped";
+  if (seoPlugin === "none") {
+    // A plugin-less site has no REST surface that can accept a head meta
+    // description. This is a real coverage gap, not a non-event — it is
+    // what wp-seo-injector.ts exists to work around. Record it so the
+    // operator can see how much of the fleet is affected.
+    recordPipelineError({
+      site: "wp-client.writeWpSeoMeta",
+      code: "META_WRITE_SKIPPED",
+      severity: "warn",
+      message: `No SEO plugin on ${wpUrl} — head meta cannot be written via REST`,
+      context: { wpUrl, postId },
+    });
+    return "skipped";
+  }
 
   const focusKw = meta.focusKeyword?.trim();
 
@@ -408,7 +424,7 @@ async function writeWpSeoMeta(
         ...(metaDescription && { rank_math_description: metaDescription }),
         ...(focusKw && { rank_math_focus_keyword: focusKw }),
       });
-      return true;
+      return "written";
     }
     if (seoPlugin === "yoast") {
       await updateYoastMeta(wpUrl, username, appPassword, postId, {
@@ -416,15 +432,21 @@ async function writeWpSeoMeta(
         ...(metaDescription && { yoast_wpseo_metadesc: metaDescription }),
         ...(focusKw && { yoast_wpseo_focuskw: focusKw }),
       });
-      return true;
+      return "written";
     }
   } catch (err) {
-    console.warn(
-      "[wp.createPost] SEO meta write failed (post still published):",
-      err instanceof Error ? err.message : err,
-    );
+    recordPipelineError({
+      site: "wp-client.writeWpSeoMeta",
+      code: "META_WRITE_FAILED",
+      severity: "error",
+      message: `SEO meta write failed (post still published): ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+      context: { wpUrl, postId, seoPlugin },
+    });
+    return "failed";
   }
-  return false;
+  return "skipped";
 }
 
 /**
@@ -542,7 +564,7 @@ export async function updatePostSeo(
         content: input.content,
       });
     }
-    const metaWritten = await writeWpSeoMeta(
+    const metaStatus = await writeWpSeoMeta(
       wpUrl,
       username,
       appPassword,
@@ -556,7 +578,7 @@ export async function updatePostSeo(
     );
     return {
       success: true,
-      message: `Post ${postId} updated${metaWritten ? " (SEO meta set)" : ""}`,
+      message: `Post ${postId} updated${metaStatus === "written" ? " (SEO meta set)" : ""}`,
       postId,
     };
   } catch (error) {

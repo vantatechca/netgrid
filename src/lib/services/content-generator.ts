@@ -26,6 +26,11 @@ import {
   stripLegacyRedditToken,
 } from "@/lib/seo/meta-suffix";
 import {
+  recordPipelineError,
+  bumpCounter,
+  bumpProvider,
+} from "@/lib/services/run-telemetry";
+import {
   ensureLocalTargetTitle,
   ensureLocalTargetDescription,
   type LocalTargetMetaContext,
@@ -1145,25 +1150,45 @@ function wrapParagraph(text: string): string {
  * Returns the parsed value or throws the original error with a helpful
  * preview of where parsing failed.
  */
-export function safeParseClaudeJson<T = unknown>(text: string): T {
+/** Which repair tier produced a parse. "truncation" means the model ran
+ * out of tokens and the body is cut short — see T06. */
+export type JsonRepairTier = "none" | "light" | "stray-quote" | "truncation";
+
+/**
+ * Same behaviour as safeParseClaudeJson, but reports which tier succeeded
+ * so callers can count salvaged truncations instead of silently shipping
+ * a fragment. safeParseClaudeJson delegates here and drops the tier, so
+ * existing call sites are byte-identical in behaviour.
+ */
+export function safeParseClaudeJsonWithTier<T = unknown>(
+  text: string,
+): { value: T; tier: JsonRepairTier } {
   // 1. Happy path
   try {
-    return JSON.parse(text) as T;
+    return { value: JSON.parse(text) as T, tier: "none" };
   } catch (err1) {
     // 2. Light repair
     try {
-      return JSON.parse(repairLlmJson(text)) as T;
+      return { value: JSON.parse(repairLlmJson(text)) as T, tier: "light" };
     } catch {
       // 3. Stray-quote repair on top of light repair
       try {
-        return JSON.parse(repairLlmJson(escapeStrayQuotesInsideStrings(text))) as T;
+        return {
+          value: JSON.parse(
+            repairLlmJson(escapeStrayQuotesInsideStrings(text)),
+          ) as T,
+          tier: "stray-quote",
+        };
       } catch {
         // 4. Truncation repair as last resort
         try {
           const recovered = repairTruncatedJson(text);
-          return JSON.parse(
-            repairLlmJson(escapeStrayQuotesInsideStrings(recovered)),
-          ) as T;
+          return {
+            value: JSON.parse(
+              repairLlmJson(escapeStrayQuotesInsideStrings(recovered)),
+            ) as T,
+            tier: "truncation",
+          };
         } catch {
           const msg = err1 instanceof Error ? err1.message : "JSON parse failed";
           const match = /position\s+(\d+)/i.exec(msg);
@@ -1181,6 +1206,10 @@ export function safeParseClaudeJson<T = unknown>(text: string): T {
       }
     }
   }
+}
+
+export function safeParseClaudeJson<T = unknown>(text: string): T {
+  return safeParseClaudeJsonWithTier<T>(text).value;
 }
 
 /**
@@ -1379,9 +1408,13 @@ async function callWithRetry(
       if (!isTransientClaudeError(err)) break;
       const delayMs = CLAUDE_BACKOFF_BASE_MS * Math.pow(2, attempt);
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn(
-        `[${label}] Transient error (attempt ${attempt + 1}/${MAX_CLAUDE_RETRIES + 1}), retrying in ${delayMs}ms: ${msg.slice(0, 200)}`,
-      );
+      recordPipelineError({
+        site: "content-generator.callWithRetry",
+        code: "PROVIDER_TRANSIENT",
+        severity: "warn",
+        message: `Transient error (attempt ${attempt + 1}/${MAX_CLAUDE_RETRIES + 1}), retrying in ${delayMs}ms: ${msg.slice(0, 200)}`,
+        context: { label, attempt: attempt + 1, delayMs },
+      });
       await new Promise((r) => setTimeout(r, delayMs));
     }
   }
@@ -1416,17 +1449,25 @@ async function callClaude(
   const wantDeepseek = mode === "auto" || mode === "deepseek";
   if (wantDeepseek && deepseekConfigured()) {
     try {
-      return await callWithRetry("deepseek", () =>
+      const r = await callWithRetry("deepseek", () =>
         callDeepSeekOnce(system, userMessage, options),
       );
+      bumpProvider("deepseek");
+      return r;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       // "deepseek" = exclusive: surface the error instead of silently billing
       // Claude (the whole point of forcing DeepSeek is to avoid Claude).
       if (mode === "deepseek") throw err;
-      console.warn(
-        `[model] DeepSeek failed — falling back to Claude: ${msg.slice(0, 200)}`,
-      );
+      // Not just noise: Claude output tokens are ~10x DeepSeek's, so a
+      // silent fleet-wide fallback is a cost incident.
+      recordPipelineError({
+        site: "content-generator.callClaude",
+        code: "PROVIDER_FALLBACK",
+        severity: "error",
+        message: `DeepSeek failed — falling back to Claude: ${msg.slice(0, 200)}`,
+        context: { mode, maxTokens: options.maxTokens ?? 4000 },
+      });
     }
   } else if (mode === "deepseek") {
     throw new Error(
@@ -1774,7 +1815,15 @@ Describe the photographic scene for the hero image.`;
     if (cleaned.length < 20 || cleaned.length > 600) return null;
     return cleaned;
   } catch (err) {
-    console.warn("[content-generator] Scene summarization failed:", err);
+    // Falls back to the static niche scene; degrades image relevance only.
+    recordPipelineError({
+      site: "content-generator.sceneSummary",
+      code: "SCENE_SUMMARY_FAILED",
+      severity: "warn",
+      message: `Scene summarization failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    });
     return null;
   }
 }
@@ -2694,10 +2743,15 @@ export async function ideateTopic(
     } catch (err) {
       // Non-fatal — ideation should still produce a topic even if the
       // news lookup or marking fails.
-      console.warn(
-        "[ideateTopic] news context lookup failed:",
-        err instanceof Error ? err.message : err,
-      );
+      recordPipelineError({
+        site: "content-generator.ideateNews",
+        code: "NEWS_CONTEXT_FAILED",
+        severity: "warn",
+        message: `news context lookup failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        context: { verticalKey: opts.verticalKey ?? null },
+      });
     }
   }
 
@@ -2829,10 +2883,21 @@ Suggest the next post's topic.`;
     if (!similar) return result;
 
     if (attempt === MAX_IDEATION_ATTEMPTS) {
-      console.warn(
-        `[ideateTopic] accepting "${result.topic}" after ${attempt} attempts despite ` +
+      // Near-duplicate titles repeated across a network are a footprint.
+      recordPipelineError({
+        site: "content-generator.ideateTopic",
+        code: "TOPIC_SIMILARITY_ACCEPTED",
+        severity: "warn",
+        message:
+          `accepting "${result.topic}" after ${attempt} attempts despite ` +
           `${Math.round(similar.score * 100)}% word overlap with "${similar.title}"`,
-      );
+        context: {
+          topic: result.topic,
+          similarTitle: similar.title,
+          score: similar.score,
+          attempts: attempt,
+        },
+      });
       return result;
     }
 
@@ -2974,10 +3039,15 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
           `- Never include all 6; keep external link count to 3 max.`;
       }
     } catch (err) {
-      console.warn(
-        "[content-generator] news-links lookup failed:",
-        err instanceof Error ? err.message : err,
-      );
+      // Post ships with no external links.
+      recordPipelineError({
+        site: "content-generator.newsLinks",
+        code: "NEWS_LINKS_FAILED",
+        severity: "warn",
+        message: `news-links lookup failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      });
     }
   }
 
@@ -3148,15 +3218,57 @@ The "content" field is the full HTML article body — at least ${MIN_WORDS} word
     genOutput += gen.outputTokens;
     genCost += calcCost(gen.inputTokens, gen.outputTokens, gen.provider);
 
-    // 2. Parse — safeParseClaudeJson tries direct then repaired.
+    // 2. Parse — safeParseClaudeJsonWithTier reports which repair tier
+    //    succeeded so a salvaged truncation is counted, not hidden.
     let candidate: Partial<GeneratedContent>;
     try {
-      candidate = safeParseClaudeJson<Partial<GeneratedContent>>(gen.text);
+      const parsedResult =
+        safeParseClaudeJsonWithTier<Partial<GeneratedContent>>(gen.text);
+      candidate = parsedResult.value;
+      if (parsedResult.tier === "truncation") {
+        // The model hit its token budget. repairTruncatedJson closed the
+        // object at the last safe comma, so the article body ends
+        // mid-sentence. Publishing continues (T06 changes that); this
+        // makes it visible in the meantime.
+        bumpCounter("truncatedSalvaged");
+        recordPipelineError({
+          site: "content-generator.parse",
+          code: "JSON_TRUNCATION_SALVAGED",
+          severity: "error",
+          message:
+            "Article JSON only parsed after truncation repair — the body is cut short",
+          postId: opts.postId ?? null,
+          context: {
+            topic: opts.topic,
+            maxTokens,
+            rawLength: gen.text.length,
+            shapeAttempt: shapeAttempt + 1,
+          },
+        });
+      } else if (parsedResult.tier !== "none") {
+        bumpCounter("jsonRepaired");
+        recordPipelineError({
+          site: "content-generator.parse",
+          code: "JSON_REPAIRED",
+          severity: "warn",
+          message: `Article JSON needed ${parsedResult.tier} repair`,
+          postId: opts.postId ?? null,
+          context: { topic: opts.topic, tier: parsedResult.tier },
+        });
+      }
     } catch (err) {
       if (shapeAttempt < MAX_SHAPE_RETRIES) {
-        console.warn(
-          `[content-generator] attempt ${shapeAttempt + 1} produced invalid JSON — retrying`,
-        );
+        recordPipelineError({
+          site: "content-generator.parse",
+          code: "JSON_PARSE_RETRY",
+          severity: "warn",
+          message: `attempt ${shapeAttempt + 1} produced invalid JSON — retrying`,
+          postId: opts.postId ?? null,
+          context: {
+            topic: opts.topic,
+            error: err instanceof Error ? err.message.slice(0, 400) : String(err),
+          },
+        });
         continue;
       }
       const msg = err instanceof Error ? err.message : "parse error";
@@ -3186,9 +3298,14 @@ The "content" field is the full HTML article body — at least ${MIN_WORDS} word
       .join(" ");
 
     if (shapeAttempt < MAX_SHAPE_RETRIES) {
-      console.warn(
-        `[content-generator] attempt ${shapeAttempt + 1} missing content (keys: ${lastShapeKeys}) — retrying with stripped prompt`,
-      );
+      recordPipelineError({
+        site: "content-generator.shapeRetry",
+        code: "SHAPE_RETRY",
+        severity: "warn",
+        message: `attempt ${shapeAttempt + 1} missing content (keys: ${lastShapeKeys}) — retrying with stripped prompt`,
+        postId: opts.postId ?? null,
+        context: { keys: lastShapeKeys, shapeAttempt: shapeAttempt + 1 },
+      });
     }
   }
 
@@ -3250,10 +3367,51 @@ The "content" field is the full HTML article body — at least ${MIN_WORDS} word
     body = result.content;
     scrubberReport = result.report;
     flaggedForReview = result.flaggedForReview;
+    if (flaggedForReview) bumpCounter("flaggedForReview");
+    // runScrubber's fourth return value has never been read. When it is
+    // true the scrubber found a CRITICAL violation (or a terminal Layer 1
+    // rule) and asked for a regenerate — and we publish anyway. T22 does
+    // NOT change that; T07 does. This makes the size of the problem
+    // visible so T07 can be scoped against a real number.
+    if (result.regenerateRequested) {
+      bumpCounter("blockedRegenerate");
+      recordPipelineError({
+        site: "content-generator.scrubber",
+        code: "SCRUBBER_REGENERATE_IGNORED",
+        severity: "error",
+        message:
+          `Scrubber returned ${result.report.action} ` +
+          `(${result.report.violations.critical.length} critical, ` +
+          `${result.report.violations.high.length} high) — published anyway`,
+        postId: opts.postId ?? null,
+        context: {
+          action: result.report.action,
+          finalStatus: result.report.finalStatus,
+          strictness: opts.styleProfile.scrubberStrictness,
+          critical: result.report.violations.critical.length,
+          high: result.report.violations.high.length,
+          medium: result.report.violations.medium.length,
+          low: result.report.violations.low.length,
+        },
+      });
+    }
   } else {
     // Lite path — auto-fix punctuation + log AI-tell hits but don't gate.
     const lite = runScrubberLite(body);
     body = lite.content;
+    if (lite.violationCount > 0) {
+      recordPipelineError({
+        site: "content-generator.scrubberLite",
+        code: "SCRUBBER_LITE_VIOLATIONS",
+        severity: "warn",
+        message: `scrubber-lite found ${lite.violationCount} violation(s)`,
+        postId: opts.postId ?? null,
+        context: {
+          violationCount: lite.violationCount,
+          fixesApplied: lite.fixesApplied.length,
+        },
+      });
+    }
   }
 
   const wordCount = countWordsInHtml(body);
@@ -3309,10 +3467,18 @@ The "content" field is the full HTML article body — at least ${MIN_WORDS} word
         `[content-generator] Hero image via ${heroResult.value.model} for "${parsed.title.slice(0, 60)}"`,
       );
     } else {
-      console.error(
-        "[content-generator] Hero image generation failed:",
-        heroResult.reason,
-      );
+      // Retry below may still recover it, hence warn.
+      recordPipelineError({
+        site: "content-generator.images",
+        code: "IMAGE_HERO_FAILED",
+        severity: "warn",
+        message: `Hero image generation failed: ${
+          heroResult.reason instanceof Error
+            ? heroResult.reason.message
+            : String(heroResult.reason)
+        }`,
+        postId: opts.postId ?? null,
+      });
     }
 
     if (bodyResult.status === "fulfilled") {
@@ -3321,10 +3487,17 @@ The "content" field is the full HTML article body — at least ${MIN_WORDS} word
         `[content-generator] Body image via ${bodyResult.value.model} for "${parsed.title.slice(0, 60)}"`,
       );
     } else {
-      console.error(
-        "[content-generator] Body image generation failed:",
-        bodyResult.reason,
-      );
+      recordPipelineError({
+        site: "content-generator.images",
+        code: "IMAGE_BODY_FAILED",
+        severity: "warn",
+        message: `Body image generation failed: ${
+          bodyResult.reason instanceof Error
+            ? bodyResult.reason.message
+            : String(bodyResult.reason)
+        }`,
+        postId: opts.postId ?? null,
+      });
     }
 
     // HERO RETRY — the hero is the post's primary image; never ship
@@ -3350,10 +3523,16 @@ The "content" field is the full HTML article body — at least ${MIN_WORDS} word
           `[content-generator] Hero image RECOVERED on retry (static scene) for "${parsed.title.slice(0, 60)}"`,
         );
       } catch (retryErr) {
-        console.error(
-          "[content-generator] Hero image retry also failed:",
-          retryErr,
-        );
+        // The post will ship with no hero image.
+        recordPipelineError({
+          site: "content-generator.images",
+          code: "IMAGE_HERO_RETRY_FAILED",
+          severity: "error",
+          message: `Hero image retry also failed: ${
+            retryErr instanceof Error ? retryErr.message : String(retryErr)
+          }`,
+          postId: opts.postId ?? null,
+        });
       }
     }
 
@@ -3373,15 +3552,52 @@ The "content" field is the full HTML article body — at least ${MIN_WORDS} word
         console.info(
           `[content-generator] Body image RECOVERED on retry (static scene) for "${parsed.title.slice(0, 60)}"`,
         );
-      } catch {
-        // Non-fatal — body image is optional.
+      } catch (retryErr) {
+        // Non-fatal — body image is optional, but still worth a rate.
+        recordPipelineError({
+          site: "content-generator.images",
+          code: "IMAGE_BODY_RETRY_FAILED",
+          severity: "warn",
+          message: `Body image retry also failed: ${
+            retryErr instanceof Error ? retryErr.message : String(retryErr)
+          }`,
+          postId: opts.postId ?? null,
+        });
       }
     }
   } catch (err) {
-    // Scene summarizer threw — log and ship without images rather than
+    // Scene summarizer threw — record and ship without images rather than
     // substituting an unrelated placeholder.
-    console.error("[content-generator] Image pipeline failed:", err);
+    recordPipelineError({
+      site: "content-generator.images",
+      code: "IMAGE_PIPELINE_FAILED",
+      severity: "error",
+      message: `Image pipeline failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+      postId: opts.postId ?? null,
+    });
   }
+
+  // Verdict on the image pipeline. This is currently the ONLY place an
+  // imageless post is observable: the auto-publish path does not persist
+  // generated_posts.featured_image_url (see the PR notes on T22 Step 9c),
+  // so it cannot be reconstructed from the database afterwards.
+  if (!heroImageUrl) {
+    bumpCounter("imageless");
+    recordPipelineError({
+      site: "content-generator.images",
+      code: "POST_HAS_NO_HERO_IMAGE",
+      severity: "error",
+      message: `"${parsed.title.slice(0, 80)}" is shipping with no hero image`,
+      postId: opts.postId ?? null,
+      context: {
+        niche: opts.niche,
+        subNicheId: opts.styleProfile?.subNicheId ?? null,
+      },
+    });
+  }
+  if (!bodyImageUrl) bumpCounter("bodyImageMissing");
 
   // Embed the body image into the HTML at roughly the midpoint so it
   // actually appears in the published post. Hero stays as the featured
