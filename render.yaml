@@ -36,6 +36,14 @@ services:
         value: "1"
       - key: TELEMETRY_BACKGROUND_WAIT_MS
         value: "15000"
+      # Pipeline alerts (T22). ALERT_EMAIL_TO is a comma-separated recipient
+      # list; alerts are evaluated and logged but NOT delivered while it is
+      # unset. These must live on the WEB service — the alert route runs
+      # there, not in the cron container, and the two have separate env sets.
+      - key: ALERT_EMAIL_TO
+        sync: false
+      - key: ALERT_SUPPRESS_HOURS
+        value: "6"
       - key: DATABASE_URL
         sync: false
       - key: NEXTAUTH_URL
@@ -313,3 +321,29 @@ services:
         value: https://netgrid-16f6.onrender.com
       - key: CRON_SECRET
         sync: false
+
+  # ──────────────────────────────────────────────────────────────────────
+  # PIPELINE ALERTS (T22) — every 30 minutes.
+  #
+  # Evaluates the thresholds in src/lib/services/pipeline-alerts.ts against
+  # cron_runs / pipeline_errors and emails ALERT_EMAIL_TO. Per-key
+  # suppression (ALERT_SUPPRESS_HOURS, default 6) prevents a stuck
+  # condition from mailing every half hour. 30 min is fast enough to catch
+  # a fleet outage inside one publish cycle and slow enough that the
+  # aggregate queries are free.
+  # ──────────────────────────────────────────────────────────────────────
+  - type: cron
+    name: netgrid-cron-alerts
+    runtime: docker
+    schedule: "*/30 * * * *"
+    dockerfilePath: ./cron/Dockerfile
+    dockerContext: ./cron
+    envVars:
+      - key: CRON_PATH
+        value: /api/cron/alerts
+      - key: APP_URL
+        value: https://netgrid-16f6.onrender.com
+      - key: CRON_SECRET
+        sync: false
+      - key: CRON_MAX_TIME
+        value: "180"
