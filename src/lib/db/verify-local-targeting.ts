@@ -52,6 +52,12 @@ import {
 } from "../content/prompt-placeholders";
 import { deriveBrandName } from "../content/brand";
 import { generateContent } from "../services/content-generator";
+import {
+  measureTitlePx,
+  measureDescriptionPx,
+  TITLE_MAX_PX,
+  DESC_MAX_PX,
+} from "../seo/text-width";
 
 const LIVE = process.argv.includes("--live");
 const KEEP = process.argv.includes("--keep");
@@ -59,6 +65,7 @@ const KEEP = process.argv.includes("--keep");
 const FIXTURE_CLIENT_NAME = "__local_targeting_smoke_test__";
 const FIXTURE_DOMAIN = "zzz-local-targeting-smoketest.invalid"; // .invalid: IANA-reserved, never a real domain
 const FIXTURE_CITY = "Smoketestville";
+const FIXTURE_BRAND = "Smoketest Widgets"; // exercises the meta-title brand suffix
 const FIXTURE_KEYWORDS = [
   "buy smoketest widgets",
   "smoketest widgets for sale",
@@ -117,6 +124,7 @@ async function main() {
       clientId: client.id,
       domain: FIXTURE_DOMAIN,
       city: FIXTURE_CITY,
+      brandName: FIXTURE_BRAND,
       status: "setup", // never "active" — must never be picked up by the real auto-publish cron
     })
     .returning({ id: blogs.id, domain: blogs.domain });
@@ -328,6 +336,7 @@ async function main() {
           niche: undefined,
           seoOptimized: true,
           blogSeed: blog.id,
+          brandName: FIXTURE_BRAND,
           localTarget: {
             keyword: claimC.keyword,
             city: FIXTURE_CITY,
@@ -351,9 +360,20 @@ async function main() {
           `metaDescription="${content.metaDescription}"`,
         );
         record(
-          "meta title carries the Reddit token",
-          /\breddit\b/i.test(content.metaTitle),
-          `metaTitle="${content.metaTitle}"`,
+          "meta title and description carry NO 'reddit' token (T01)",
+          !/\breddit\b/i.test(content.metaTitle) &&
+            !/\breddit\b/i.test(content.metaDescription),
+          `metaTitle="${content.metaTitle}" metaDescription="${content.metaDescription}"`,
+        );
+        record(
+          "meta title fits the audit pixel ceiling",
+          measureTitlePx(content.metaTitle) <= TITLE_MAX_PX,
+          `${measureTitlePx(content.metaTitle).toFixed(0)}px (ceiling ${TITLE_MAX_PX}px)`,
+        );
+        record(
+          "meta description fits the audit pixel ceiling",
+          measureDescriptionPx(content.metaDescription) <= DESC_MAX_PX,
+          `${measureDescriptionPx(content.metaDescription).toFixed(0)}px (ceiling ${DESC_MAX_PX}px)`,
         );
         console.log(`  Article title: "${content.title}" (${content.wordCount} words, $${content.costUsd.toFixed(4)})`);
 

@@ -618,6 +618,9 @@ export async function runGenerateAndPublish(
       verticalKey: verticalForPost?.key ?? null,
       language: postLanguage,
       blogSeed: blog.id,
+      // Operator-confirmed store name only — NOT the deriveBrandName()
+      // suggestion used for localTarget/placeholders above (brand.ts:1-14).
+      brandName: blog.brandName,
       internalLinkRefs,
       knowledgeSummaries: knowledge.summaries,
       localTarget: useLocalTarget ? localTarget : undefined,
@@ -768,7 +771,6 @@ export async function runGenerateAndPublish(
     // 5. Publish via platform-client (handles WP + Shopify)
     const platformBlog: PlatformBlog = {
       platform: blog.platform,
-      city: blog.city,
       wpUrl: blog.wpUrl,
       wpUsername: blog.wpUsername,
       wpAppPassword: blog.wpAppPassword,
@@ -984,6 +986,7 @@ export async function regenerateAndUpdatePost(
     internalLinkRefs,
     knowledgeSummaries: ctx.knowledge.summaries,
     cta: ctx.cta,
+    brandName: blog.brandName,
     postId: post.id,
   });
 

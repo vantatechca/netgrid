@@ -1031,8 +1031,8 @@ export async function createArticle(
           summary_html: input.excerpt,
           tags: input.tags?.join(", "),
           published,
-          // Explicit "[keyword]-reddit" handle so the article URL carries the
-          // SEO token. Omitted → Shopify derives the handle from the title.
+          // Explicit keyword-first handle from the caller.
+          // Omitted → Shopify derives the handle from the title.
           ...(input.slug && input.slug.trim() && { handle: input.slug.trim() }),
           ...(imagePayload && { image: imagePayload }),
           ...(metafields.length > 0 && { metafields }),

@@ -1,5 +1,5 @@
 /**
- * Local keyword-target SEO injection — companion to reddit.ts.
+ * Local keyword-target SEO injection — companion to meta-suffix.ts.
  *
  * Guarantees a local-targeted post's meta title and description contain the
  * claimed keyword + city, DETERMINISTICALLY when Claude's own output doesn't
@@ -7,16 +7,16 @@
  * on this specific surface), and left ALONE when it does — so a compliant
  * model output is never fought or duplicated.
  *
- * Idempotent, same contract reddit.ts's hasReddit()/appendRedditTo* honor:
- * re-running on an already-injected value is a no-op for this layer.
- * Callers run this injector BEFORE reddit.ts's — see
- * content-generator.ts's normalizeMetaTitle/normalizeMetaDescription — which
- * is what actually produces "[keyword] in [city] ... Reddit" end to end.
+ * Idempotent, the same contract meta-suffix.ts honors: re-running on an
+ * already-injected value is a no-op for this layer. Callers run this injector
+ * BEFORE meta-suffix.ts's — see content-generator.ts's normalizeMetaTitle /
+ * normalizeMetaDescription — which is what produces
+ * "[keyword] in [city] ... | [brand]" end to end.
  *
  * See docs/local-keyword-content-plan.md §5 ("Meta title — the ordering
- * constraint") for why element order matters: appendRedditToTitle truncates
- * from the right, so keyword+city must lead and brand trails as the element
- * that yields first when the pixel budget is tight.
+ * constraint") for why element order matters: appendBrandToTitle truncates
+ * from the right and drops the brand FIRST, so keyword+city must lead and the
+ * brand trails as the element that yields when the pixel budget is tight.
  */
 
 export interface LocalTargetMetaContext {
@@ -69,7 +69,7 @@ function descriptionLead(target: LocalTargetMetaContext): string {
 /**
  * Guarantee the meta title contains the target's keyword + city, replacing
  * `base` with the deterministic construction only when it doesn't already —
- * so a compliant Claude output is kept as-is. Call BEFORE appendRedditToTitle
+ * so a compliant model output is kept as-is. Call BEFORE appendBrandToTitle
  * so keyword+city lead the pixel-truncation-from-the-right (see module doc).
  */
 export function ensureLocalTargetTitle(
@@ -83,7 +83,7 @@ export function ensureLocalTargetTitle(
 /**
  * Guarantee the meta description LEADS with the target's keyword + city,
  * prepending a lead clause only when it doesn't already carry them. Call
- * BEFORE appendRedditToDescription so the lead clause survives the
+ * BEFORE capMetaDescription so the lead clause survives the
  * pixel-truncation-from-the-right even if the rest gets cut.
  */
 export function ensureLocalTargetDescription(

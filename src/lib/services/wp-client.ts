@@ -335,8 +335,8 @@ export async function createPost(
       content: rewrittenBody,
       excerpt: input.excerpt,
       status: wpStatus,
-      // Explicit "[keyword]-reddit" slug so the URL carries the SEO token.
-      // Omitted → WordPress derives the slug from the (clean) title.
+      // Explicit keyword-first slug from the caller.
+      // Omitted → WordPress derives the slug from the title.
       ...(input.slug && input.slug.trim() && { slug: input.slug.trim() }),
       ...(featuredMediaId !== undefined && { featured_media: featuredMediaId }),
     });

@@ -1172,6 +1172,9 @@ export async function generateBlogPost(
     styleProfile: styleProfile ?? undefined,
     verticalKey: verticalForPost?.key ?? null,
     language: postLanguage,
+    // blogs.brand_name verbatim — the local `brandName` const above falls back
+    // to deriveBrandName() and must not reach the title tag.
+    brandName: blog.brandName,
     localTarget: useLocalTarget ? localTarget : undefined,
     cta: effectiveBlogCta({
       niche: blog.niche,
@@ -1617,7 +1620,20 @@ export async function publishGeneratedPost(
   // body-sourced meta description, tripping the 580px / 1000px audit limits.
   // Normalize at publish so even older rows (stored before the caps existed,
   // or with an empty meta) are clamped; the helpers are idempotent.
-  const metaTitle = normalizeMetaTitle(post.metaTitle, post.title);
+  // Operator-confirmed store name for the " | {brand}" meta-title suffix.
+  // Null means no suffix; deriveBrandName() is deliberately NOT used here
+  // (src/lib/content/brand.ts:1-14 — it is a form-prefill suggestion only).
+  const [brandRow] = await db
+    .select({ brandName: blogs.brandName })
+    .from(blogs)
+    .where(eq(blogs.id, post.blogId))
+    .limit(1);
+  const metaTitle = normalizeMetaTitle(
+    post.metaTitle,
+    post.title,
+    undefined,
+    brandRow?.brandName,
+  );
   const metaDescription = normalizeMetaDescription(
     post.metaDescription,
     post.excerpt ?? "",
