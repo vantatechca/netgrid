@@ -50,7 +50,15 @@ import {
 const CLAUDE_MODEL = "claude-sonnet-4-6";
 const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || "deepseek-v4-pro";
 const DEEPSEEK_BASE_URL = process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com";
-const DEEPSEEK_TIMEOUT_MS = 120_000;
+// Abort deadline for one DeepSeek call. Raised from 120s with T06: a ~7,500-
+// token French article legitimately takes longer to produce than a 4,096-token
+// one. Safe to raise only because the abort is now thrown as PERMANENT (408)
+// rather than transient (504) — see callDeepSeekOnce — so it is no longer
+// multiplied by the callWithRetry budget.
+const DEEPSEEK_TIMEOUT_MS =
+  Number(process.env.DEEPSEEK_TIMEOUT_MS) > 0
+    ? Number(process.env.DEEPSEEK_TIMEOUT_MS)
+    : 180_000;
 
 function deepseekConfigured(): boolean {
   return Boolean(process.env.DEEPSEEK_API_KEY);
@@ -82,6 +90,11 @@ import {
   GLOBAL_WORD_BAND_MIN,
 } from "@/lib/content/config";
 import {
+  CLAUDE_MAX_OUTPUT_TOKENS,
+  deepseekMaxOutputTokens,
+  outputTokenBudget,
+} from "@/lib/services/content-token-budget";
+import {
   takeNewsContextForVertical,
   formatNewsContextForPrompt,
   getRecentNewsForVerticalInternal,
@@ -89,6 +102,13 @@ import {
 
 const MIN_WORDS = GLOBAL_WORD_BAND_MIN;
 const MAX_WORDS = GLOBAL_WORD_BAND_MAX;
+
+// Absolute publish floor, applied on EVERY generation path even when a style
+// profile carries a lower band (un-migrated profiles predate
+// GLOBAL_WORD_BAND_MIN, and the scrubber's lite pseudo-profile uses 0).
+// Half the network minimum: no legitimate profile band goes below it, so this
+// only ever fires on a truncation salvage.
+const ABSOLUTE_MIN_WORDS = Math.round(MIN_WORDS * 0.5);
 
 // One retry per topic on shape drift ({title} only, {title, deck}, etc.).
 // 1 = 2 total attempts. Second attempt is a stripped-down last chance.
@@ -109,6 +129,16 @@ Your previous response was missing the article body. Please write the full piece
 }
 
 The "content" field should hold the article body itself — opening, sections with <h2> headings, paragraphs, lists where useful, and a closing. Target roughly ${MIN_WORDS}+ words. Write naturally; this is consumer-information content.`;
+
+/**
+ * Appended to the user prompt when the PREVIOUS attempt was cut off by
+ * max_tokens (or only parsed after truncation repair). Deliberately the
+ * mirror image of SHAPE_RETRY_REMINDER: that one asks for more, this one
+ * trades length for completeness.
+ */
+const LENGTH_RETRY_REMINDER = `
+
+Your previous response was cut off before the JSON object was closed. Write a COMPLETE article this time: finish the final sentence, close every HTML tag you open, close the "content" string, and close the JSON object. If you have to trade length for completeness, write a shorter article — a complete ${MIN_WORDS}-word piece is far better than a truncated ${MAX_WORDS}-word one. Return ONE JSON object and nothing else.`;
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -587,6 +617,15 @@ interface ClaudeCallResult {
   outputTokens: number;
   /** Which provider actually produced this result — drives cost accounting. */
   provider: ModelProvider;
+  /**
+   * True when the provider stopped because it hit max_tokens rather than
+   * finishing its turn:
+   *   Claude   — response.stop_reason === "max_tokens"
+   *   DeepSeek — choices[0].finish_reason === "length"
+   * Authoritative. The JSON-repair tier is a backstop for providers/paths
+   * that do not report it.
+   */
+  truncated: boolean;
 }
 
 /**
@@ -809,6 +848,17 @@ function escapeStrayQuotesInsideStrings(text: string): string {
   return result;
 }
 
+/** What repairTruncatedJson did, so callers can tell salvage from success. */
+interface TruncationRepairResult {
+  text: string;
+  /**
+   * True when the input was NOT a complete JSON document and we patched it.
+   * The resulting object parses, but any string it was in the middle of is
+   * a FRAGMENT. Never publish a body that came back with this set.
+   */
+  repaired: boolean;
+}
+
 /**
  * Repair JSON that was TRUNCATED mid-output (Claude hit max_tokens before
  * closing the last string and the wrapping braces). Strategy:
@@ -823,11 +873,12 @@ function escapeStrayQuotesInsideStrings(text: string): string {
  *   4. If no clean boundary found (very short response), close the
  *      open string + brackets as a last resort.
  *
- * The post will be shorter than the originally-requested word count, but
- * still publishable. The scrubber's word-count check (Layer 1F) catches
- * it and can request regeneration if needed.
+ * The result is a DIAGNOSTIC SALVAGE, not a publishable article. It exists so
+ * the caller can read the recovered `title` for logging and decide whether to
+ * retry — before T06 the salvaged body was published as-is, which is what put
+ * half-sentence posts on live client blogs. Callers MUST check `.repaired`.
  */
-function repairTruncatedJson(text: string): string {
+function repairTruncatedJson(text: string): TruncationRepairResult {
   let depth = 0;
   let inString = false;
   let escape = false;
@@ -874,7 +925,7 @@ function repairTruncatedJson(text: string): string {
 
   // If parse-state ended cleanly, the input is fine.
   if (!inString && depth === 0 && stack.length === 0) {
-    return text;
+    return { text, repaired: false };
   }
 
   // Decide where to cut.
@@ -924,7 +975,7 @@ function repairTruncatedJson(text: string): string {
     result += open === "{" ? "}" : "]";
   }
 
-  return result;
+  return { text: result, repaired: true };
 }
 
 /**
@@ -1180,14 +1231,17 @@ export function safeParseClaudeJsonWithTier<T = unknown>(
           tier: "stray-quote",
         };
       } catch {
-        // 4. Truncation repair as last resort
+        // 4. Truncation repair as last resort. `repaired` distinguishes a
+        //    genuine salvage (the model ran out of budget mid-object) from
+        //    the case where repairTruncatedJson found nothing to patch —
+        //    only the former is a truncated article (T06).
         try {
           const recovered = repairTruncatedJson(text);
           return {
             value: JSON.parse(
-              repairLlmJson(escapeStrayQuotesInsideStrings(recovered)),
+              repairLlmJson(escapeStrayQuotesInsideStrings(recovered.text)),
             ) as T,
-            tier: "truncation",
+            tier: recovered.repaired ? "truncation" : "stray-quote",
           };
         } catch {
           const msg = err1 instanceof Error ? err1.message : "JSON parse failed";
@@ -1251,6 +1305,17 @@ async function callClaudeOnce(
 ): Promise<ClaudeCallResult> {
   const { maxTokens = 4000, temperature = 0.7, expectJson = false } = options;
 
+  // Per-provider ceiling. claude-sonnet-4-6 accepts up to 128,000 output
+  // tokens, but this is a NON-STREAMING request, so we hold it to the
+  // non-streaming-safe default. Callers compute a desired budget without
+  // knowing which provider will serve the call; the clamp belongs here.
+  const boundedMaxTokens = Math.min(maxTokens, CLAUDE_MAX_OUTPUT_TOKENS);
+  if (boundedMaxTokens < maxTokens) {
+    console.warn(
+      `[claude] requested max_tokens ${maxTokens} clamped to ${boundedMaxTokens}`,
+    );
+  }
+
   // Compact JSON envelope. The detailed schema rules (no wrapping, no
   // renaming "content", no "deck"/"subtitle" substitution, etc.) already
   // live in buildSystemPrompt / composeForPost. safeParseClaudeJson handles
@@ -1263,7 +1328,7 @@ async function callClaudeOnce(
 
   const response = await anthropic.messages.create({
     model: CLAUDE_MODEL,
-    max_tokens: maxTokens,
+    max_tokens: boundedMaxTokens,
     temperature,
     system: finalSystem,
     messages: [{ role: "user", content: userMessage }],
@@ -1281,11 +1346,19 @@ async function callClaudeOnce(
   // non-whitespace char appeared to be `{` (or vice versa).
   const text = expectJson ? extractJsonObject(rawText) : rawText.trim();
 
+  const truncated = response.stop_reason === "max_tokens";
+  if (truncated) {
+    console.warn(
+      `[claude] response hit max_tokens (${boundedMaxTokens}) — output is truncated`,
+    );
+  }
+
   return {
     text,
     inputTokens: response.usage.input_tokens,
     outputTokens: response.usage.output_tokens,
     provider: "claude",
+    truncated,
   };
 }
 
@@ -1304,6 +1377,20 @@ async function callDeepSeekOnce(
   const { maxTokens = 4000, temperature = 0.7, expectJson = false } = options;
   const apiKey = process.env.DEEPSEEK_API_KEY;
   if (!apiKey) throw new Error("DEEPSEEK_API_KEY is not set");
+
+  // Per-provider ceiling. DEEPSEEK_MODEL is env-configurable and points at a
+  // generic OpenAI-compatible endpoint, so the real limit is not knowable
+  // from this repo — DEEPSEEK_MAX_OUTPUT_TOKENS makes it operator-settable.
+  // An over-large value comes back as HTTP 400, which isTransientClaudeError
+  // treats as permanent, so callClaude() falls through to Claude.
+  const deepseekCap = deepseekMaxOutputTokens();
+  const boundedMaxTokens = Math.min(maxTokens, deepseekCap);
+  if (boundedMaxTokens < maxTokens) {
+    console.warn(
+      `[deepseek] requested max_tokens ${maxTokens} clamped to ${boundedMaxTokens} ` +
+        `(DEEPSEEK_MAX_OUTPUT_TOKENS). Raise it if ${DEEPSEEK_MODEL} supports more.`,
+    );
+  }
 
   const finalSystem = expectJson
     ? `${system}\n\nOUTPUT: Return ONE valid JSON object only. Escape every \\" inside HTML attribute values. Close every string and the object before hitting the token budget — a shorter complete article beats a truncated long one.`
@@ -1325,7 +1412,7 @@ async function callDeepSeekOnce(
           { role: "system", content: finalSystem },
           { role: "user", content: userMessage },
         ],
-        max_tokens: maxTokens,
+        max_tokens: boundedMaxTokens,
         temperature,
         // deepseek-v4-pro enables thinking by default — the chain-of-thought
         // goes to `reasoning_content` and can leave `content` empty (or eat the
@@ -1339,14 +1426,19 @@ async function callDeepSeekOnce(
       signal: controller.signal,
     });
   } catch (err) {
-    // Network error or timeout abort → mark transient so it retries / falls back.
+    // Network error → 503, transient, worth a retry.
+    // Abort/deadline → 408, PERMANENT. isTransientClaudeError only treats
+    // 429/529/5xx as transient, so 408 breaks callWithRetry immediately and
+    // callClaude() falls through to Claude. Retrying an identical request
+    // against the same deadline 3 more times just multiplies the deadline
+    // (4 x 180s would exceed the auto-publish route's 600s maxDuration).
     const e = err as Error;
     const wrapped = new Error(
       e.name === "AbortError"
-        ? "DeepSeek request timed out"
+        ? `DeepSeek request exceeded the ${DEEPSEEK_TIMEOUT_MS}ms deadline`
         : `DeepSeek network error: ${e.message}`,
     ) as Error & { status?: number };
-    wrapped.status = e.name === "AbortError" ? 504 : 503;
+    wrapped.status = e.name === "AbortError" ? 408 : 503;
     throw wrapped;
   } finally {
     clearTimeout(timer);
@@ -1381,11 +1473,19 @@ async function callDeepSeekOnce(
   }
   const text = expectJson ? extractJsonObject(rawText) : rawText.trim();
 
+  const truncated = choice?.finish_reason === "length";
+  if (truncated) {
+    console.warn(
+      `[deepseek] finish_reason=length at max_tokens ${boundedMaxTokens} — output is truncated`,
+    );
+  }
+
   return {
     text,
     inputTokens: data.usage?.prompt_tokens ?? 0,
     outputTokens: data.usage?.completion_tokens ?? 0,
     provider: "deepseek",
+    truncated,
   };
 }
 
@@ -1537,28 +1637,90 @@ function stripClaudeImages(html: string): string {
 }
 
 /**
- * Soft word-count enforcement: if Claude ignored the upper bound, trim down to
- * the last word that still fits within MAX_WORDS. We never pad shorts — that's
- * the prompt's job.
+ * Soft word-count enforcement: if the model ignored the upper bound, trim down
+ * to the last VISIBLE word that still fits within `max`, then close every
+ * element the cut left open. We never pad shorts — that's the prompt's job.
+ *
+ * Counting matches countWordsInHtml(): markup is NOT a word. The previous
+ * implementation split on whitespace and counted every token, so a standalone
+ * <ul> counted as one word and
+ *   <a href="https://x/y" target="_blank" rel="nofollow">
+ * counted as four — it therefore trimmed EARLIER than `max` by roughly the
+ * number of markup tokens in the body.
+ *
+ * T23 owns the full post-processor rewrite. This version fixes only the two
+ * properties the T06 token-budget change makes load-bearing:
+ *   1. counting parity with countWordsInHtml
+ *   2. closing more than just <p>, so a cap-trim is not indistinguishable
+ *      from a model truncation in the published HTML
  */
-function capWordCount(html: string, max: number): string {
-  const words = html.split(/(\s+)/);
+export function capWordCount(html: string, max: number): string {
+  if (countWordsInHtml(html) <= max) return html;
+
+  // Walk the string alternating between markup and text runs, counting words
+  // only inside text runs. The cut offset always lands on a word boundary
+  // inside a text run, so we can never slice a tag in half.
+  const TAG_OR_TEXT = /<[^>]*>|[^<]+/g;
   let count = 0;
-  let i = 0;
-  for (; i < words.length; i++) {
-    if (words[i].trim()) {
+  let cutAt = -1;
+  let chunk: RegExpExecArray | null;
+
+  while ((chunk = TAG_OR_TEXT.exec(html)) !== null) {
+    if (chunk[0].startsWith("<")) continue; // markup — never a word
+    const wordRe = /\S+/g;
+    let word: RegExpExecArray | null;
+    while ((word = wordRe.exec(chunk[0])) !== null) {
       count++;
-      if (count > max) break;
+      if (count > max) {
+        cutAt = chunk.index + word.index;
+        break;
+      }
     }
+    if (cutAt >= 0) break;
   }
-  if (count <= max) return html;
-  const truncated = words.slice(0, i).join("");
-  const openTags = (truncated.match(/<p>/gi) || []).length;
-  const closeTags = (truncated.match(/<\/p>/gi) || []).length;
-  return openTags > closeTags ? truncated + "</p>" : truncated;
+
+  if (cutAt < 0) return html;
+  const truncated = html.slice(0, cutAt).replace(/\s+$/, "");
+  return closeOpenTags(truncated);
 }
 
-function countWordsInHtml(html: string): number {
+/**
+ * Append closing tags, innermost-first, for every non-void element still open
+ * at the end of `html`. Keeps a cap-trimmed body from ending in a dangling
+ * <ul> / <li> / <h2> / <a>, which renders as a visibly broken post AND is
+ * indistinguishable from a model truncation when auditing published bodies.
+ */
+export function closeOpenTags(html: string): string {
+  const VOID = new Set([
+    "area", "base", "br", "col", "embed", "hr", "img", "input",
+    "link", "meta", "param", "source", "track", "wbr",
+  ]);
+  const TAG = /<(\/?)([a-zA-Z][a-zA-Z0-9]*)\b[^>]*?(\/?)>/g;
+  const stack: string[] = [];
+  let m: RegExpExecArray | null;
+
+  while ((m = TAG.exec(html)) !== null) {
+    const isClosing = m[1] === "/";
+    const name = m[2].toLowerCase();
+    const isSelfClosing = m[3] === "/";
+    if (VOID.has(name) || isSelfClosing) continue;
+    if (isClosing) {
+      // Tolerate mis-nesting: close the nearest matching open tag.
+      const idx = stack.lastIndexOf(name);
+      if (idx !== -1) stack.splice(idx, 1);
+    } else {
+      stack.push(name);
+    }
+  }
+
+  let out = html;
+  for (let i = stack.length - 1; i >= 0; i--) {
+    out += `</${stack[i]}>`;
+  }
+  return out;
+}
+
+export function countWordsInHtml(html: string): number {
   const text = html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
   return text ? text.split(" ").filter((w) => w.length > 0).length : 0;
 }
@@ -3092,7 +3254,12 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
 
   let system: string;
   let user: string;
-  let maxTokens: number;
+  // Word budget this call is being asked to fill. Drives the output-token
+  // budget below. NOTE this is deliberately separate from `capMax` further
+  // down (the published-length trim): a custom prompt on a profile blog uses
+  // the global band for the token budget but the profile's own band for the
+  // cap. Over-budgeting tokens is free; over-trimming words is not.
+  let wordBudget: number;
   if (opts.customPrompt && opts.customPrompt.trim()) {
     // Custom-prompt path: the operator's prompt drives the article; the locked
     // guardrails (compliance + AI-tells + no-images + JSON contract) are baked
@@ -3107,7 +3274,7 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
     user = buildUserPrompt(opts);
     if (newsLinksClause) user = user + newsLinksClause;
     if (internalLinksClause) user = user + internalLinksClause;
-    maxTokens = Math.min(4096, Math.max(3000, Math.round(MAX_WORDS * 3.2)));
+    wordBudget = MAX_WORDS;
   } else if (usingProfile && opts.styleProfile) {
     const composed = composeForPost({
       profile: opts.styleProfile,
@@ -3132,19 +3299,9 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
     if (internalLinksClause) {
       user = user + internalLinksClause;
     }
-    // max_tokens must comfortably fit a COMPLETE post + JSON envelope, or the
-    // response truncates mid-`content` and the salvage path can only recover
-    // the title (the "missing content (keys: title)" failure). It does NOT
-    // drive cost — billing is on tokens actually generated, and the model
-    // stops on its own when the article is done; the real cost lever is the
-    // word cap (the prompt target + capWordCount below). A too-LOW budget is
-    // the expensive case: it forces truncation, wasted retries, and re-ideation.
-    // French/accented content tokenizes ~2x heavier than English, so a 1000-word
-    // post can run ~2800+ tokens — budget ~3.2 tokens/word with a 3000 floor.
     // Clamp the band to the global ceiling so an un-migrated profile (still
     // 1500) doesn't request a needlessly large budget.
-    const effectiveMax = Math.min(opts.styleProfile.wordBandMax, MAX_WORDS);
-    maxTokens = Math.min(4096, Math.max(3000, Math.round(effectiveMax * 3.2)));
+    wordBudget = Math.min(opts.styleProfile.wordBandMax, MAX_WORDS);
   } else {
     system =
       buildSystemPrompt(opts) +
@@ -3159,18 +3316,41 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
     if (internalLinksClause) {
       user = user + internalLinksClause;
     }
-    // Legacy (non-profile) path targets MAX_WORDS too. Same ~3.2 tokens/word
-    // completeness budget as the profile path (see note above) so French /
-    // accented posts never truncate. Cost is bounded by the word cap, not this.
-    maxTokens = Math.min(4096, Math.max(3000, Math.round(MAX_WORDS * 3.2)));
+    wordBudget = MAX_WORDS;
   }
 
-    // 1. Generate — with ONE shape-retry on missing content. First attempt
-  //    uses the full styled prompt; the retry swaps in a minimal
-  //    consumer-information prompt because the full styled prompt is
-  //    exactly what tends to trigger the {title}-only refusal pattern.
-  //    The retry sacrifices per-blog voice continuity to actually get the
-  //    article body back.
+  // Output-token budget — ONE expression for all three paths, language-aware.
+  //
+  // max_tokens must comfortably fit a COMPLETE post + JSON envelope, or the
+  // response truncates mid-`content`. It does NOT drive cost — billing is on
+  // tokens actually generated, and the model stops on its own when the
+  // article is done; the real cost lever is the word cap (the prompt target
+  // + capWordCount below). A too-LOW budget is the expensive case.
+  //
+  // The expression this replaces —
+  //   Math.min(4096, Math.max(3000, Math.round(MAX_WORDS * 3.2)))
+  // — ALWAYS returned 4096, because MAX_WORDS is 2000 and 2000 * 3.2 = 6400.
+  // At the file's own stated French ratio that is ~1280 French words against
+  // a 1000-2000 band, and the composer asks for the 1500-word midpoint.
+  // Every French post was budgeted to truncate.
+  //
+  // There is intentionally NO ceiling here: the per-provider ceiling is
+  // applied in callClaudeOnce / callDeepSeekOnce, which are the only places
+  // that know which model will serve the request.
+  const baseMaxTokens = outputTokenBudget(wordBudget, opts.language);
+  console.info(
+    `[content-generator] token budget: ${baseMaxTokens} ` +
+      `(lang=${opts.language ?? "en"}, words=${wordBudget})`,
+  );
+
+  // 1. Generate — with ONE retry on a bad attempt. An attempt is bad when it
+  //    (a) fails to parse, (b) comes back without title+content, (c) was cut
+  //    off by max_tokens or only parsed after truncation repair, or (d) carries
+  //    a body below this blog's minimum word count. First attempt uses the full
+  //    styled prompt; the retry swaps in a minimal consumer-information prompt
+  //    because the full styled prompt is exactly what tends to trigger the
+  //    {title}-only refusal pattern, and raises the token budget 50% so a
+  //    truncation cause cannot simply repeat.
   let parsed: Partial<GeneratedContent> = {};
   let genInput = 0;
   let genOutput = 0;
@@ -3179,6 +3359,23 @@ export async function generateContent(opts: GenerateOptions): Promise<Generation
   let genCost = 0;
   let lastShapeKeys = "(empty)";
   let lastShapePreview = "";
+  let lastFailure = "";
+  let lastAttemptTruncated = false;
+
+  // Minimum publishable length for THIS post, on EVERY path. Before T06 this
+  // check was wrapped in `if (!usingProfile)`, so profile blogs — the entire
+  // composer path — had no minimum-length gate anywhere in generateContent,
+  // and a salvaged fragment published silently. We take the LOWER of (profile
+  // band min, network min) so an un-migrated profile is not retroactively
+  // failed, then floor it at ABSOLUTE_MIN_WORDS so a zero/garbage band cannot
+  // disable the gate again.
+  const minWords =
+    usingProfile && opts.styleProfile
+      ? Math.max(
+          ABSOLUTE_MIN_WORDS,
+          Math.min(opts.styleProfile.wordBandMin, MIN_WORDS),
+        )
+      : MIN_WORDS;
 
   for (let shapeAttempt = 0; shapeAttempt <= MAX_SHAPE_RETRIES; shapeAttempt++) {
     const attemptSystem =
@@ -3198,17 +3395,29 @@ Return ONE JSON object with these fields:
 
 The "content" field is the full HTML article body — at least ${MIN_WORDS} words. Use <p>, <h2>, <h3>, <ul>, <ol>, <li>, <strong>, <em>, <a> tags only. Escape \\" inside HTML attribute values.${languageDirective}`;
 
+    // Truncation and shape drift need OPPOSITE instructions: one asks for the
+    // body that was missing, the other trades length for a closed object.
     const attemptUser =
-      shapeAttempt === 0 ? user : user + SHAPE_RETRY_REMINDER;
+      shapeAttempt === 0
+        ? user
+        : user +
+          (lastAttemptTruncated ? LENGTH_RETRY_REMINDER : SHAPE_RETRY_REMINDER);
+
+    // Give the retry 50% more room. Harmless when the first failure was shape
+    // drift (unused tokens are not billed) and decisive when it was length.
+    const attemptMaxTokens =
+      shapeAttempt === 0 ? baseMaxTokens : Math.ceil(baseMaxTokens * 1.5);
 
     if (shapeAttempt > 0) {
       console.info(
-        `[content-generator] retry attempt ${shapeAttempt + 1} using simplified fallback prompt`,
+        `[content-generator] retry attempt ${shapeAttempt + 1} ` +
+          `(cause: ${lastFailure || "unknown"}) using simplified fallback prompt, ` +
+          `maxTokens=${attemptMaxTokens}`,
       );
     }
 
     const gen = await callClaude(attemptSystem, attemptUser, {
-      maxTokens,
+      maxTokens: attemptMaxTokens,
       // 0.5 (down from 0.7). Lower variance reduces the chance the
       // sampler picks a hedging trajectory that returns {title} only.
       temperature: 0.5,
@@ -3221,15 +3430,17 @@ The "content" field is the full HTML article body — at least ${MIN_WORDS} word
     // 2. Parse — safeParseClaudeJsonWithTier reports which repair tier
     //    succeeded so a salvaged truncation is counted, not hidden.
     let candidate: Partial<GeneratedContent>;
+    let salvagedFromTruncation = false;
     try {
       const parsedResult =
         safeParseClaudeJsonWithTier<Partial<GeneratedContent>>(gen.text);
       candidate = parsedResult.value;
+      salvagedFromTruncation = parsedResult.tier === "truncation";
       if (parsedResult.tier === "truncation") {
         // The model hit its token budget. repairTruncatedJson closed the
         // object at the last safe comma, so the article body ends
-        // mid-sentence. Publishing continues (T06 changes that); this
-        // makes it visible in the meantime.
+        // mid-sentence. T06 now FAILS the attempt below rather than
+        // publishing the salvage; the counter still records that it happened.
         bumpCounter("truncatedSalvaged");
         recordPipelineError({
           site: "content-generator.parse",
@@ -3240,7 +3451,7 @@ The "content" field is the full HTML article body — at least ${MIN_WORDS} word
           postId: opts.postId ?? null,
           context: {
             topic: opts.topic,
-            maxTokens,
+            maxTokens: attemptMaxTokens,
             rawLength: gen.text.length,
             shapeAttempt: shapeAttempt + 1,
           },
@@ -3257,7 +3468,10 @@ The "content" field is the full HTML article body — at least ${MIN_WORDS} word
         });
       }
     } catch (err) {
+      lastAttemptTruncated = gen.truncated;
+      lastFailure = `invalid JSON${gen.truncated ? " (provider reported max_tokens)" : ""}`;
       if (shapeAttempt < MAX_SHAPE_RETRIES) {
+        parsed = {};
         recordPipelineError({
           site: "content-generator.parse",
           code: "JSON_PARSE_RETRY",
@@ -3275,38 +3489,88 @@ The "content" field is the full HTML article body — at least ${MIN_WORDS} word
       throw new Error(`Claude returned invalid JSON: ${msg}`);
     }
 
-    parsed = normalizeArticleShape(candidate);
+    const shaped = normalizeArticleShape(candidate);
 
-    if (parsed.title && parsed.content) {
-      if (shapeAttempt > 0) {
-        console.info(
-          `[content-generator] shape recovered on attempt ${shapeAttempt + 1}`,
+    // 3. TRUNCATION GATE. A response the provider cut off at max_tokens — or
+    //    one that only parsed because repairTruncatedJson closed the string
+    //    and brackets for us — is a FAILED generation, not a short article.
+    //    The body ends mid-sentence and usually mid-HTML-element. Publishing
+    //    the salvage is what put half-finished posts on live client blogs.
+    if (gen.truncated || salvagedFromTruncation) {
+      lastAttemptTruncated = true;
+      lastFailure = gen.truncated
+        ? `provider reported max_tokens at budget ${attemptMaxTokens}`
+        : `JSON only parsed after truncation repair (budget ${attemptMaxTokens})`;
+      lastShapeKeys = Object.keys(shaped).join(", ") || "(empty)";
+      if (shapeAttempt < MAX_SHAPE_RETRIES) {
+        console.warn(
+          `[content-generator] attempt ${shapeAttempt + 1} TRUNCATED ` +
+            `(${lastFailure}) — retrying with a larger budget`,
         );
+        parsed = {};
+        continue;
       }
-      break;
+      throw new Error(
+        `Generation truncated on every attempt (${lastFailure}). ` +
+          `Raise the ratios in src/lib/services/content-token-budget.ts, or ` +
+          `lower GLOBAL_WORD_BAND_MAX in src/lib/content/config.ts.`,
+      );
+    }
+    lastAttemptTruncated = false;
+
+    // 4. SHAPE GATE — unchanged semantics.
+    if (!shaped.title || !shaped.content) {
+      lastShapeKeys = Object.keys(shaped).join(", ") || "(empty)";
+      lastShapePreview = Object.entries(shaped)
+        .slice(0, 8)
+        .map(([k, v]) => {
+          if (typeof v === "string") return `${k}=str(${v.length}ch)`;
+          if (Array.isArray(v)) return `${k}=arr(${v.length})`;
+          if (v && typeof v === "object")
+            return `${k}=obj{${Object.keys(v).slice(0, 4).join(",")}}`;
+          return `${k}=${typeof v}`;
+        })
+        .join(" ");
+      lastFailure = `missing content (keys: ${lastShapeKeys})`;
+      parsed = shaped;
+      if (shapeAttempt < MAX_SHAPE_RETRIES) {
+        recordPipelineError({
+          site: "content-generator.shapeRetry",
+          code: "SHAPE_RETRY",
+          severity: "warn",
+          message: `attempt ${shapeAttempt + 1} missing content (keys: ${lastShapeKeys}) — retrying with stripped prompt`,
+          postId: opts.postId ?? null,
+          context: { keys: lastShapeKeys, shapeAttempt: shapeAttempt + 1 },
+        });
+        continue;
+      }
+      break; // falls through to the "missing required fields" throw below
     }
 
-    lastShapeKeys = Object.keys(parsed).join(", ") || "(empty)";
-    lastShapePreview = Object.entries(parsed)
-      .slice(0, 8)
-      .map(([k, v]) => {
-        if (typeof v === "string") return `${k}=str(${v.length}ch)`;
-        if (Array.isArray(v)) return `${k}=arr(${v.length})`;
-        if (v && typeof v === "object") return `${k}=obj{${Object.keys(v).slice(0, 4).join(",")}}`;
-        return `${k}=${typeof v}`;
-      })
-      .join(" ");
-
-    if (shapeAttempt < MAX_SHAPE_RETRIES) {
-      recordPipelineError({
-        site: "content-generator.shapeRetry",
-        code: "SHAPE_RETRY",
-        severity: "warn",
-        message: `attempt ${shapeAttempt + 1} missing content (keys: ${lastShapeKeys}) — retrying with stripped prompt`,
-        postId: opts.postId ?? null,
-        context: { keys: lastShapeKeys, shapeAttempt: shapeAttempt + 1 },
-      });
+    // 5. LENGTH GATE, pre-pipeline. Cheap proxy on the RAW body so a short
+    //    article costs an in-loop retry instead of burning a whole topic
+    //    attempt in the caller. Sanitization only ever removes content, so a
+    //    raw body under the minimum can never come out over it.
+    const rawWords = countWordsInHtml(shaped.content);
+    parsed = shaped;
+    if (rawWords < minWords) {
+      lastFailure = `body is ${rawWords} words, below the ${minWords}-word minimum`;
+      if (shapeAttempt < MAX_SHAPE_RETRIES) {
+        console.warn(
+          `[content-generator] attempt ${shapeAttempt + 1} too short ` +
+            `(${rawWords} < ${minWords}) — retrying`,
+        );
+        continue;
+      }
+      break; // falls through to the hard gate after post-processing
     }
+
+    if (shapeAttempt > 0) {
+      console.info(
+        `[content-generator] recovered on attempt ${shapeAttempt + 1}`,
+      );
+    }
+    break;
   }
 
   if (!parsed.title || !parsed.content) {
@@ -3347,13 +3611,19 @@ The "content" field is the full HTML article body — at least ${MIN_WORDS} word
       : MAX_WORDS;
   body = capWordCount(body, capMax);
 
-  if (!usingProfile) {
-    const wordCount = countWordsInHtml(body);
-    if (wordCount < MIN_WORDS) {
-      throw new Error(
-        `Generated content is ${wordCount} words, below the ${MIN_WORDS}-word minimum`,
-      );
-    }
+  // HARD MINIMUM — every path: legacy, custom-prompt AND profile. This check
+  // used to be wrapped in `if (!usingProfile)`, which is how profile blogs
+  // published truncation salvage. It is the last line of defence after all
+  // post-processing has run, so it also catches a body that only fell below
+  // the floor because sanitize/dedupe/cap removed content.
+  const postProcessWordCount = countWordsInHtml(body);
+  if (postProcessWordCount < minWords) {
+    throw new Error(
+      `Generated content is ${postProcessWordCount} words, below the ` +
+        `${minWords}-word minimum` +
+        (usingProfile ? " (profile path)" : "") +
+        (lastFailure ? ` | last attempt: ${lastFailure}` : ""),
+    );
   }
 
   // 4. Scrubber — profile-aware when a profile exists, lite otherwise.

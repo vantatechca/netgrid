@@ -44,6 +44,14 @@ services:
         sync: false
       - key: ALERT_SUPPRESS_HOURS
         value: "6"
+      # Article-generation output-token budget (T06). Both optional — the code
+      # defaults to 8192 / 180000. DEEPSEEK_MAX_OUTPUT_TOKENS must not exceed
+      # the real max_tokens of whatever DEEPSEEK_MODEL points at; verify at
+      # https://api-docs.deepseek.com before raising it.
+      - key: DEEPSEEK_MAX_OUTPUT_TOKENS
+        sync: false
+      - key: DEEPSEEK_TIMEOUT_MS
+        sync: false
       - key: DATABASE_URL
         sync: false
       - key: NEXTAUTH_URL
