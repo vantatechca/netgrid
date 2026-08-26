@@ -152,6 +152,11 @@ export async function pingIndexNow(
  */
 import type { blogs as blogsTable } from "@/lib/db/schema";
 import { ensureIndexNowKeyDeployed } from "@/lib/services/index-now-deployer";
+import {
+  recordPipelineError,
+  bumpCounter,
+  trackBackground,
+} from "@/lib/services/run-telemetry";
 type Blog = typeof blogsTable.$inferSelect;
 
 /**
@@ -202,21 +207,33 @@ export function pingIndexNowFireAndForget(
   blog: Blog,
   postUrl: string,
 ): void {
-  (async () => {
+  const task = (async () => {
     const canonicalPostUrl = toCanonicalUrl(postUrl, blog.domain);
 
     if (!process.env.INDEXNOW_KEY?.trim()) {
-      console.warn(
-        `[indexnow] SKIP for ${blog.domain} — INDEXNOW_KEY env var is not set`,
-      );
+      recordPipelineError({
+        site: "index-now-pinger.ping",
+        code: "INDEXNOW_KEY_MISSING",
+        severity: "error",
+        message: `SKIP for ${blog.domain} — INDEXNOW_KEY env var is not set`,
+        blogId: blog.id,
+        context: { domain: blog.domain },
+      });
+      bumpCounter("indexNowRejected");
       return;
     }
 
     const platformKeyLocation = await ensureIndexNowKeyDeployed(blog);
     if (!platformKeyLocation) {
-      console.warn(
-        `[indexnow] SKIP for ${blog.domain} — deploy returned null (see [indexnow-deploy] logs)`,
-      );
+      recordPipelineError({
+        site: "index-now-pinger.deploy",
+        code: "INDEXNOW_DEPLOY_FAILED",
+        severity: "error",
+        message: `SKIP for ${blog.domain} — key-file deploy returned null`,
+        blogId: blog.id,
+        context: { domain: blog.domain, platform: blog.platform },
+      });
+      bumpCounter("indexNowRejected");
       return;
     }
 
@@ -226,17 +243,43 @@ export function pingIndexNowFireAndForget(
       keyLocation: canonicalKeyLocation,
     });
     if (!r.ok) {
-      console.warn(
-        `[indexnow] FAILED for ${blog.domain} (status=${r.status}): ${r.error?.slice(0, 200) ?? "unknown"}`,
-      );
-      if (r.status === 403) {
-        console.warn(
-          `[indexnow] 403 means the key file isn't reachable at ${canonicalKeyLocation}. ` +
-            `Check that ${blog.domain} resolves to the host serving ${platformKeyLocation}.`,
-        );
-      }
+      recordPipelineError({
+        site: "index-now-pinger.ping",
+        code: "INDEXNOW_REJECTED",
+        severity: "error",
+        message:
+          `FAILED for ${blog.domain} (status=${r.status}): ` +
+          `${r.error?.slice(0, 200) ?? "unknown"}` +
+          (r.status === 403
+            ? ` | 403 means the key file isn't reachable at ${canonicalKeyLocation}`
+            : ""),
+        blogId: blog.id,
+        context: {
+          domain: blog.domain,
+          status: r.status,
+          keyLocation: canonicalKeyLocation,
+          platformKeyLocation,
+          postUrl: canonicalPostUrl,
+        },
+      });
+      bumpCounter("indexNowRejected");
     }
   })().catch((err) => {
-    console.error(`[indexnow] unexpected throw for ${blog.domain}:`, err);
+    recordPipelineError({
+      site: "index-now-pinger.ping",
+      code: "INDEXNOW_THREW",
+      severity: "error",
+      message: `unexpected throw for ${blog.domain}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+      blogId: blog.id,
+      context: { domain: blog.domain },
+    });
+    bumpCounter("indexNowRejected");
   });
+
+  // Register with the current cron run so runWithTelemetry waits (bounded
+  // by TELEMETRY_BACKGROUND_WAIT_MS) before flushing. No-op outside a run,
+  // so the manual-publish path is unchanged: still genuinely detached.
+  trackBackground(task);
 }

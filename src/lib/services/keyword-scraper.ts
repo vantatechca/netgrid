@@ -1,4 +1,5 @@
 import "server-only";
+import { recordPipelineError } from "@/lib/services/run-telemetry";
 
 // Keyword discovery via Google Autocomplete.
 //
@@ -54,14 +55,35 @@ async function autocomplete(
     const res = await fetch(url, {
       headers: { "User-Agent": "Mozilla/5.0 (compatible; netgrid-keyword-bot/1.0)" },
     });
-    if (!res.ok) return [];
+    if (!res.ok) {
+      // A 429/403 across every query means the Render egress IP is blocked,
+      // not that these keywords have no suggestions. Only meaningful as a
+      // rate, hence warn.
+      recordPipelineError({
+        site: "keyword-scraper.autocomplete",
+        code: "AUTOCOMPLETE_HTTP",
+        severity: "warn",
+        message: `Google Autocomplete returned ${res.status}`,
+        context: { status: res.status, query, lang, country },
+      });
+      return [];
+    }
     const data = (await res.json()) as unknown;
     // Chrome client shape: [query, [suggestions...], ...].
     if (Array.isArray(data) && Array.isArray(data[1])) {
       return (data[1] as unknown[]).map((s) => String(s));
     }
     return [];
-  } catch {
+  } catch (err) {
+    recordPipelineError({
+      site: "keyword-scraper.autocomplete",
+      code: "AUTOCOMPLETE_FAILED",
+      severity: "warn",
+      message: `Google Autocomplete request threw: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+      context: { query, lang, country },
+    });
     return [];
   }
 }

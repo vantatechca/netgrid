@@ -16,6 +16,10 @@ import { eq, and, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { generatedPosts, blogs, seoScans, seoIssues } from "@/lib/db/schema";
 import { logActivity } from "@/lib/services/activity-logger";
+import {
+  recordPipelineError,
+  trackBackground,
+} from "@/lib/services/run-telemetry";
 import { CRAWLER_DEFAULTS } from "@/lib/constants";
 import { scanPost, type PostScanInput } from "@/lib/services/post-seo-scanner";
 
@@ -48,7 +52,17 @@ async function fetchLiveHtml(url: string): Promise<string | null> {
       return res.data;
     }
     return null;
-  } catch {
+  } catch (err) {
+    // Expected for password-walled dev shops; only interesting as a rate.
+    recordPipelineError({
+      site: "post-seo-runner.fetchLiveHtml",
+      code: "LIVE_HTML_UNREACHABLE",
+      severity: "warn",
+      message: `Live page fetch failed, falling back to stored content: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+      context: { url },
+    });
     return null;
   }
 }
@@ -208,7 +222,18 @@ export async function runPostSeoScan(
  * Never blocks or rejects into the publish path — failures are logged only.
  */
 export function scanPostAfterPublishFireAndForget(postId: string): void {
-  runPostSeoScan(postId).catch((err) => {
-    console.error(`[post-seo] auto-scan failed for post ${postId}:`, err);
+  const task = runPostSeoScan(postId).catch((err) => {
+    recordPipelineError({
+      site: "post-seo-runner.autoScan",
+      code: "POST_SCAN_FAILED",
+      severity: "error",
+      message: `auto-scan failed for post ${postId}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+      postId,
+    });
   });
+  // Bounded wait at run flush time only — this never delays an individual
+  // publish, which is what the original fire-and-forget guaranteed.
+  trackBackground(task);
 }

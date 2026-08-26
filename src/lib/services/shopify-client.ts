@@ -1058,6 +1058,12 @@ export async function createArticle(
       postId: article.id,
       postUrl: `https://${storeHost}/blogs/${blogHandle}/${article.handle}`,
       blogHandle,
+      // Metafields ride along inside the article POST. Shopify accepts the
+      // article and silently discards metafields it rejects, so a 2xx here
+      // is not confirmation that global.title_tag / global.description_tag
+      // were set. Reading them back is a second API call per publish —
+      // deliberately out of scope for T22; T14 owns that decision.
+      metaStatus: metafields.length > 0 ? "unverified" : "skipped",
     };
   } catch (error) {
     return { success: false, message: formatError(error) };
