@@ -459,4 +459,66 @@ export function runLayer1(
 }
 
 // Re-export helpers used by Layer 2
+// ── Short-text Layer 1 (titles, meta, excerpt) ─────────────────────────────
+
+export type ShortFieldKey =
+  | "title"
+  | "metaTitle"
+  | "metaDescription"
+  | "excerpt";
+
+export interface ShortTextOutput {
+  text: string;
+  violations: Violation[];
+  fixesApplied: FixApplied[];
+}
+
+/**
+ * Layer 1 for the SHORT fields that ship alongside the body — the article
+ * title, the SEO meta title/description, and the excerpt.
+ *
+ * Runs only the checks that are meaningful without a document around them:
+ *
+ *   1C  punctuation auto-fix (em dash, en dash, smart quotes, ellipsis)
+ *   1A  vocabulary blocklist
+ *   1B  phrase blocklist
+ *
+ * Deliberately NOT run here: 1D tag whitelist (short fields carry no markup
+ * we control), 1F word count (bands describe articles), 1G compliance
+ * placement (placement is defined relative to the body).
+ *
+ * Severities are left exactly as the body checks assign them so the profile's
+ * strictness thresholds keep their calibration; the field name is recorded in
+ * `loc` and prefixed onto `detail` so a report row is traceable to its field.
+ */
+export function runLayer1ShortText(
+  raw: string,
+  field: ShortFieldKey,
+  profile: StyleProfile,
+): ShortTextOutput {
+  const hasEmDashFreeQuirk = profile.quirks.includes(3);
+
+  // Punctuation is the high-value fix here: an em dash in a <title> is the
+  // single most visible AI tell we ship, and it lands directly in the SERP.
+  const punct = applyPunctuationFixes(raw, hasEmDashFreeQuirk);
+
+  // Match against decoded plain text so an entity-escaped title still trips
+  // the blocklists; the RETURNED string keeps its original entities.
+  const plain = stripHtmlToPlainText(punct.content);
+
+  const found: Violation[] = [
+    ...punct.violations,
+    ...checkVocab(plain),
+    ...checkPhrases(plain),
+  ];
+
+  const violations = found.map((v) => ({
+    ...v,
+    detail: `[${field}] ${v.detail}`,
+    loc: field,
+  }));
+
+  return { text: punct.content, violations, fixesApplied: punct.fixes };
+}
+
 export { paragraphsFromHtml, stripHtmlToPlainText, countWords };

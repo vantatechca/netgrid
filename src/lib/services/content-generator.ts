@@ -1,7 +1,12 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { composeForPost } from "@/lib/content/composer/compose";
 import { getCachedNicheProfile } from "@/lib/content/niche-registry";
-import { runScrubber, runScrubberLite, type ScrubberReport } from "@/lib/content/scrubber";
+import {
+  runScrubber,
+  runScrubberLite,
+  type ScrubberReport,
+  type ScrubberVerdict,
+} from "@/lib/content/scrubber";
 import type { GeneratedPersona, StyleProfile } from "@/lib/content/types";
 import {
   getContentModel,
@@ -605,6 +610,12 @@ export interface GenerationResult extends GeneratedContent, AnalysisScores {
   scrubberReport?: ScrubberReport;
   /** True if scrubber flagged this post for admin review. */
   flaggedForReview?: boolean;
+  /**
+   * The scrubber's typed decision for this post (T07). Undefined on the
+   * non-profile "lite" path, which has no thresholds and never gates.
+   * The publish paths branch on this rather than on the two booleans.
+   */
+  scrubberVerdict?: ScrubberVerdict;
 }
 
 // ─── Model wrapper (DeepSeek primary, Claude fallback) ──────────────────────
@@ -3626,17 +3637,57 @@ The "content" field is the full HTML article body — at least ${MIN_WORDS} word
     );
   }
 
+  // Short fields are computed BEFORE the scrubber so it can check and fix
+  // them in the same pass as the body (T07). They used to be normalized
+  // inline in the return statement, which is why an em dash in a <title> —
+  // the single most visible AI tell we ship, and one that lands directly in
+  // the SERP — bypassed every check.
+  const metaTargetContext: LocalTargetMetaContext | undefined = opts.localTarget
+    ? {
+        keyword: opts.localTarget.keyword,
+        city: opts.localTarget.city,
+        brandName: opts.localTarget.brandName,
+      }
+    : undefined;
+  const shortFields = {
+    title: parsed.title,
+    excerpt: normalizeExcerpt(parsed.excerpt || generateExcerpt(body)),
+    metaTitle: normalizeMetaTitle(
+      parsed.metaTitle,
+      parsed.title,
+      metaTargetContext,
+      opts.brandName,
+    ),
+    metaDescription: normalizeMetaDescription(
+      parsed.metaDescription,
+      generateExcerpt(body),
+      metaTargetContext,
+    ),
+  };
+
   // 4. Scrubber — profile-aware when a profile exists, lite otherwise.
   let scrubberReport: ScrubberReport | undefined;
   let flaggedForReview = false;
+  let scrubberVerdict: ScrubberVerdict | undefined;
+  let scrubbedTitle = shortFields.title;
+  let scrubbedExcerpt = shortFields.excerpt;
+  let scrubbedMetaTitle = shortFields.metaTitle;
+  let scrubbedMetaDescription = shortFields.metaDescription;
   if (usingProfile && opts.styleProfile) {
     const result = runScrubber({
       content: body,
       profile: opts.styleProfile,
+      fields: shortFields,
     });
     body = result.content;
     scrubberReport = result.report;
     flaggedForReview = result.flaggedForReview;
+    scrubberVerdict = result.verdict;
+    scrubbedTitle = result.fields.title ?? scrubbedTitle;
+    scrubbedExcerpt = result.fields.excerpt ?? scrubbedExcerpt;
+    scrubbedMetaTitle = result.fields.metaTitle ?? scrubbedMetaTitle;
+    scrubbedMetaDescription =
+      result.fields.metaDescription ?? scrubbedMetaDescription;
     if (flaggedForReview) bumpCounter("flaggedForReview");
     // runScrubber's fourth return value has never been read. When it is
     // true the scrubber found a CRITICAL violation (or a terminal Layer 1
@@ -3667,8 +3718,14 @@ The "content" field is the full HTML article body — at least ${MIN_WORDS} word
     }
   } else {
     // Lite path — auto-fix punctuation + log AI-tell hits but don't gate.
-    const lite = runScrubberLite(body);
+    // Short fields get the same punctuation fix; no thresholds apply here.
+    const lite = runScrubberLite(body, shortFields);
     body = lite.content;
+    scrubbedTitle = lite.fields.title ?? scrubbedTitle;
+    scrubbedExcerpt = lite.fields.excerpt ?? scrubbedExcerpt;
+    scrubbedMetaTitle = lite.fields.metaTitle ?? scrubbedMetaTitle;
+    scrubbedMetaDescription =
+      lite.fields.metaDescription ?? scrubbedMetaDescription;
     if (lite.violationCount > 0) {
       recordPipelineError({
         site: "content-generator.scrubberLite",
@@ -3928,29 +3985,13 @@ The "content" field is the full HTML article body — at least ${MIN_WORDS} word
   const totalTokens = totalInputTokens + totalOutputTokens;
   const costUsd = genCost;
 
-  const metaTargetContext: LocalTargetMetaContext | undefined = opts.localTarget
-    ? {
-        keyword: opts.localTarget.keyword,
-        city: opts.localTarget.city,
-        brandName: opts.localTarget.brandName,
-      }
-    : undefined;
-
   return {
-    title: parsed.title,
+    // Short fields come back from the scrubber (T07) — see the hoist above.
+    title: scrubbedTitle,
     content: body,
-    excerpt: normalizeExcerpt(parsed.excerpt || generateExcerpt(body)),
-    metaTitle: normalizeMetaTitle(
-      parsed.metaTitle,
-      parsed.title,
-      metaTargetContext,
-      opts.brandName,
-    ),
-    metaDescription: normalizeMetaDescription(
-      parsed.metaDescription,
-      generateExcerpt(body),
-      metaTargetContext,
-    ),
+    excerpt: scrubbedExcerpt,
+    metaTitle: scrubbedMetaTitle,
+    metaDescription: scrubbedMetaDescription,
     keywords: parsed.keywords && parsed.keywords.length > 0 ? parsed.keywords : opts.keywords,
     wordCount,
     seoScore: scores.seoScore,
@@ -3962,6 +4003,7 @@ The "content" field is the full HTML article body — at least ${MIN_WORDS} word
     bodyImageUrl,
     scrubberReport,
     flaggedForReview,
+    scrubberVerdict,
   };
 }
 
