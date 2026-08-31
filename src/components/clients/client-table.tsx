@@ -21,10 +21,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { MoreHorizontal, Eye, Pencil, Trash2 } from "lucide-react";
+import { MoreHorizontal, Eye, Pencil, Trash2, Pause, Play } from "lucide-react";
 import { BulkDeleteBar } from "@/components/ui/bulk-delete-bar";
 import { useRowSelection } from "@/lib/hooks/use-row-selection";
-import { deleteClient, deleteClients } from "@/lib/actions/client-actions";
+import { deleteClient, deleteClients, pauseClient, unpauseClient } from "@/lib/actions/client-actions";
 import { toast } from "sonner";
 
 interface ClientRow {
@@ -78,6 +78,25 @@ export function ClientTable({ clients, total, page, pageSize }: ClientTableProps
         router.refresh();
       } catch {
         toast.error("Failed to archive client");
+      }
+    });
+  }
+
+  function handleTogglePause(id: string, name: string, status: ClientRow["status"]) {
+    const pausing = status !== "paused";
+
+    startTransition(async () => {
+      try {
+        if (pausing) {
+          await pauseClient(id);
+          toast.success(`${name} is paused — no posts will be generated or published for it`);
+        } else {
+          await unpauseClient(id);
+          toast.success(`${name} is active again`);
+        }
+        router.refresh();
+      } catch {
+        toast.error(pausing ? "Failed to pause client" : "Failed to unpause client");
       }
     });
   }
@@ -179,6 +198,23 @@ export function ClientTable({ clients, total, page, pageSize }: ClientTableProps
                       >
                         <Pencil className="size-4" />
                         Edit
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        onClick={() => handleTogglePause(client.id, client.name, client.status)}
+                        disabled={isPending}
+                      >
+                        {client.status === "paused" ? (
+                          <>
+                            <Play className="size-4" />
+                            Unpause
+                          </>
+                        ) : (
+                          <>
+                            <Pause className="size-4" />
+                            Pause
+                          </>
+                        )}
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem
